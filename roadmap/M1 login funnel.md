@@ -1,6 +1,6 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: draft.** To be discussed before work starts, see "Decisions to take first".
+**Status: decisions settled (2026-10-08), ready to start.**
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -62,9 +62,11 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Settled
 
-- **D1 Texts** (terms, sub-terms, announce, no-charge, refusal and kick messages, vulgarity lists): in the database,
-  seeded with default values. The console remembers the terms version it accepted and re-shows the terms only when
-  the version changes: editing the terms bumps their version. Texts use the game's markup (`<BR>`, `<CENTER>`,
+- **D1 Texts** (announce, no-charge, refusal and kick messages, vulgarity lists, server type names and
+  descriptions): **one dictionary in the code** (an enum of keys, each with its English text). Overrides from the
+  database and other languages come with the website (M8), marked `LATER(M8)` in the code. **Terms and sub-terms**
+  are overridable already (`terms` table): the console remembers the terms version it accepted and re-shows them
+  when it changes, so an edit must change the version. Texts use the game's markup (`<BR>`, `<CENTER>`,
   `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
 - **D2 World servers**: game constants in the code (MH3SP's 12: Valor1–4 Open, Beginners1–2 Rookie, Veterans1–2
   Expert, Greed1–4 Recruiting; server types with their HR limits; the world layout of 40 gates × 40 cities),
@@ -88,15 +90,15 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - **D5 The pause before `ReqConnection`**: probably needed (the same issue was met in an earlier attempt), likely
   lower than 1.5 s. Found by bisection against Dolphin: 1.5 s, 0 s, 750 ms, … down to the smallest value that
   works, then kept as a named constant with the reason.
-- **D6 Languages**: texts and content keyed by language in the database, `(key, language, value)`, English as the
-  fallback; the console sends its language in `AnsConnection`.
+- **D6 Languages**: English only for now (texts from the code dictionary, terms with an English fallback). The
+  console sends its language in `AnsConnection`; the per-language lookup comes with the text overrides (M8).
 - **D7 Generated ids**: the game's formats: support codes 11 characters, PAT tickets 11, Capcom IDs 6, alphabet
   `0-9A-Z` (what MH3SP uses and the game accepts). Drawn from a cryptographic random source; unique (database for
   support codes and Capcom IDs, in memory for tickets).
 
 ### Open
 
-- [ ] **Schema**: [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), reasoning in [`M1 schema.md`](M1%20schema.md); under review.
+- [x] **Schema**: [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), reasoning in [`M1 schema.md`](M1%20schema.md)..
 - [x] **Temporary data in memory**: sessions and PAT tickets, pairing codes, presence, populations live in the
       server's memory (no Valkey, no cache abstraction). A session (Capcom ID, slot, language, region, NAT hostname,
       stage) expires after about 2 minutes and is refreshed while its console is connected. A restart loses them,
@@ -139,7 +141,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] Memory checks and the patch policy (D3); connection data; auth token accepted (the Nintendo login is AltWFC's or
       Wiimmfi's job); terms and sub-terms with chunking; announce; no-charge; vulgarity; the common-key skip;
       `AnsLmpConnect` with the configured external address.
-- [ ] Refusal path (D4): not ready, unsupported disc, NAT hostname not accepted; texts from the database (D1, D6).
+- [ ] Refusal path (D4): not ready, unsupported disc, NAT hostname not accepted; texts from the code dictionary (D1).
 
 ### Maintenance mode
 - [ ] Standalone (D4): OPN with Wii TLS, every console refused with the message given as an argument,

@@ -1,6 +1,6 @@
 # M1 — Database schema (draft for review)
 
-**Status: under review.** The SQL lives in [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), applied by
+**Status: settled (2026-10-08).** The SQL lives in [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), applied by
 the server at startup and checked against SQLite 3.51 (constraints exercised by hand: Capcom ID format, slot range,
 HMAC and public id lengths, disc ids, key formats, foreign keys and cascades, STRICT types, terms versions starting
 at 2). Rewritten in place
@@ -20,9 +20,9 @@ Inputs: decisions D1–D7, support code storage, identity (`M1 login funnel.md`)
 - **No enum types** (SQLite has none anyway): enumerations are `TEXT` with a `CHECK`; formats are checked with `GLOB`
   (SQLite has no regular expressions by default).
 - **No history**: rows are overwritten in place (terms excepted: each version is a row, see `terms`).
-- **Defaults live in the code, the database only holds overrides**: every text key (an enum) and the default terms
-  have an English default in the code, so a missing text is a compile error. Lookup: database (key, console
-  language) → database (key, `en`) → code default.
+- **Texts are a dictionary in the code**: every key (an enum) has its English text, so a missing text is a compile
+  error. Overrides from the database and the per-language lookup come with the website (M8, a `texts` table).
+  **Terms** are already overridable (`terms` table) because the console's terms version must change when they do.
 - **Only permanent data.** Sessions, tickets, pairing codes, presence, populations and live worlds (gates, cities,
   quests in progress) are in the server's memory.
 - **No secrets in clear**: support codes are stored as HMAC-SHA256(pepper, code), 32 bytes; the pepper comes from
@@ -39,7 +39,6 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 | Table | One row per | Notes |
 |---|---|---|
 | `settings` | setting | key → value; `natneg_hostname` (D3), `access` (open / on_register / admin), `registration` (open/closed, website only). The list of keys and their values lives only in the code: the database checks the key format, the server validates meaning (on read, and through the admin API, the only writer). Seeded: `access = open`, `registration = closed`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
-| `texts` | override of a text × language | empty by default; keys are an enum in the code with English defaults (the database only checks their format); language is ISO 639-1 (the game's languages have no regional variants); lookup language → `en` → code |
 | `terms` | edit of the terms or sub-terms × language | the `AUTOINCREMENT` key is the version sent to the console (u32): built-in terms are version 1, overrides start at 2, and ids are never reused (plain SQLite keys can be, after a deletion), so edited terms are always re-shown |
 | `consoles` | console | `support_code_hmac` (HMAC-SHA256 with the pepper, never the code), disc region, first/last seen |
 | `hunters` | Capcom ID slot | an online identity a save hunter plays under; a new name on the slot means another hunter: name and profile overwritten, social links dropped, Capcom ID and moderation records kept; no history |
@@ -55,7 +54,8 @@ Not part of M1: shown only to see whether M1's tables would need reshaping later
 later table points at `consoles` or `hunters` by id.
 
 ```sql
--- M8: website accounts and access (pairing).
+-- M8: text overrides (key, language, value), website accounts and access (pairing).
+texts           (id, key, language, value, updated_at, UNIQUE (key, language))
 accounts        (id, public_id, email unique, password_hash /* argon2: human passwords */, created_at, …)
 consoles        + account_id INTEGER NULL REFERENCES accounts ON DELETE SET NULL  -- linked by pairing
                 + approval text CHECK (approval IN ('pending', 'approved', 'denied'))  -- per the 'access' setting:
@@ -98,9 +98,8 @@ admin_actions   (id BLOB PRIMARY KEY /* UUID v7; audit log: append-only */, admi
    record. (To check: whether the game can delete a Capcom ID.)
 2. `last_seen_at`: kept (consoles and hunters).
 3. Region: on the console.
-4. Texts and terms: the code holds every default (keys are an enum), the database only overrides
-   (lookup: language → `en` → code). Terms in their own table, the identity key being the version (built-in = 1,
-   overrides from 2).
+4. Texts: a dictionary in the code only, until the website (M8) brings the `texts` override table back. Terms in
+   their own table, the key being the version (built-in = 1, overrides from 2).
 5. World servers: built-in constants (overridable at startup by `config.toml`), identified by name; not in the
    database. Same for server types and the world layout.
 6. Access: setting `access` = `open` (no check) / `on_register` / `admin`; `registration` (open/closed) only
@@ -110,6 +109,3 @@ admin_actions   (id BLOB PRIMARY KEY /* UUID v7; audit log: append-only */, admi
 9. Keys: internal `INTEGER PRIMARY KEY` everywhere (except `settings` and the audit log), `public_id` UUID on what
    people reference; internal keys never leave the database.
 
-## Next
-
-A second review pass on the whole file, then it becomes `migrations/0001_schema.sql`.
