@@ -48,9 +48,13 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
 - **D1 Content binaries**: MH3SP's generators ported to Rust, typed (server type list, time events, current event
   slot, trading post, quest slots; the quest layout from `quest_utils.py`), checked against the recorded downloads.
 - **D2 Event content** (event quests, rotation, trading post): **files, as MH3SP has them** (`event/*.json`,
-  `quest_rotation.json`, `trading_post.json`, same format), read at startup from a content folder (`CONTENT_DIR`,
-  default `content/`, in the repository and the image). Nothing hard-coded, no database. A change takes a
-  restart (a reload, or the website editing them, decided when needed).
+  `quest_rotation.json`, `trading_post.json`, same format), in a content folder (`CONTENT_DIR`, default
+  `content/`, in the repository and the image). Nothing hard-coded, no database. **Read on demand**: a binary is
+  built from the files when a console asks for it (`ReqBinaryHead`) and kept for that download, so its chunks
+  and foot come from one snapshot. Its version (`AnsBinaryVersion`) is derived from its bytes: an edited file,
+  or the rotation moving on, changes it, and connected consoles fetch the new content at their next poll. No
+  restart, no reload command. Every file is also checked at startup: errors logged, not fatal (one broken quest
+  doesn't stop the server; the download that needs it fails with an `error` naming the file).
 - **D3 World model**: one `World` struct behind a `std::sync::Mutex` (decision 4): 12 world servers × 40 gates ×
   up to 40 cities, capacities 2000 / 100 / 4. **Resources exist only on demand**: a gate, a city or a circle is
   created when the first player enters (or creates) it and removed when the last one leaves; lists show the rest
