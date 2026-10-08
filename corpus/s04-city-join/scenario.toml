@@ -1,0 +1,12 @@
+description = "Two consoles: dev1 creates a city, dev2 joins it (host lookup, NtcLayerIn, P2P connection offer, direct UDP between consoles), then dev2 leaves to the gate; both return to title."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev2: leave the city (back to the gate)",
+  "both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
