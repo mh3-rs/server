@@ -73,18 +73,28 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
 8. **Logging:** `tracing`; packet-level logs with names and, behind a flag, full hexdumps in the same format as
    MH3SP `-d`, so the two can be diffed.
 
-## Verification strategy
+## Testing strategy
 
-1. **Corpus.** Record scenarios in the lab against Python MH3SP with `-d` (full hexdumps, both directions):
-   login, gate, city create, city join (2 consoles), quest create/join/start/end, chat, friend request,
-   event quest download, trading post, disconnects.
-   Store them as `corpus/<scenario>/<connection>.jsonl` (one record per packet: direction, id, seq, hex).
-2. **Replay harness.** Feeds each recorded connection's client packets to the Rust server and diffs the replies.
-   Volatile fields (tickets, support codes, timestamps, random IDs) are masked per packet type.
-3. **Round-trip tests.** Every packet type: `decode(encode(x)) == x`, and `encode(decode(bytes)) == bytes` on all corpus packets.
-4. **End-to-end.** The lab's Dolphins pointed at the Rust server: the milestone acceptance tests below.
+Python MH3SP is the oracle. A diff against it is a finding, not a nuisance: it is reverse-engineering knowledge
+the port would otherwise lose.
 
-A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge the port would otherwise lose.
+**Corpus.** Scenarios recorded in the lab against Python MH3SP with `-d` (full hexdumps, both directions):
+login, gate, city create, city join (2 consoles), quest create/join/start/end, chat, friend request,
+event quest download, trading post, disconnects. Stored as `corpus/<scenario>/<connection>.jsonl`
+(one record per packet: direction, id, seq, hex, relative time). Volatile fields (tickets, support codes,
+timestamps, random IDs) are masked per packet type.
+
+| Tier | What | Runs where | Since |
+|---|---|---|---|
+| 1. Unit | `wire` round-trips (`decode(encode(x)) == x`, `encode(decode(bytes)) == bytes` on every corpus packet), property tests on items/`PatData`; `game` logic as pure functions (`Request` → `Effect`s) | CI, every push | M0 |
+| 2. Replay | Each recorded connection's client packets fed to the Rust stack in-process; replies diffed against the corpus | CI, every push | M0 |
+| 3. Scripted E2E | Fake consoles (Rust test client crate) over real sockets: TLS on OPN, the full 6-connection login, multi-client scenarios (2–4 clients in a city/quest), disconnects mid-flow, concurrency stress | CI, every push | M1 |
+| 4. Live differential | The same scripted scenarios against Python MH3SP **and** Rust, started side by side in CI; diff the conversations | CI, nightly + on demand | M1 |
+| 5. NAT negotiation / relay | Fake UDP peers run NAT negotiation and exchange traffic in `p2p`, `relay`, `hybrid`; simulated NAT (address/port rewriting) and forced failures for the hybrid fallback | CI, every push | M4 |
+| 6. Dolphin E2E | Real game in Dolphin, automated: launch with `play.sh`-style config, drive menus, assert progress from server logs and game memory (error code via the PAL symbol maps), screenshots on failure | Self-hosted runner only (needs the game image), nightly / manual | Spike in M1, scenarios from M2 |
+
+CI (GitHub Actions or similar): `fmt`, `clippy -D warnings`, tiers 1–3 and 5 on every push; tier 4 nightly
+(needs Python 3 + a pinned MH3SP checkout); tier 6 on the self-hosted runner. Coverage report on tiers 1–3.
 
 ## Milestones
 
@@ -96,8 +106,10 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] Corpus recorder: a script that turns MH3SP `-d` logs into `corpus/*.jsonl`.
 - [ ] Record the first corpus (login → gate → city → solo quest; 2-console city join + quest).
 - [ ] Replay harness running (everything fails, that's expected).
+- [ ] Test client crate skeleton (scripted console: framing, TLS, scenario DSL or corpus-driven).
+- [ ] CI pipeline: fmt, clippy, tiers 1–2.
 
-**Done when:** every corpus packet round-trips through `wire`, and the harness reports per-packet diffs.
+**Done when:** every corpus packet round-trips through `wire`, the harness reports per-packet diffs, CI is green on tiers 1–2.
 
 ### M1 — Login funnel (OPN + LMP)
 - [ ] TLS listener (legacy config), plain TCP listeners.
@@ -107,8 +119,13 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] LMP: login info, support code + PAT ticket issuing, user list (6 slots), user object (Capcom ID assignment),
       server time, FMP list + FMP info (per world-server address).
 - [ ] Accounts in SQLite.
+- [ ] Tier 3: scripted login scenario (all 6 connections) in CI.
+- [ ] Tier 4: live differential job against Python MH3SP.
+- [ ] Tier 6 spike: can Dolphin be driven unattended (input automation, reading the error code from memory)?
+      Decide the approach or drop the tier.
 
-**Done when:** a Dolphin goes from title screen to the server list on the Rust server; login corpus replays clean.
+**Done when:** a Dolphin goes from title screen to the server list on the Rust server; login corpus replays clean;
+tiers 3–4 green for login.
 
 ### M2 — FMP, solo
 - [ ] Session hand-off by PAT ticket across connections (FMP staging → FMP real).
@@ -120,7 +137,10 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] Circles: create, match options, info, info set, match start/end, leave.
 - [ ] Server time and day/night, sandstorm and Jhen Mohran schedules.
 
-**Done when:** one console creates a city, creates and starts a quest; solo corpus replays clean.
+- [ ] Tier 3 scenarios: gate, city create, quest create/start, content downloads.
+- [ ] Tier 6 (if the spike succeeded): solo scenario on the self-hosted runner.
+
+**Done when:** one console creates a city, creates and starts a quest; solo corpus replays clean; tier 3 green.
 
 ### M3 — Multiplayer
 - [ ] Broadcast scopes: layer (gate/city), circle; `SendTo(capcom_id)`.
@@ -130,7 +150,9 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] Chat (layer, tell), friends (add/accept/delete/list), blacklist.
 - [ ] Concurrency model written down: which task owns which state, no cross-task socket writes without channels.
 
-**Done when:** two consoles in one city, both in the same quest, with AltWFC still doing NAT negotiation.
+- [ ] Tier 3 scenarios with 2–4 clients: join/leave, host transfer, chat, friends; disconnect at every step; a stress test (many clients, random actions) to shake out races.
+
+**Done when:** two consoles in one city, both in the same quest, with AltWFC still doing NAT negotiation; multi-client tier 3 green.
 
 ### M4 — NAT negotiation + relay
 - [ ] NAT negotiation server (UDP 27901): `INIT`/`INITACK`, `CONNECT`/`CONNECT_ACK`, `REPORT`/`REPORT_ACK`,
@@ -143,7 +165,9 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] Check: does the game use the `IP:port` inside `NtcLayerBinary2`/`NtcCircleBinary2`? If yes, rewrite it in relay mode.
 - [ ] Check: quest topology (host-to-all vs mesh; the decomp hints at host + "subhost"). Needs 3 consoles.
 
-**Done when:** the M3 scenario passes in all three strategies with AltWFC's NAT negotiation turned off.
+- [ ] Tier 5: fake peers through NAT negotiation in each strategy, simulated NAT, forced P2P failure → relay on retry.
+
+**Done when:** the M3 scenario passes in all three strategies with AltWFC's NAT negotiation turned off; tier 5 green.
 
 ### M5 — Parity and polish
 - [ ] Remaining handlers until the full corpus replays clean (target: all 102 client message types MH3SP handles).
@@ -152,7 +176,9 @@ A corpus diff is a finding, not a nuisance: it is reverse-engineering knowledge 
 - [ ] Admin interface (CLI or HTTP): online players, kick, ban, announce.
 - [ ] Graceful shutdown, metrics.
 
-**Done when:** the full corpus replays clean and a play session of an hour shows no regression against Python.
+- [ ] Tier 4 differential covers every scenario in the corpus.
+
+**Done when:** the full corpus replays clean, tier 4 shows no unexplained diff, and a play session of an hour shows no regression against Python.
 
 ### M6 — Anti-cheat (research)
 
