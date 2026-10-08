@@ -94,7 +94,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Open
 
-- [ ] **Schema**: drafted in [`M1 schema.md`](M1%20schema.md), under review.
+- [ ] **Schema**: [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), reasoning in [`M1 schema.md`](M1%20schema.md); under review.
 - [x] **V1 Cache**: Valkey is optional. A `Cache` trait with two implementations, chosen at startup: Valkey when
       configured, in-memory otherwise (single node only; the `[valkey]` config section and the compose service are
       optional). Covers JSON values with an expiry, delete, set-if-absent (ownership leases), publish/subscribe.
@@ -167,8 +167,9 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] `external_address`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
 
 ### Database
-- [ ] `migrations/0001_schema.sql` (see Schema policy).
-- [ ] `scripts/dev.sh --reset`: drops the dev database and Valkey data, for schema changes.
+- [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
+      since `sqlx::migrate!` embeds migrations at compile time).
+- [x] `scripts/dev.sh --reset`: drops the dev database and Valkey data, for schema changes.
 - [ ] Tests use a fresh database each run (`#[sqlx::test]`), so a rewritten schema file never trips them.
 
 ### Checks with a real console (Dolphin)
