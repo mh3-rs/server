@@ -1,0 +1,13 @@
+description = "Solo city and quest: enters a gate, creates a city, creates and starts a quest, abandons it, then returns to title straight from the city (LayerEnd without LayerUp)."
+steps = [
+  "dev1: Online, Capcom ID slot 1, Valor1, gate 1",
+  "create a city and enter it",
+  "create a quest, start it",
+  "abandon the quest, back in the city",
+  "return to title from the city",
+]
+consoles = 1
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M2"

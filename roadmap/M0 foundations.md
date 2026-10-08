@@ -187,14 +187,27 @@ Some bytes differ on every run: PAT tickets, online support codes, Capcom IDs, s
 
 ### Scenarios for M0
 
-| Id | Consoles | Played steps | Twice | Must pass from |
+| Id | Consoles | Played steps | Must pass from | Status |
 |---|---|---|---|---|
-| `s01-terms-decline` | 1 | go online, decline the terms | | M1 |
-| `s02-login-gate` | 1 | go online, accept, pick Valor1, enter gate 1, return to title | ✓ | M1 (login part), M2 |
-| `s03-city-quest-solo` | 1 | gate, create city, create quest, start, abandon, back in city, leave | | M2 |
-| `s04-city-join` | 2 | dev1 creates a city, dev2 joins it, chat both ways, dev2 leaves | ✓ | M3 |
-| `s05-quest-party` | 2 | dev1 city + quest, dev2 joins city and quest, start, abandon | | M3 |
-| `s06-disconnect` | 2 | dev2 in dev1's city, dev2's Dolphin killed | | M3 |
+| `s00-returning-new-slot` | dev1 | returning console logs in twice, the second time into an empty Capcom ID slot | M1 | ✓ recorded |
+| `s01-terms-decline` | dev3 (first time) | go online, decline the terms | M1 | ✓ recorded |
+| `s02-login-gate` + `s02-login-gate-2` | dev1 | go online, slot 1, Valor1, gate 1, return to title (twice, for volatile fields) | M2 | ✓ recorded |
+| `s02-first-login-gate` | dev4 (first time) | same, accepting the terms first | M2 | ✓ recorded |
+| `s03-city-quest-solo` | dev1 | gate, create city, create quest, start, abandon, back in city, return to title | M2 | ✓ recorded |
+| `s04-city-join` | dev1 + dev2 | dev1 creates a city, dev2 joins it, chat both ways, dev2 leaves (twice) | M3 | |
+| `s05-quest-party` | dev1 + dev2 | dev1 city + quest, dev2 joins city and quest, start, abandon | M3 | |
+| `s06-disconnect` | dev1 + dev2 | dev2 in dev1's city, dev2's Dolphin killed | M3 | |
+
+Recording findings:
+- Terms acceptance and decline are decided on the console: the server sends the same packets either way. A
+  console that already accepted the current version downloads the terms without showing them; on decline it
+  still asks for LMP's address, then disconnects without opening LMP.
+- A returning console sends its online support code in `AnsConnection`; a first-time console omits it and the
+  server issues one.
+- `s02` vs `s02-2` differ in 10 packet types: Nintendo login token, PAT ticket (issued, then echoed by the
+  console), Capcom ID, server time, one byte of a time-driven binary, and 2 bytes of `NtcCheatCheck`
+  (a counter or timer in the game's anti-cheat report).
+- Every recording starts on a fresh Python database, so slot 1 is always empty and gets a new Capcom ID.
 
 Friends, blacklist, event quests and the trading post get their own scenarios with the milestone that needs them.
 
