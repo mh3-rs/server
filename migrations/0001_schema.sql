@@ -47,29 +47,8 @@ CREATE TABLE terms (
 );
 CREATE INDEX terms_current ON terms (kind, language, id DESC);
 
--- The game's four server types and their HR limits. Both bounds are inclusive (SQL's BETWEEN is, and so is the
--- game's wording: Rookie "HR 30 or lower", Expert "HR 31 or higher").
-CREATE TABLE server_types (
-    id      bigint   GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    type    text     NOT NULL UNIQUE CHECK (type IN ('open', 'rookie', 'expert', 'recruiting')),
-    hr_min  smallint NOT NULL CHECK (hr_min BETWEEN 0 AND 999),
-    hr_max  smallint NOT NULL CHECK (hr_max BETWEEN hr_min AND 999)
-);
-
--- World servers of the server list: configuration, not live data (who is where lives in node memory and the
--- cache). Admins add, rename, reorder and disable them (website, M7); nodes reload on a cache message. A server
--- with players is disabled, not deleted. `position` is only the display order. The layout of a world (40 gates of
--- 100 players, 40 cities of 4 per gate, as in the game) is a constant in the code.
-CREATE TABLE world_servers (
-    id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    public_id       uuid        NOT NULL UNIQUE DEFAULT uuidv7(),
-    position        smallint    NOT NULL UNIQUE,
-    name            text        NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 24),  -- max to check in FmpListData
-    server_type_id  bigint      NOT NULL REFERENCES server_types,
-    capacity        integer     NOT NULL DEFAULT 2000 CHECK (capacity > 0),  -- players, shown in the server list
-    enabled         boolean     NOT NULL DEFAULT true,
-    created_at      timestamptz NOT NULL DEFAULT now()
-);
+-- World servers, server types (with their HR limits) and the world layout are not in the database: they are game
+-- constants in the code, optionally overridden by `config.toml` at startup.
 
 -- A console, identified by HMAC-SHA256(pepper, online support code); the code itself is never stored.
 CREATE TABLE consoles (
@@ -97,34 +76,7 @@ CREATE TABLE hunters (
 );
 CREATE INDEX hunters_console ON hunters (console_id);
 
--- Reference data (texts and terms have their defaults in the code, not here).
-
-INSERT INTO server_types (type, hr_min, hr_max) VALUES
-    ('open',       0, 999),
-    ('rookie',     0,  30),
-    ('expert',    31, 999),
-    ('recruiting', 0, 999);
-
--- The starting set. Fixed public ids, so every node and every reset agrees on them; servers added later by admins
--- get generated ids.
-INSERT INTO world_servers (public_id, position, name, server_type_id)
-SELECT w.public_id::uuid, w.position, w.name, t.id
-FROM (VALUES
-    ('0199c4a0-0000-7000-8000-000000000001',  1, 'Valor1',     'open'),
-    ('0199c4a0-0000-7000-8000-000000000002',  2, 'Valor2',     'open'),
-    ('0199c4a0-0000-7000-8000-000000000003',  3, 'Valor3',     'open'),
-    ('0199c4a0-0000-7000-8000-000000000004',  4, 'Valor4',     'open'),
-    ('0199c4a0-0000-7000-8000-000000000005',  5, 'Beginners1', 'rookie'),
-    ('0199c4a0-0000-7000-8000-000000000006',  6, 'Beginners2', 'rookie'),
-    ('0199c4a0-0000-7000-8000-000000000007',  7, 'Veterans1',  'expert'),
-    ('0199c4a0-0000-7000-8000-000000000008',  8, 'Veterans2',  'expert'),
-    ('0199c4a0-0000-7000-8000-000000000009',  9, 'Greed1',     'recruiting'),
-    ('0199c4a0-0000-7000-8000-00000000000a', 10, 'Greed2',     'recruiting'),
-    ('0199c4a0-0000-7000-8000-00000000000b', 11, 'Greed3',     'recruiting'),
-    ('0199c4a0-0000-7000-8000-00000000000c', 12, 'Greed4',     'recruiting')
-) AS w (public_id, position, name, type)
-JOIN server_types t ON t.type = w.type;
-
+-- Initial settings (everything else has its defaults in the code).
 INSERT INTO settings (key, value) VALUES
     ('registration', 'closed'),
     ('whitelist',    'off');

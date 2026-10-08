@@ -38,10 +38,13 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 | `settings` | setting | key → value; `natneg_hostname` (D3), `registration` (open/closed), `whitelist` (off / on_register / admin). The list of keys and their values lives only in the code: the database checks the key format, the server validates meaning (on read, and through the admin API, the only writer). Seeded: `registration = closed`, `whitelist = off`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
 | `texts` | override of a text × language | empty by default; keys are an enum in the code with English defaults (the database only checks their format); language is ISO 639-1 (the game's languages have no regional variants); lookup language → `en` → code |
 | `terms` | edit of the terms or sub-terms × language | the identity key is the version sent to the console (u32): built-in terms are version 1, overrides start at 2, so edited terms are always re-shown |
-| `server_types` | game server type (4) | HR limits, both inclusive (Rookie "HR 30 or lower", Expert "HR 31 or higher"); seeded with MH3SP's values |
-| `world_servers` | world server | configuration, not live data: admins add, rename, reorder and disable them (M7), nodes reload on a cache message; disabled, not deleted, while players are on it. `public_id` for leases, presence, logs and the website; `position` is only the display order. The world layout (40 gates × 100 players, 40 cities × 4 per gate) is a constant in the code. Name length capped at 24 until the server-list packet's real limit is checked. Seeded with MH3SP's 12 (fixed public ids; later ones generated) |
 | `consoles` | console | `support_code_hmac` (HMAC-SHA256 with the pepper, never the code), disc region, first/last seen |
 | `hunters` | Capcom ID slot | an online identity a save hunter plays under; a new name on the slot means another hunter: name and profile overwritten, social links dropped, Capcom ID and moderation records kept; no history |
+
+Not in the database: **world servers** (the 12 of MH3SP: names, types, capacity), **server types** (HR limits) and
+the **world layout** (40 gates × 100 players, 40 cities × 4 per gate). They are game constants in the code,
+optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only (every node of a fleet
+gets the same config). A world server is identified by its name (`Valor1`) in logs, leases and presence.
 
 ## Later tables, sketched to check the M1 tables hold
 
@@ -95,8 +98,8 @@ admin_actions   (id uuid DEFAULT uuidv7() PRIMARY KEY /* audit log: append-only 
 4. Texts and terms: the code holds every default (keys are an enum), the database only overrides
    (lookup: language → `en` → code). Terms in their own table, the identity key being the version (built-in = 1,
    overrides from 2).
-5. World servers: `position` is only the display order; rows are referenced internally by `id`, outside by
-   `public_id`.
+5. World servers: built-in constants (overridable at startup by `config.toml`), identified by name; not in the
+   database. Same for server types and the world layout.
 6. Whitelist: instance settings `registration` (open/closed) and `whitelist` (off / on_register / admin).
 7. Enumerations: `text` with a `CHECK`.
 8. PostgreSQL 18, `uuidv7()` for public ids (dev compose and CI on `postgres:18`).

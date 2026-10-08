@@ -66,8 +66,11 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   seeded with default values. The console remembers the terms version it accepted and re-shows the terms only when
   the version changes: editing the terms bumps their version. Texts use the game's markup (`<BR>`, `<CENTER>`,
   `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
-- **D2 World servers** (names, types Open/Rookie/Expert/Recruiting, HR limits, capacities, gates × cities): in
-  PostgreSQL, seeded with MH3SP's 12 servers. Every node of a fleet reads the same list.
+- **D2 World servers**: game constants in the code (MH3SP's 12: Valor1–4 Open, Beginners1–2 Rookie, Veterans1–2
+  Expert, Greed1–4 Recruiting; server types with their HR limits; the world layout of 40 gates × 40 cities),
+  optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only and validated (unique
+  names, length, known types). Every node of a fleet gets the same config. Identified by name in logs, leases and
+  presence. Not in the database, not editable from the website (YAGNI).
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
   future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
   hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
@@ -159,6 +162,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] PAT tickets in Valkey with a TTL (`AnsTicket`); the next connection finds its session by ticket.
 - [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
 - [ ] Server time.
+- [ ] World servers from the built-in list or the `config.toml` override (D2), validated at startup.
 - [ ] World server list (`FmpList*`) with populations read from Valkey (nothing writes them before M2, so 0), and
       `AnsFmpInfo` with the address of the node owning the chosen world server: ownership leases in Valkey start
       here (one node owns them all until the fleet), since `AnsFmpInfo` needs them.
