@@ -15,8 +15,9 @@ Inputs: decisions D1–D7, V1–V4, support code storage, identity (`M1 login fu
   who may see or change what.
 - **No enum types**: enumerations are `text` with a `CHECK`.
 - **No history**: rows are overwritten in place (terms excepted: each version is a row, see `terms`).
-- **Defaults live in the code**: text keys (and the default terms) are listed in the code with their English
-  default; at startup, any missing English row is inserted. The SQL file seeds only what the code doesn't own.
+- **Defaults live in the code, the database only holds overrides**: every text key (an enum) and the default terms
+  have an English default in the code, so a missing text is a compile error. Nothing is inserted at startup or
+  seeded. Lookup: database (key, console language) → database (key, `en`) → code default.
 - **Only permanent data.** Sessions, tickets, pairing codes, presence, populations, ownership leases and the fleet
   registry are in the cache (V1). Live worlds (gates, cities, quests in progress) are in node memory.
 - **No secrets in clear**: support codes are stored as HMAC-SHA256(pepper, code), 32 bytes; the pepper comes from
@@ -41,9 +42,9 @@ CREATE TABLE settings (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
--- Every text the server sends (D1, D6) except the terms: announce, no-charge, refusal and kick messages,
--- vulgarity lists, server type names and descriptions. Keys are listed in the code with an English default,
--- inserted at startup when missing. Lookup: (key, console language), falling back to 'en'.
+-- Overrides of the texts the server sends (D1, D6) except the terms: announce, no-charge, refusal and kick
+-- messages, vulgarity lists, server type names and descriptions. Empty by default: every key (an enum in the code)
+-- has an English default in the code. Lookup: (key, console language) → (key, 'en') → code default.
 CREATE TABLE texts (
     id          bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     key         varchar(64) NOT NULL,          -- e.g. 'announce', 'refusal.not_ready', 'server_type.rookie.name'
@@ -53,12 +54,13 @@ CREATE TABLE texts (
     UNIQUE (key, language)
 );
 
--- Terms and sub-terms. Each edit inserts a new row; its `id` is the version the console compares
--- (AnsTermsVersion): it only ever grows, so the console re-shows edited terms whether it checks for a different
--- or a higher number. Current terms: the latest row for (kind, language), falling back to 'en'. The default
--- English terms are in the code, inserted at startup when there are none.
+-- Overrides of the terms and sub-terms. Each edit inserts a new row; its `id` is the version the console
+-- compares (AnsTermsVersion): it only ever grows, so the console re-shows edited terms whether it checks for a
+-- different or a higher number. The built-in English terms (in the code) are version 1, so the identity starts at
+-- 2. Current terms: latest row for (kind, console language) → latest for (kind, 'en') → built-in.
 CREATE TABLE terms (
-    id          bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY CHECK (id <= 4294967295), -- u32 on the wire
+    id          bigint      GENERATED ALWAYS AS IDENTITY (START WITH 2) PRIMARY KEY
+                            CHECK (id <= 4294967295),     -- u32 on the wire
     kind        text        NOT NULL CHECK (kind IN ('terms', 'subterms')),
     language    varchar(8)  NOT NULL,
     value       text        NOT NULL,
@@ -101,10 +103,12 @@ CREATE TABLE consoles (
     last_seen_at        timestamptz NOT NULL DEFAULT now()
 );
 
--- One of the console's 6 Capcom ID slots: an online identity, not a particular save hunter. Whichever hunter of
--- the save plays under it, it's the same Capcom ID (what other players see, what friends and moderation attach
--- to): a slot used by another hunter is overwritten in place (new name) and keeps its Capcom ID. No history.
--- To check in the game: whether a Capcom ID can be deleted (then: delete the row and its friend links).
+-- One of the console's 6 Capcom ID slots: an online identity that a hunter of the save plays under.
+-- The game never renames a hunter, so a different name on a slot means another hunter took it: name and profile
+-- are overwritten, friends, blacklist and pending friend requests are dropped (a friendship is with a person),
+-- an `info` line is logged. The Capcom ID stays, with everything moderation attaches to it (anti-cheat flags,
+-- bans): a fresh Capcom ID on replacement would let a flagged player clean their record by switching hunters.
+-- No history. To check in the game: whether a Capcom ID can be deleted (then: delete the row and its links).
 CREATE TABLE hunters (
     id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id       uuid        NOT NULL UNIQUE DEFAULT uuidv7(),   -- website, API
@@ -118,15 +122,14 @@ CREATE TABLE hunters (
 );
 ```
 
-Seed data in the SQL file (`INSERT … ON CONFLICT DO NOTHING`), only what the code doesn't own:
+Seed data in the SQL file (`INSERT … ON CONFLICT DO NOTHING`): reference data only, no texts or terms (their
+defaults are in the code):
 - `server_types`: open 0–999, rookie 0–30, expert 31–999, recruiting 0–999 (MH3SP's values).
 - `world_servers`: Valor1–4 (open), Beginners1–2 (rookie), Veterans1–2 (expert), Greed1–4 (recruiting), with their
   `public_id`s written in the seed (not generated) so every node and every reset agrees.
 - `settings`: `registration` = `closed`, `whitelist` = `off`; no default `natneg_hostname`: it is derived from the
   deployment's domain (our patch, D3), so a fresh install without it refuses every disc with a clear "server not
   configured" log line.
-
-Texts and terms are not seeded in SQL: their English defaults are in the code (see Principles).
 
 ## Later tables, sketched to check the M1 tables hold
 
@@ -140,6 +143,9 @@ consoles        + account_id bigint NULL REFERENCES accounts ON DELETE SET NULL 
                 + access text CHECK (access IN ('pending', 'approved', 'denied'))  -- per the 'whitelist' setting:
                   'on_register' approves on linking, 'admin' waits for an admin
 bans            (id, console_id NULL, hunter_id NULL, reason, banned_by, created_at, expires_at NULL)
+-- Ban evasion: a console's identity is its support code, kept in the save's network file; deleting the file
+-- gives a new identity. Mitigations: the whitelist with accounts (a banned account can't pair new consoles) and,
+-- with our own Nintendo login, bans tied to hardware identifiers (Wii serial, MAC) seen by it.
 
 -- M3 (in memory from M2): the hunter's public profile, the 256-byte block the console writes with
 -- ReqUserBinarySet and the server hands to other players (AnsLayerUserList, NtcLayerIn,
@@ -169,12 +175,14 @@ admin_actions   (id uuid DEFAULT uuidv7() PRIMARY KEY /* audit log: append-only 
 
 ## Answered
 
-1. A Capcom ID slot is an online identity: when another hunter uses it, the row is overwritten in place and keeps
-   its Capcom ID; no history. (To check: whether the game can delete a Capcom ID.)
+1. A Capcom ID slot is an online identity. Another hunter taking it (a new name) overwrites name and profile and
+   drops its social links; the Capcom ID and its moderation records stay, so switching hunters can't clean a
+   record. (To check: whether the game can delete a Capcom ID.)
 2. `last_seen_at`: kept (consoles and hunters).
 3. Region: on the console.
-4. Texts: `(key, language, value)`; keys and English defaults in the code, missing ones inserted at startup. Terms
-   and sub-terms in their own table, the identity key being the version (it only grows).
+4. Texts and terms: the code holds every default (keys are an enum), the database only overrides
+   (lookup: language → `en` → code). Terms in their own table, the identity key being the version (built-in = 1,
+   overrides from 2).
 5. World servers: `position` is only the display order; rows are referenced internally by `id`, outside by
    `public_id`.
 6. Whitelist: instance settings `registration` (open/closed) and `whitelist` (off / on_register / admin).
