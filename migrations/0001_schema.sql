@@ -5,15 +5,16 @@
 -- roadmap/M1 schema.md.
 --
 -- Conventions: internal `bigint` identity keys never leave the database; what people reference has a `public_id`
--- UUID v7. Enumerations are text with a CHECK. Texts and terms are overrides of defaults kept in the code.
+-- UUID v7. Strings are `text` with a CHECK (never varchar(n)); enumerations too. Texts and terms are overrides of
+-- defaults kept in the code. Lists of keys (settings, texts) live only in the code: the database checks their
+-- format, the server validates their meaning (on read, and through the admin API, the only writer).
 
--- Key/value settings shared by every node, editable by admins. Values are validated by the server when read (a
--- generic table can't check them). Known keys (a list in the code):
+-- Key/value settings shared by every node, editable by admins. Known keys (the list is in the code):
 --   natneg_hostname  the only accepted NAT negotiation hostname
 --   registration     'open' | 'closed'
 --   whitelist        'off' | 'on_register' | 'admin'
 CREATE TABLE settings (
-    key         varchar(32) PRIMARY KEY,
+    key         text        PRIMARY KEY CHECK (key ~ '^[a-z][a-z0-9_]{0,31}$'),
     value       text        NOT NULL,
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -22,27 +23,32 @@ CREATE TABLE settings (
 -- Lookup: (key, console language) -> (key, 'en') -> default in the code.
 CREATE TABLE texts (
     id          bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    key         varchar(64) NOT NULL,
-    language    varchar(8)  NOT NULL,
+    key         text        NOT NULL CHECK (key ~ '^[a-z][a-z0-9_.]{0,63}$'),   -- e.g. 'refusal.not_ready'
+    -- ISO 639-1: the game's languages are fixed (en, fr, de, it, es; ja later) and have no regional variants.
+    language    text        NOT NULL CHECK (language ~ '^[a-z]{2}$'),
     value       text        NOT NULL,
     updated_at  timestamptz NOT NULL DEFAULT now(),
     UNIQUE (key, language)
 );
 
--- Overrides of the terms and sub-terms; each edit is a new row whose id is the version sent to the console
--- (a u32 on the wire). The built-in terms in the code are version 1, so overrides start at 2.
+-- Overrides of the terms and sub-terms; each edit is a new row whose id is the version sent to the console.
+-- The console remembers the version it accepted and shows the terms again when the server's differs; ids only
+-- grow, so an edit is always shown again.
 -- Current: latest row for (kind, console language) -> latest for (kind, 'en') -> built-in.
 CREATE TABLE terms (
+    -- Starts at 2: the terms built into the code are version 1, so the first override is always newer.
+    -- At most 4294967295 (2^32 - 1): the version travels as a 32-bit unsigned field (AnsTermsVersion).
     id          bigint      GENERATED ALWAYS AS IDENTITY (START WITH 2) PRIMARY KEY
                             CHECK (id <= 4294967295),
     kind        text        NOT NULL CHECK (kind IN ('terms', 'subterms')),
-    language    varchar(8)  NOT NULL,
+    language    text        NOT NULL CHECK (language ~ '^[a-z]{2}$'),           -- ISO 639-1, as in `texts`
     value       text        NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX terms_current ON terms (kind, language, id DESC);
 
--- The game's four server types and their HR limits.
+-- The game's four server types and their HR limits. Both bounds are inclusive (SQL's BETWEEN is, and so is the
+-- game's wording: Rookie "HR 30 or lower", Expert "HR 31 or higher").
 CREATE TABLE server_types (
     id      bigint   GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     type    text     NOT NULL UNIQUE CHECK (type IN ('open', 'rookie', 'expert', 'recruiting')),
@@ -50,17 +56,17 @@ CREATE TABLE server_types (
     hr_max  smallint NOT NULL CHECK (hr_max BETWEEN hr_min AND 999)
 );
 
--- World servers of the server list. `position` is only the display order.
+-- World servers of the server list: configuration, not live data (who is where lives in node memory and the
+-- cache). Admins add, rename, reorder and disable them (website, M7); nodes reload on a cache message. A server
+-- with players is disabled, not deleted. `position` is only the display order. The layout of a world (40 gates of
+-- 100 players, 40 cities of 4 per gate, as in the game) is a constant in the code.
 CREATE TABLE world_servers (
     id              bigint      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id       uuid        NOT NULL UNIQUE DEFAULT uuidv7(),
     position        smallint    NOT NULL UNIQUE,
-    name            text        NOT NULL UNIQUE,
+    name            text        NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 24),  -- max to check in FmpListData
     server_type_id  bigint      NOT NULL REFERENCES server_types,
-    capacity        integer     NOT NULL DEFAULT 2000 CHECK (capacity > 0),
-    gate_count      smallint    NOT NULL DEFAULT 40 CHECK (gate_count BETWEEN 1 AND 40),
-    gate_capacity   integer     NOT NULL DEFAULT 100 CHECK (gate_capacity > 0),
-    city_count      smallint    NOT NULL DEFAULT 40 CHECK (city_count BETWEEN 1 AND 40),
+    capacity        integer     NOT NULL DEFAULT 2000 CHECK (capacity > 0),  -- players, shown in the server list
     enabled         boolean     NOT NULL DEFAULT true,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
@@ -99,7 +105,8 @@ INSERT INTO server_types (type, hr_min, hr_max) VALUES
     ('expert',    31, 999),
     ('recruiting', 0, 999);
 
--- Fixed public ids, so every node and every reset agrees on them.
+-- The starting set. Fixed public ids, so every node and every reset agrees on them; servers added later by admins
+-- get generated ids.
 INSERT INTO world_servers (public_id, position, name, server_type_id)
 SELECT w.public_id::uuid, w.position, w.name, t.id
 FROM (VALUES

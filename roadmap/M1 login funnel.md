@@ -175,6 +175,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ### Checks with a real console (Dolphin)
 - [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
 - [ ] Whether the game can delete a Capcom ID (schema, `hunters`).
+- [ ] The maximum world server name length the server list accepts (schema, `world_servers.name`, capped at 24 until then).
 - [ ] Whether a menu shows the online support code.
 
 ### Corpus and harness

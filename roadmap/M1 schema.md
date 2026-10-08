@@ -35,11 +35,11 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 
 | Table | One row per | Notes |
 |---|---|---|
-| `settings` | setting | key → value; `natneg_hostname` (D3), `registration` (open/closed), `whitelist` (off / on_register / admin). Values are validated by the server when read (a generic table can't). Seeded: `registration = closed`, `whitelist = off`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
-| `texts` | override of a text × language | empty by default; keys are an enum in the code with English defaults; lookup language → `en` → code |
+| `settings` | setting | key → value; `natneg_hostname` (D3), `registration` (open/closed), `whitelist` (off / on_register / admin). The list of keys and their values lives only in the code: the database checks the key format, the server validates meaning (on read, and through the admin API, the only writer). Seeded: `registration = closed`, `whitelist = off`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
+| `texts` | override of a text × language | empty by default; keys are an enum in the code with English defaults (the database only checks their format); language is ISO 639-1 (the game's languages have no regional variants); lookup language → `en` → code |
 | `terms` | edit of the terms or sub-terms × language | the identity key is the version sent to the console (u32): built-in terms are version 1, overrides start at 2, so edited terms are always re-shown |
-| `server_types` | game server type (4) | HR limits; seeded with MH3SP's values |
-| `world_servers` | world server | `public_id` for leases, presence, logs and the website; `position` is only the display order (the game's pick is mapped back through the list it was sent); seeded with MH3SP's 12, with fixed public ids |
+| `server_types` | game server type (4) | HR limits, both inclusive (Rookie "HR 30 or lower", Expert "HR 31 or higher"); seeded with MH3SP's values |
+| `world_servers` | world server | configuration, not live data: admins add, rename, reorder and disable them (M7), nodes reload on a cache message; disabled, not deleted, while players are on it. `public_id` for leases, presence, logs and the website; `position` is only the display order. The world layout (40 gates × 100 players, 40 cities × 4 per gate) is a constant in the code. Name length capped at 24 until the server-list packet's real limit is checked. Seeded with MH3SP's 12 (fixed public ids; later ones generated) |
 | `consoles` | console | `support_code_hmac` (HMAC-SHA256 with the pepper, never the code), disc region, first/last seen |
 | `hunters` | Capcom ID slot | an online identity a save hunter plays under; a new name on the slot means another hunter: name and profile overwritten, social links dropped, Capcom ID and moderation records kept; no history |
 
