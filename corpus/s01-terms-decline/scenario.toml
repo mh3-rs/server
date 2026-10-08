@@ -1,0 +1,10 @@
+description = "First-time console (no network file) declines the terms: the decline is client-side, the console still asks for LMP's address, then shuts down without connecting to it."
+steps = [
+  "dev3 (save without network file): Online",
+  "terms shown: decline",
+]
+consoles = 1
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M1"
