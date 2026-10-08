@@ -53,7 +53,8 @@ Edition 2024, latest stable toolchain pinned in `rust-toolchain.toml`.
 - [x] Cargo workspace (`crates/*`), `rust-toolchain.toml`. Crates join when their step starts: `wire` now,
       `testkit` at step 3, `server` (+ `config.example.toml`) at step 7.
 - [x] `scripts/dev.sh`: starts compose, creates/completes `.env` (idempotent, keeps existing values).
-- [x] `scripts/ci-tests.sh`: what CI runs, natively or `--docker` in the CI image; CI calls this same script.
+- [x] `scripts/ci-tests.sh`: what CI runs, natively, `--docker` in the CI image, or `--woodpecker` (the pipeline
+      files through the local runner); CI calls this same script, with `CARGO_TARGET_DIR=target/ci`.
 - [x] `.woodpecker/push.yml` (calls `scripts/ci-tests.sh`):
   - image `rust:<pinned>-bookworm` (has `libssl-dev`), `rustup component add rustfmt clippy`;
   - steps: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`;
@@ -76,7 +77,7 @@ Only what M1 builds on; nothing here gets thrown away.
       legacy setup (decision 6 in `00. global.md`): `@SECLEVEL=0`, minimum protocol SSLv3/TLS 1.0, ciphers
       `AES128-SHA:AES256-SHA:DES-CBC-SHA:DES-CBC3-SHA:RC4-MD5:RC4-SHA` (same list as MH3SP `other/utils.py`).
 - [ ] Logging per decision 8 of `00. global.md`: `tracing-subscriber` terminal output with `EnvFilter`, one span per
-      connection (`conn`, `peer`, `role`).
+      connection (`conn`, `role`); anonymous (no names, no IPs) and no secrets.
 - [ ] Each connection: read frames with the `wire` codec, log one line per frame (`RECV <name> id seq len`, hexdump at
       `debug`), keep the connection open until the peer closes it. No replies yet (M1 adds `ReqConnection`).
 - [ ] Graceful shutdown on Ctrl-C (stop accepting, close connections).
