@@ -108,7 +108,15 @@ whitelist       … either "a console linked to an account is whitelisted", or a
                   (console_id, added_by, added_at) table so admins can whitelist without an account
 bans            (id, console_id NULL, hunter_id NULL, reason, banned_by, created_at, expires_at NULL)
 
--- M3: social.
+-- M3 (in memory from M2): the hunter's public profile, the 256-byte block the console writes with
+-- ReqUserBinarySet and the server hands to other players (AnsLayerUserList, NtcLayerIn,
+-- NtcUserBinaryNotice). Self-reported by the console: the save is the truth. Known: HR (u16 @0),
+-- weapon type (u8 @5); likely equipment and appearance (other consoles draw the hunter from it).
+-- Persisted for the website (hunter pages) and anti-cheat (impossible values or jumps, M6);
+-- decoded fields become columns once mapped. History (one row per change) only if M6 needs it.
+hunter_profiles (hunter_id PRIMARY KEY, data bytea /* 256 */, updated_at)
+
+-- M3: social (friends also managed from the website, M7: the game fetches its list from the server).
 friends         (hunter_id, friend_id, created_at, PRIMARY KEY (hunter_id, friend_id))
 friend_requests (from_hunter_id, to_hunter_id, message bytea, created_at)
 blacklist       (hunter_id, blocked_hunter_id, created_at)
