@@ -1,0 +1,12 @@
+description = "Returning console logs in, takes a new Capcom ID in slot 1 (fresh server database), enters Valor1 gate 1, returns to title."
+steps = [
+  "dev1 (terms already accepted): Online",
+  "Capcom ID slot 1 (empty: the server database is fresh)",
+  "server Valor1, gate 1",
+  "return to title",
+]
+consoles = 1
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M2"

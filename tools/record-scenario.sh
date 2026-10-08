@@ -35,8 +35,13 @@ done
 pkill -f 'master_server.py -- --log-to-window' || true
 while pgrep -f 'master_server.py -- --log-to-window' >/dev/null; do sleep 1; done
 rm -f "$MH3SP/mh3sp.db"
-nohup "$LAB/server.sh" > "$LAB/server-$SCENARIO.log" 2>&1 &
-until lsof -nP -iTCP:8202 -sTCP:LISTEN >/dev/null; do sleep 1; done
+# Python MH3SP doesn't set SO_REUSEADDR: right after a restart its ports can still be held
+# by the OS, and it exits with "Address already in use". Retry until it binds.
+until lsof -nP -iTCP:8202 -sTCP:LISTEN >/dev/null; do
+  pgrep -f 'master_server.py -- --log-to-window' >/dev/null ||
+    nohup "$LAB/server.sh" > "$LAB/server-$SCENARIO.log" 2>&1 &
+  sleep 2
+done
 echo "MH3SP $(git -C "$MH3SP" rev-parse --short HEAD) running on a fresh database"
 
 marker=$(mktemp)
