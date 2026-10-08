@@ -35,7 +35,7 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 
 | Table | One row per | Notes |
 |---|---|---|
-| `settings` | setting | key → value; `natneg_hostname` (D3), `registration` (open/closed), `whitelist` (off / on_register / admin). The list of keys and their values lives only in the code: the database checks the key format, the server validates meaning (on read, and through the admin API, the only writer). Seeded: `registration = closed`, `whitelist = off`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
+| `settings` | setting | key → value; `natneg_hostname` (D3), `access` (open / on_register / admin), `registration` (open/closed, website only). The list of keys and their values lives only in the code: the database checks the key format, the server validates meaning (on read, and through the admin API, the only writer). Seeded: `access = open`, `registration = closed`; `natneg_hostname` comes from the deployment's domain, and its absence refuses every disc with a clear log line |
 | `texts` | override of a text × language | empty by default; keys are an enum in the code with English defaults (the database only checks their format); language is ISO 639-1 (the game's languages have no regional variants); lookup language → `en` → code |
 | `terms` | edit of the terms or sub-terms × language | the identity key is the version sent to the console (u32): built-in terms are version 1, overrides start at 2, so edited terms are always re-shown |
 | `consoles` | console | `support_code_hmac` (HMAC-SHA256 with the pepper, never the code), disc region, first/last seen |
@@ -55,7 +55,7 @@ later table points at `consoles` or `hunters` by id.
 -- M5/M7: website accounts and the whitelist.
 accounts        (id, public_id, email unique, password_hash /* argon2: human passwords */, created_at, …)
 consoles        + account_id bigint NULL REFERENCES accounts ON DELETE SET NULL  -- linked by pairing
-                + access text CHECK (access IN ('pending', 'approved', 'denied'))  -- per the 'whitelist' setting:
+                + approval text CHECK (approval IN ('pending', 'approved', 'denied'))  -- per the 'access' setting:
                   'on_register' approves on linking, 'admin' waits for an admin
 bans            (id, console_id NULL, hunter_id NULL, reason, banned_by, created_at, expires_at NULL)
 -- Ban evasion: a console's identity is its support code, kept in the save's network file; deleting the file
@@ -100,7 +100,8 @@ admin_actions   (id uuid DEFAULT uuidv7() PRIMARY KEY /* audit log: append-only 
    overrides from 2).
 5. World servers: built-in constants (overridable at startup by `config.toml`), identified by name; not in the
    database. Same for server types and the world layout.
-6. Whitelist: instance settings `registration` (open/closed) and `whitelist` (off / on_register / admin).
+6. Access: setting `access` = `open` (no check) / `on_register` / `admin`; `registration` (open/closed) only
+   matters with a website. The server never depends on the website (standalone: server + database, `access = open`).
 7. Enumerations: `text` with a `CHECK`.
 8. PostgreSQL 18, `uuidv7()` for public ids (dev compose and CI on `postgres:18`).
 9. Keys: internal `bigint` identity everywhere (except `settings` and the audit log), `public_id` UUID on what

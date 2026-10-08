@@ -119,6 +119,9 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
         down, anything writing permanent data (friends M3, bans M5, flags M6); with Valkey down, cross-node actions
         (messages to another world server, presence) and switching world server (a new FMP connection finds its
         session through Valkey). Every later milestone handles this for its own features.
+- [ ] **Valkey at all?** A fleet is not expected (see the global roadmap). With a single server, Valkey's only
+      benefit is that temporary data (tickets ~2 min, pairing codes ~10 min) survives a server restart. Proposed:
+      in-memory only, no Valkey and no `Cache` trait (YAGNI); a future fleet would bring Valkey back. To decide.
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
@@ -163,9 +166,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
 - [ ] Server time.
 - [ ] World servers from the built-in list or the `config.toml` override (D2), validated at startup.
-- [ ] World server list (`FmpList*`) with populations read from Valkey (nothing writes them before M2, so 0), and
-      `AnsFmpInfo` with the address of the node owning the chosen world server: ownership leases in Valkey start
-      here (one node owns them all until the fleet), since `AnsFmpInfo` needs them.
+- [ ] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
+      external address (single server: no ownership leases).
 
 ### Config
 - [ ] `external_address`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).

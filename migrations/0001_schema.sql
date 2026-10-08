@@ -11,8 +11,9 @@
 
 -- Key/value settings shared by every node, editable by admins. Known keys (the list is in the code):
 --   natneg_hostname  the only accepted NAT negotiation hostname
---   registration     'open' | 'closed'
---   whitelist        'off' | 'on_register' | 'admin'
+--   access           'open' (no check: anyone with our patch plays) | 'on_register' (a console linked to a website
+--                    account) | 'admin' (linked, then approved by an admin); the last two need the website
+--   registration     'open' | 'closed' (website accounts; only matters with a website)
 CREATE TABLE settings (
     key         text        PRIMARY KEY CHECK (key ~ '^[a-z][a-z0-9_]{0,31}$'),
     value       text        NOT NULL,
@@ -78,5 +79,5 @@ CREATE INDEX hunters_console ON hunters (console_id);
 
 -- Initial settings (everything else has its defaults in the code).
 INSERT INTO settings (key, value) VALUES
-    ('registration', 'closed'),
-    ('whitelist',    'off');
+    ('access',       'open'),
+    ('registration', 'closed');
