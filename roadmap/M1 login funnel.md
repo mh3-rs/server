@@ -75,7 +75,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
   hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
   (no DNS change for players), so we own the whole chain, and our NAT negotiation makes the hybrid relay strategy
-  possible. The accepted NAT negotiation hostname is ours: `MH3SP_NATNEG_HOSTNAME`, derived from the deployment's
+  possible. The accepted NAT negotiation hostname is ours: `NATNEG_HOSTNAME`, derived from the deployment's
   domain;
   a disc with another name didn't use our patch and is refused with a message pointing to the website. The website
   generates the patch for its own domain (which must fit the replaced strings: `nintendowifi.net` is 16
@@ -114,7 +114,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
         console-to-console); players trying to join get the "not ready" text in the game; actions that need the
         database mid-game (friends M3, bans M6) fail cleanly: an in-game message, the player stays connected.
 - [x] **Support code storage**: never in clear; looked up by HMAC-SHA256(pepper, support code), the pepper a server
-      secret outside the database (environment), never changed. Support codes are random (~57 bits), so a slow
+      secret outside the database (`SECRET`), never changed. Support codes are random (~57 bits), so a slow
       password hash (Argon2) brings nothing and can't be looked up; the keyed hash can, and a leaked database alone
       reveals nothing.
 - [x] **Pairing** (whitelist, M5/M7): starts from a console connection, never shows a secret; a 6-digit one-time code,
@@ -156,9 +156,11 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       external address.
 
 ### Config
-- [ ] `MH3SP_EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
-- [ ] `MH3SP_NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
+- [ ] `EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
+- [ ] `NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
       clear `error` at startup ("server not configured").
+- [ ] `SECRET`: the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
+      never logged, never changed once accounts exist (every console would become unrecognisable).
 
 ### Texts and access
 - [ ] `enum Text` + `text(Text, Language) -> Cow<'static, str>` (D1), English `match` for now.

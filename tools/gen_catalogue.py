@@ -5,7 +5,7 @@ Names come from MH3SP's PatID4 class (unique per id; PAT_NAMES reuses names for 
 LMP- and FMP-stage server list packets and for both ticket packets); the Japanese
 name and the English description come from MHTrIDA's PAT.MD (the game's own table).
 
-Usage: tools/gen_catalogue.py [MH3SP_DIR] [MHTRIDA_DIR]
+Usage: tools/gen_catalogue.py [DIR] [MHTRIDA_DIR]
 Defaults: ../mh3sp and ../mh3sp/lab/mhtrida, relative to the repository root.
 """
 import re

@@ -28,8 +28,8 @@ Inputs: decisions D1–D7, support code storage, identity (`M1 login funnel.md`)
   **Terms** are already overridable (`terms` table) because the console's terms version must change when they do.
 - **Only permanent data.** Sessions, tickets, pairing codes, presence, populations and live worlds (gates, cities,
   quests in progress) are in the server's memory.
-- **No secrets in clear**: support codes are stored as HMAC-SHA256(pepper, code), 32 bytes; the pepper comes from
-  the environment and never changes.
+- **No secrets in clear**: support codes are stored as HMAC-SHA256(pepper, code), 32 bytes; the pepper is the
+  `SECRET` environment variable and never changes.
 - **Game bytes stay bytes**: hunter names are `BLOB` (the game may use Shift-JIS); identifiers the game formats
   (`0-9A-Z`) are `TEXT` with a `CHECK`.
 - Timestamps: UTC text, `CURRENT_TIMESTAMP` by default.

@@ -4,7 +4,7 @@
 //!
 //! | Variable | Default |
 //! |---|---|
-//! | `MH3SP_TLS_CERT`, `MH3SP_TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
+//! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
 //! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
 //! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
 
@@ -32,8 +32,8 @@ impl Config {
             lmp: SocketAddr::from(([0, 0, 0, 0], 8201)),
             fmp: SocketAddr::from(([0, 0, 0, 0], 8202)),
             health: SocketAddr::from(([0, 0, 0, 0], 8280)),
-            tls_cert: get("MH3SP_TLS_CERT", "certs/dev/server.crt").into(),
-            tls_key: get("MH3SP_TLS_KEY", "certs/dev/server.key").into(),
+            tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
+            tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
             database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),
         }
     }
