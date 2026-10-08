@@ -84,7 +84,8 @@ impl Bindings {
 }
 
 /// Whether a live server payload matches the recorded one, once known values are substituted and
-/// masked bytes ignored. Learns the bindings of the masks with a `var` on the way.
+/// masked bytes ignored. On a match, learns the bindings of the masks with a `var`; a failed
+/// comparison learns nothing, so trying several candidates is safe.
 pub fn matches(
     masks: &Masks,
     bindings: &mut Bindings,
@@ -97,17 +98,24 @@ pub fn matches(
     if expected.len() != live.len() {
         return false;
     }
+    let mut learned = Vec::new();
     for m in masks.of(packet, recorded.len()) {
         let range = m.offset..m.offset + m.len;
         if range.end > live.len() {
             continue;
         }
         if let Some(var) = &m.var {
-            bindings.bind(var, &recorded[range.clone()], &live[range.clone()]);
+            learned.push((var, range.clone()));
         }
         expected[range.clone()].copy_from_slice(&live[range]);
     }
-    expected == live
+    if expected != live {
+        return false;
+    }
+    for (var, range) in learned {
+        bindings.bind(var, &recorded[range.clone()], &live[range]);
+    }
+    true
 }
 
 #[cfg(test)]

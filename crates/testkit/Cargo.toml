@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 anyhow = "1.0.104"
 bytes = "1.12.1"
-futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 openssl = "0.10.81"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

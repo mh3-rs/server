@@ -1,5 +1,7 @@
 # M0 — Foundations
 
+**Status: done (2026-10-08).** All exit criteria met.
+
 Everything the later milestones stand on: the workspace, CI, the packet layer, a recorded corpus of real
 game sessions, and a replay harness proven against Python MH3SP. No game logic yet.
 
@@ -201,9 +203,9 @@ Some bytes differ on every run: PAT tickets, online support codes, Capcom IDs, s
 | `s02-login-gate` + `s02-login-gate-2` | dev1 | go online, slot 1, Valor1, gate 1, return to title (twice, for volatile fields) | M2 | ✓ recorded |
 | `s02-first-login-gate` | dev4 (first time) | same, accepting the terms first | M2 | ✓ recorded |
 | `s03-city-quest-solo` | dev1 | gate, create city, create quest, start, abandon, back in city, return to title | M2 | ✓ recorded |
-| `s04-city-join` | dev1 + dev2 | dev1 creates a city, dev2 joins it, chat both ways, dev2 leaves (twice) | M3 | |
-| `s05-quest-party` | dev1 + dev2 | dev1 city + quest, dev2 joins city and quest, start, abandon | M3 | |
-| `s06-disconnect` | dev1 + dev2 | dev2 in dev1's city, dev2's Dolphin killed | M3 | |
+| `s04-city-join` + `s04-city-join-2` | dev1 + dev2 | dev1 creates a city, dev2 joins it, dev2 leaves (twice; chat left for a later scenario with keyboard emulation) | M3 | ✓ recorded |
+| `s05-quest-party` | dev1 + dev2 | dev1 city + quest, dev2 joins city and quest, start, abandon (includes a party host handover) | M3 | ✓ recorded |
+| `s06-disconnect` | dev1 + dev2 | dev2 in dev1's city, dev2's Dolphin closed abruptly | M3 | ✓ recorded |
 
 Recording findings:
 - Terms acceptance and decline are decided on the console: the server sends the same packets either way. A
@@ -256,6 +258,22 @@ is expected to act:
   (`AnsUserSearchInfoMine` empty, then `NtcShut` on FMP);
 - to confirm after substitution: `AnsFmpListData(2)` byte 870, most likely a world server's population.
 Server state matters: replays without a fresh server showed slots already taken and populations growing.
+
+### Step 8 result: multi-console replay
+
+The replay harness now runs consoles concurrently:
+- console frames go out in the scenario's recorded global order (turns), so causes precede effects across consoles;
+- a server frame is awaited only once every console frame recorded before it has been sent, then for
+  `RECV_TIMEOUT` plus the delay it had after its last cause in the recording;
+- the server frames expected between two console frames may arrive in any order (town relays follow the players);
+- an unrecorded notification is tolerated (and listed) unless one with the same id is expected: a relay racing
+  with a player leaving may arrive or not;
+- with `--nudge`, a connection waiting for its turn keeps nudging Python too (a frame it sent may be stuck);
+- `--retries` re-runs a failing scenario against Python, whose interleaved writes make two-player scenarios flaky.
+
+`corpus replay corpus/s* --before tools/oracle.sh --nudge --retries 3` replays all ten recordings clean against
+Python MH3SP: 2299/2299 server frames (`s04-city-join` on its second attempt; `s05` with one tolerated relay).
+No new mask was needed for two players: the Capcom ID substitution covers every new packet.
 
 ## Order of work
 

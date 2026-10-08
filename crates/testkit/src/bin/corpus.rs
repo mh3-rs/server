@@ -8,11 +8,14 @@
 //!   Compares two recordings of the same scenario and prints, per packet, the byte ranges that
 //!   differ: the candidates for `corpus/masks.toml`.
 //!
-//! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge]`
+//! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge] [--retries <n>]`
 //!   Replays the scenarios against a server (default 127.0.0.1, ports 8200-8202) and reports
 //!   every server frame that differs from the recording. Exits 1 if any does. `--before` runs a
 //!   command before each scenario, to give it a fresh server (e.g. `tools/oracle.sh`). `--nudge`
 //!   works around Python MH3SP's stalled reads (see `Targets::nudge`); use it only against Python.
+//!   `--retries <n>` re-runs a failing scenario up to n more times (each after `--before`): Python
+//!   MH3SP interleaves frames written to one socket from two threads, so multi-console scenarios
+//!   are flaky against it. Never use it against our server.
 
 use std::path::{Path, PathBuf};
 
@@ -22,7 +25,7 @@ use testkit::replay::{self, ConnectionReport, Got, Targets};
 
 const USAGE: &str = "usage: corpus import <scenario-dir> [<console>=<capture.pcap> ...]
        corpus diff <scenario-a> <scenario-b>
-       corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge]";
+       corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge] [--retries <n>]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -70,12 +73,14 @@ async fn replay_all(args: &[String]) -> Result<bool> {
     let mut host = "127.0.0.1".parse()?;
     let mut before = None;
     let mut nudge = false;
+    let mut retries = 0;
     let mut scenarios = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--host" => host = it.next().context("--host needs an ip")?.parse()?,
             "--nudge" => nudge = true,
+            "--retries" => retries = it.next().context("--retries needs a number")?.parse()?,
             "--before" => before = Some(it.next().context("--before needs a command")?.clone()),
             _ => scenarios.push(PathBuf::from(arg)),
         }
@@ -97,14 +102,23 @@ async fn replay_all(args: &[String]) -> Result<bool> {
     };
     let mut clean = true;
     for scenario in &scenarios {
-        if let Some(cmd) = &before {
-            let status = std::process::Command::new("sh")
-                .args(["-c", cmd])
-                .status()?;
-            anyhow::ensure!(status.success(), "`{cmd}` failed");
+        for attempt in 0..=retries {
+            if let Some(cmd) = &before {
+                let status = std::process::Command::new("sh")
+                    .args(["-c", cmd])
+                    .status()?;
+                anyhow::ensure!(status.success(), "`{cmd}` failed");
+            }
+            let reports = replay::replay(scenario, &targets, &masks).await?;
+            let last = attempt == retries;
+            if reports.iter().all(ConnectionReport::is_clean) || last {
+                clean &= print_report(scenario, &reports);
+                if attempt > 0 {
+                    println!("  (attempt {} of {})", attempt + 1, retries + 1);
+                }
+                break;
+            }
         }
-        let reports = replay::replay(scenario, &targets, &masks).await?;
-        clean &= print_report(scenario, &reports);
     }
     Ok(clean)
 }
@@ -119,6 +133,14 @@ fn print_report(scenario: &Path, reports: &[ConnectionReport]) -> bool {
         "{} {name}: {matched}/{expected} server frames match",
         if clean { "✓" } else { "✗" }
     );
+    for r in reports.iter().filter(|r| !r.extras.is_empty()) {
+        let names: Vec<_> = r.extras.iter().map(|f| f.id.to_string()).collect();
+        println!(
+            "  {}: tolerated extra notifications: {}",
+            r.name,
+            names.join(", ")
+        );
+    }
     for r in reports.iter().filter(|r| !r.is_clean()) {
         println!("  {}: {}/{} match", r.name, r.matched, r.expected);
         for m in r.mismatches.iter().take(5) {
