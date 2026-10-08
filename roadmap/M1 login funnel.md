@@ -58,24 +58,50 @@ terms). Line checks (`ReqLineCheck` from the server every 30 s, `AnsLineCheck` b
 Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/doc` (`net_connect_*`,
 `set_open_error_code`, `NetworkWiiMediator/*`).
 
-## Decisions to take first
+## Decisions
 
-- [ ] **Schema, and whether to design for the website (M7) now.** Tables needed by M1: console/hunter accounts.
-      Questions: support codes stored hashed (they act as credentials); exactly 6 slots per console like the game;
-      Capcom ID format (6 characters as recorded, uniqueness, generation); what else to keep per hunter (name,
-      created/last-seen dates, for the website); whether a website account owning several consoles is modelled now
-      or added later on top.
-- [ ] **Texts** (terms, sub-terms, announce, no-charge, vulgarity lists): where they live. PostgreSQL fits "written
-      once, edited from the website later"; files are simpler. Our own texts are declared divergences.
-- [ ] **Patch check policy.** OPN reads the game id and the NAT negotiation hostname compiled into the disc. Python
-      reads both and accepts anything. Ours: accept known region ids (PAL, US first; JP later), and decide what an
-      unexpected hostname means (log it, refuse with a message?).
-- [ ] **Maintenance / not ready.** How to refuse new logins with the game's own message when `/health/ready` fails
-      (MHTrIDA `net_connect_maintenance`, `ReqMaintenance`, `NtcLogin` status values).
-- [ ] **World servers**: where their list lives (names, types Open/Rookie/Expert/Recruiting, HR limits, capacity):
-      config or database.
-- [ ] **The 1.5 s pause** before `ReqConnection`: MH3SP waits without knowing why ("connect errors if too fast").
-      Test against Dolphin whether it is needed.
+### Settled
+
+- **D1 Texts** (terms, sub-terms, announce, no-charge, refusal and kick messages, vulgarity lists): in PostgreSQL,
+  seeded with default values. The console remembers the terms version it accepted and re-shows the terms only when
+  the version changes: editing the terms bumps their version. Texts use the game's markup (`<BR>`, `<CENTER>`,
+  `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
+- **D2 World servers** (names, types Open/Rookie/Expert/Recruiting, HR limits, capacities, gates × cities): in
+  PostgreSQL, seeded with MH3SP's 12 servers. Every node of a fleet reads the same list.
+- **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
+  future step (it needs the EC/shop patch). The NAT negotiation hostname compiled into the disc (second memory
+  check, e.g. `natneg1.gs.nintendowifi.net`) tells which NAT negotiation server the console will use for P2P; two
+  consoles can only meet on the same one, and our relay (M4) only works through ours. It is kept in the session;
+  a configured list of accepted hostnames (empty = any) refuses consoles patched for another network, with a
+  message saying which patch to use.
+- **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
+  `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M5), not
+  whitelisted (M5); texts from the database. **Planned maintenance** is a separate, standalone mode that replaces
+  the server: no database, no Valkey, no file, the message given as an argument; it listens on OPN (Wii TLS),
+  refuses everyone with that message, and serves `/health/live`. Form to decide: a separate binary, or a
+  subcommand of the same binary (`mh3sp maintenance "…"`, same Docker image, no second build).
+- **D5 The pause before `ReqConnection`**: probably needed (the same issue was met in an earlier attempt), likely
+  lower than 1.5 s. Found by bisection against Dolphin: 1.5 s, 0 s, 750 ms, … down to the smallest value that
+  works, then kept as a named constant with the reason.
+- **D6 Languages**: texts and content keyed by language in the database, `(key, language, value)`, English as the
+  fallback; the console sends its language in `AnsConnection`.
+- **D7 Generated ids**: the game's formats: support codes 11 characters, PAT tickets 11, Capcom IDs 6, alphabet
+  `0-9A-Z` (what MH3SP uses and the game accepts). Drawn from a cryptographic random source; unique (database for
+  support codes and Capcom IDs, Valkey for tickets).
+
+### Open
+
+- [ ] **Schema** (last, shaped by the decisions above), and whether to design for the website now: hashed support
+      codes, 6 slots per console, what to keep per hunter, website accounts linking consoles (see the whitelist idea
+      in M5/M7).
+- [ ] **V1 Valkey's role**: proposed: a cache, never a source of truth, no persistence; losing its data is
+      survivable (logins in progress restart, players in town keep playing, nodes re-register within seconds).
+- [ ] **V2 Key naming**: proposed: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`,
+      `regcode`, …).
+- [ ] **V3 Sessions**: what a ticket's session holds (Capcom ID, slot, language, region, NAT hostname, stage), its
+      expiry, whether it is refreshed while connected.
+- [ ] **V4 Value format**: proposed: one JSON value per key with an expiry; Valkey hashes only for very frequently
+      updated fields.
 
 ## Work
 
@@ -93,10 +119,14 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] One writer per connection, whole frames only (Python's interleaved writes must not exist here).
 
 ### OPN
-- [ ] Memory checks and the patch policy; connection data; auth token accepted (the Nintendo login is AltWFC's or
+- [ ] Memory checks and the patch policy (D3); connection data; auth token accepted (the Nintendo login is AltWFC's or
       Wiimmfi's job); terms and sub-terms with chunking; announce; no-charge; vulgarity; the common-key skip;
       `AnsLmpConnect` with the configured external address.
-- [ ] Not ready → refuse new logins with the maintenance message.
+- [ ] Refusal path (D4): not ready, unsupported disc, NAT hostname not accepted; texts from the database (D1, D6).
+
+### Maintenance mode
+- [ ] Standalone (D4): OPN with Wii TLS, every console refused with the message given as an argument,
+      `/health/live`; no database, Valkey or file.
 
 ### LMP
 - [ ] Support codes: read from `AnsConnection`, or issued in `AnsLoginInfo` for a first-time console.
