@@ -69,17 +69,19 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - **D2 World servers** (names, types Open/Rookie/Expert/Recruiting, HR limits, capacities, gates × cities): in
   PostgreSQL, seeded with MH3SP's 12 servers. Every node of a fleet reads the same list.
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
-  future step (it needs the EC/shop patch). The NAT negotiation hostname compiled into the disc (second memory
-  check, e.g. `natneg1.gs.nintendowifi.net`) tells which NAT negotiation server the console will use for P2P; two
-  consoles can only meet on the same one, and our relay (M4) only works through ours. It is kept in the session;
-  a configured list of accepted hostnames (empty = any) refuses consoles patched for another network, with a
-  message saying which patch to use.
+  future step (it needs the EC/shop patch). The second memory check returns the NAT negotiation hostname compiled
+  into the disc: the server the console will use to set up P2P. Players can only play together if their consoles
+  reach the same NAT negotiation service, and our relay (M4) only works through ours. So: a list of accepted
+  hostnames **in the database**, seeded with Nintendo's original `natneg1.gs.nintendowifi.net` (what MH3SP's public
+  patcher keeps, with DNS/hosts redirection: the community default), editable by admins (website, M7); every
+  listed name must lead to our NAT negotiation service. Any other disc is refused straight away with a message
+  naming the patch to use. The hostname is kept in the session.
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
   `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M5), not
-  whitelisted (M5); texts from the database. **Planned maintenance** is a separate, standalone mode that replaces
-  the server: no database, no Valkey, no file, the message given as an argument; it listens on OPN (Wii TLS),
-  refuses everyone with that message, and serves `/health/live`. Form to decide: a separate binary, or a
-  subcommand of the same binary (`mh3sp maintenance "…"`, same Docker image, no second build).
+  whitelisted (M5); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
+  `mh3sp maintenance "<message>"`: no database, no Valkey (it only reads `config.toml` for ports and the TLS
+  certificate); it listens on OPN (Wii TLS), refuses everyone with that message, and serves `/health/live`. With
+  compose: add `command: ["maintenance", "…"]` and `docker compose up -d`; remove it and `up -d` again to come back.
 - **D5 The pause before `ReqConnection`**: probably needed (the same issue was met in an earlier attempt), likely
   lower than 1.5 s. Found by bisection against Dolphin: 1.5 s, 0 s, 750 ms, … down to the smallest value that
   works, then kept as a named constant with the reason.
@@ -94,14 +96,20 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] **Schema** (last, shaped by the decisions above), and whether to design for the website now: hashed support
       codes, 6 slots per console, what to keep per hunter, website accounts linking consoles (see the whitelist idea
       in M5/M7).
-- [ ] **V1 Valkey's role**: proposed: a cache, never a source of truth, no persistence; losing its data is
-      survivable (logins in progress restart, players in town keep playing, nodes re-register within seconds).
-- [ ] **V2 Key naming**: proposed: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`,
-      `regcode`, …).
-- [ ] **V3 Sessions**: what a ticket's session holds (Capcom ID, slot, language, region, NAT hostname, stage), its
-      expiry, whether it is refreshed while connected.
-- [ ] **V4 Value format**: proposed: one JSON value per key with an expiry; Valkey hashes only for very frequently
-      updated fields.
+- [ ] **V1 Valkey's role**: a cache, never a source of truth, no persistence; not needed to be live (`/health/live`
+      stays 200, players in town or on a quest are unaffected). Proposed, to confirm: Valkey down = not ready, so
+      new logins are refused with the "not ready" text, because a login hands its session from one connection to
+      the next through Valkey (PAT ticket) and a memory fallback would be stand-in code that breaks in a fleet.
+- [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
+- [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
+      short time (about 2 minutes) and is refreshed while its console is connected.
+- [x] **V4 Value format**: one JSON value per key, with an expiry.
+- [ ] **Support code storage** (input for the schema): proposed: never stored in clear; looked up by
+      HMAC-SHA256(pepper, support code), the pepper a server secret outside the database (environment), never
+      changed. Support codes are random (~57 bits), so a slow password hash (Argon2) brings nothing and can't be
+      looked up; the keyed hash can, and a leaked database alone reveals nothing.
+- [ ] **Log identity** (input for the schema): every console gets a `console` UUID (database key) from LMP on, and an
+      `account` UUID once linked to a website account; both recorded in the connection span.
 
 ## Work
 
