@@ -97,7 +97,7 @@ admin_actions   (id BLOB PRIMARY KEY /* UUID v7; audit log: append-only */, admi
 
 1. A Capcom ID slot is an online identity. Another hunter taking it (a new name) overwrites name and profile and
    drops its social links; the Capcom ID and its moderation records stay, so switching hunters can't clean a
-   record. (To check: whether the game can delete a Capcom ID.)
+   record. The game can't delete a Capcom ID (checked on Dolphin).
 2. `last_seen_at`: kept (consoles and hunters).
 3. Region: on the console.
 4. Texts: a dictionary in the code only, until the website (M8) brings the `texts` override table back. Terms in

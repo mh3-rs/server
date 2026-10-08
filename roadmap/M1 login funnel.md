@@ -1,6 +1,6 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: in progress. Packets and OPN done (steps 1–2); next: the console checks, then LMP.**
+**Status: in progress. Packets, OPN and the console checks done (steps 1–3); next: LMP.**
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -186,8 +186,11 @@ missing at startup (unhealthy and "not ready" until it opens, then accepted). No
 - [x] The pause before `ReqConnection` (D5), bisected on Dolphin: LMP fails at 0 and 20 ms (the console resets
       the connection, error 11613), works at 45, 95, 190, 375, 750 and 1500 ms. OPN works at 0 (the TLS
       handshake takes longer than that). Kept: 250 ms for every role, a margin for a real Wii.
-- [ ] Whether the game can delete a Capcom ID (schema, `hunters`).
-- [ ] Whether a menu shows the online support code.
+- [x] Whether the game can delete a Capcom ID: no. The slot screen has only OK and Back, no menu offers it
+      (Dolphin, 2026-10-08). A Capcom ID stays on its slot; the `hunters` schema holds as designed.
+- [x] Whether a menu shows the online support code: yes, on the village/city choice before going online,
+      the same at every login. The player can read their own code; it stays a credential for everyone else
+      (stored as HMAC only, never logged, never asked by the website's pairing).
 
 ### Corpus and harness
 - [ ] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
