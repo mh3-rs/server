@@ -183,7 +183,9 @@ scripted OPN logins: accepted, unpatched disc, unsupported disc, not configured,
 missing at startup (unhealthy and "not ready" until it opens, then accepted). Not tested: the 30 s line check.
 
 ### Checks with a real console (Dolphin)
-- [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
+- [x] The pause before `ReqConnection` (D5), bisected on Dolphin: LMP fails at 0 and 20 ms (the console resets
+      the connection, error 11613), works at 45, 95, 190, 375, 750 and 1500 ms. OPN works at 0 (the TLS
+      handshake takes longer than that). Kept: 250 ms for every role, a margin for a real Wii.
 - [ ] Whether the game can delete a Capcom ID (schema, `hunters`).
 - [ ] Whether a menu shows the online support code.
 

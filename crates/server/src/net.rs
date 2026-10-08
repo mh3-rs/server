@@ -26,9 +26,10 @@ use crate::game::{Fault, Handled, Role, Session, frame, reply};
 
 /// A console that hasn't finished its TLS handshake by then is dropped.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-/// Wait before the server's first message: the console misses it when sent at once (MH3SP's value, D5: to be
-/// lowered by bisection against a console).
-const PAUSE: Duration = Duration::from_millis(1500);
+/// Wait before the server's first message: the console resets a connection whose first message comes too early
+/// (error 11613). Bisected on Dolphin (2026-10-08): fails at 0 and 20 ms, works from 45 ms; 250 ms leaves a
+/// margin for a real Wii. Over TLS (OPN) the handshake already takes that long (0 ms worked); MH3SP waits 1.5 s.
+const PAUSE: Duration = Duration::from_millis(250);
 /// A line check is sent this often; one left unanswered until the next drops the connection. (The console gives
 /// up after 90 s without one.)
 const LINE_CHECK_EVERY: Duration = Duration::from_secs(30);
