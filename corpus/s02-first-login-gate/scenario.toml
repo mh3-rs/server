@@ -1,0 +1,13 @@
+description = "First-time console (no network file, so no online support code): accepts the terms, gets a support code and a new Capcom ID in slot 1, enters Valor1 gate 1, returns to title. Same packet sequence as s02-login-gate; the console just omits the support code from its connection data."
+steps = [
+  "dev4 (save whose network file was recreated at boot): Online",
+  "terms shown: accept",
+  "Capcom ID slot 1",
+  "server Valor1, gate 1",
+  "return to title",
+]
+consoles = 1
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M2"
