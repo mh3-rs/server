@@ -101,7 +101,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [x] **Schema**: [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), reasoning in [`M1 schema.md`](M1%20schema.md)..
 - [x] **Temporary data in memory**: sessions and PAT tickets, pairing codes, presence, populations live in the
       server's memory (no Valkey, no cache abstraction). A session (Capcom ID, slot, language, region, NAT hostname,
-      stage) expires after about 2 minutes and is refreshed while its console is connected. A restart loses them,
+      stage) is owned by its connection, and handed off to the next one through the ticket cache (2-minute TTL,
+      decision 4). A restart loses them,
       which only affects people connected at that moment.
 - [x] **Database: SQLite** (a file next to the server, shared with a website on the same machine through WAL mode).
 - [x] **Database outages** (with a local file: it can't be opened, disk full, corruption):
@@ -152,7 +153,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### LMP
 - [ ] Support codes: read from `AnsConnection`, or issued in `AnsLoginInfo` for a first-time console.
-- [ ] PAT tickets in memory with an expiry (`AnsTicket`); the next connection finds its session by ticket.
+- [ ] PAT tickets (`AnsTicket`): the session is handed off through the ticket cache (decision 4); the next
+      connection takes it out by ticket.
 - [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
 - [ ] Server time.
 - [ ] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
