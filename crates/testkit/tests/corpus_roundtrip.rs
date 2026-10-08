@@ -116,3 +116,98 @@ fn real_pat_data_records_reencode() {
         assert!(checked > 0, "no PatData payload found in the corpus");
     }
 }
+
+/// Every recorded payload of a typed packet decodes whole and re-encodes byte for byte; every type is seen at
+/// least once, except those never recorded.
+#[test]
+fn typed_packets_reencode() {
+    use std::collections::BTreeSet;
+    use wire::packets::*;
+
+    fn roundtrip<P: Packet>(payload: &[u8]) -> Result<Vec<u8>, String> {
+        let packet = P::decode(payload).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        packet.encode(&mut out).map_err(|e| e.to_string())?;
+        Ok(out)
+    }
+
+    macro_rules! typed {
+        ($($p:ident),*) => {
+            (
+                |name: &str, payload: &[u8]| match name {
+                    $(stringify!($p) => Some(roundtrip::<$p>(payload)),)*
+                    _ => None,
+                },
+                [$(stringify!($p)),*],
+            )
+        };
+    }
+    let (check, all) = typed!(
+        ReqLineCheck,
+        AnsLineCheck,
+        ReqShut,
+        AnsShut,
+        ReqConnection,
+        AnsConnection,
+        NtcLogin,
+        ReqMemoryCheck,
+        AnsMemoryCheck,
+        ReqCommonKey,
+        ReqLmpConnect,
+        AnsLmpConnect,
+        ReqTermsVersion,
+        AnsTermsVersion,
+        ReqTerms,
+        AnsTerms,
+        ReqSubTermsInfo,
+        AnsSubTermsInfo,
+        ReqSubTerms,
+        AnsSubTerms,
+        ReqMaintenance,
+        AnsMaintenance,
+        ReqAnnounce,
+        AnsAnnounce,
+        ReqNoCharge,
+        AnsNoCharge,
+        ReqVulgarityInfoLow,
+        AnsVulgarityInfoLow,
+        ReqAuthenticationToken,
+        AnsAuthenticationToken
+    );
+
+    let mut seen = BTreeSet::new();
+    for scenario in scenarios() {
+        for rec in corpus::load(&scenario).unwrap() {
+            for c in &rec.connections {
+                for f in &c.frames {
+                    let payload = corpus::unhex(&f.payload).unwrap();
+                    let Some(result) = check(&f.name, &payload) else {
+                        continue;
+                    };
+                    let at = format!(
+                        "{} {} {} seq {}",
+                        scenario.display(),
+                        rec.console,
+                        c.role,
+                        f.seq
+                    );
+                    match result {
+                        Ok(out) => {
+                            assert!(out == payload, "{at}: {} re-encodes differently", f.name)
+                        }
+                        Err(e) => panic!("{at}: {}: {e}", f.name),
+                    }
+                    seen.insert(f.name.clone());
+                }
+            }
+        }
+    }
+    if !scenarios().is_empty() {
+        let never_recorded = ["ReqMaintenance", "AnsMaintenance"];
+        let missing: Vec<_> = all
+            .iter()
+            .filter(|n| !seen.contains(**n) && !never_recorded.contains(n))
+            .collect();
+        assert!(missing.is_empty(), "never seen in the corpus: {missing:?}");
+    }
+}

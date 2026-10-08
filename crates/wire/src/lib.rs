@@ -6,6 +6,7 @@
 mod catalogue;
 mod frame;
 mod id;
+pub mod packets;
 mod pat;
 
 pub use frame::{Frame, FrameCodec, FrameError, HEADER_LEN};

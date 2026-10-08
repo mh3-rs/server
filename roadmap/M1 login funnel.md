@@ -125,8 +125,11 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ## Work
 
 ### Packets
-- [ ] Typed request/answer structs for the 25 client messages above and their answers, decoded with `wire`'s
-      `Reader`, checked against every corpus payload (a decode/encode round-trip test per type).
+- [x] OPN and common (`LineCheck`, `Shut`) packets typed in `wire::packets` (one struct per message, `Packet`
+      trait, a macro for the layout); every recorded payload decodes whole and re-encodes byte for byte
+      (`typed_packets_reencode`), and every type must appear in the corpus except `ReqMaintenance` /
+      `AnsMaintenance` (never recorded: checked with the refusal path).
+- [ ] LMP packets, the same way (with the LMP work below).
 - [ ] Field types decided from the corpus (`str` vs `bytes` mixing in MH3SP): Capcom IDs, tickets and support codes
       are ASCII; hunter names are bytes.
 
