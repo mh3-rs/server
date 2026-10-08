@@ -1,7 +1,7 @@
-//! `mh3sp [config.toml]`            run the server
-//! `mh3sp healthcheck [config.toml]` exit 0 if a running server is live (container healthcheck)
-
-use std::path::PathBuf;
+//! `mh3sp`              run the server
+//! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
+//!
+//! Configuration comes from environment variables, see `server::config`.
 
 use anyhow::Result;
 use server::Config;
@@ -9,13 +9,12 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = std::env::args().skip(1).peekable();
-    let healthcheck = args.next_if_eq("healthcheck").is_some();
-    let path = PathBuf::from(args.next().unwrap_or_else(|| "config.toml".into()));
-    let config = Config::load(&path)?;
+    // Dev convenience: `.env` fills in variables that aren't already set.
+    let _ = dotenvy::dotenv();
+    let config = Config::from_env()?;
 
-    if healthcheck {
-        return server::health::check(config.listen.health);
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        return server::health::check(config.health);
     }
 
     tracing_subscriber::fmt()

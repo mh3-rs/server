@@ -39,7 +39,7 @@ impl Running {
 /// Opens the database (failing if it can't), runs migrations, binds
 /// every configured listener and starts serving.
 pub async fn start(config: &Config) -> Result<Running> {
-    let db = database::open(&config.database.url).await?;
+    let db = database::open(&config.database_url).await?;
     sqlx::migrate!("../../migrations")
         .run(&db)
         .await
@@ -49,9 +49,9 @@ pub async fn start(config: &Config) -> Result<Running> {
     let mut tasks = JoinSet::new();
     let mut bound = [None; 3];
     for (i, (role, addr)) in [
-        (Role::Opn, config.listen.opn),
-        (Role::Lmp, config.listen.lmp),
-        (Role::Fmp, config.listen.fmp),
+        (Role::Opn, config.opn),
+        (Role::Lmp, config.lmp),
+        (Role::Fmp, config.fmp),
     ]
     .into_iter()
     .enumerate()
@@ -63,15 +63,15 @@ pub async fn start(config: &Config) -> Result<Running> {
         net::announce(role, &listener)?;
         bound[i] = Some(listener.local_addr()?);
         let tls = match role {
-            Role::Opn => Some(tls::context(&config.tls.cert, &config.tls.key)?),
+            Role::Opn => Some(tls::context(&config.tls_cert, &config.tls_key)?),
             _ => None,
         };
         tasks.spawn(net::serve(listener, role, tls, shutdown.clone()));
     }
 
-    let listener = TcpListener::bind(config.listen.health)
+    let listener = TcpListener::bind(config.health)
         .await
-        .with_context(|| format!("bind health on {}", config.listen.health))?;
+        .with_context(|| format!("bind health on {}", config.health))?;
     net::announce("health", &listener)?;
     let health = listener.local_addr()?;
     let deps = health::Deps { db };

@@ -5,7 +5,6 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use server::Config;
-use server::config::{Listen, Tls, Url};
 use testkit::client::{Console, Received};
 use testkit::corpus;
 use testkit::masks::{Bindings, Masks};
@@ -22,19 +21,13 @@ fn config() -> (Config, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let config = Config {
-        listen: Listen {
-            opn: Some(any),
-            lmp: Some(any),
-            fmp: Some(any),
-            health: any,
-        },
-        tls: Tls {
-            cert: repo().join("certs/dev/server.crt"),
-            key: repo().join("certs/dev/server.key"),
-        },
-        database: Url {
-            url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
-        },
+        opn: Some(any),
+        lmp: Some(any),
+        fmp: Some(any),
+        health: any,
+        tls_cert: repo().join("certs/dev/server.crt"),
+        tls_key: repo().join("certs/dev/server.key"),
+        database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
     };
     (config, dir)
 }

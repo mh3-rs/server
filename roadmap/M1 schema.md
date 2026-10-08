@@ -20,10 +20,11 @@ Inputs: decisions D1–D7, support code storage, identity (`M1 login funnel.md`)
 - **No enum types** (SQLite has none anyway): enumerations are `TEXT` with a `CHECK`; formats are checked with `GLOB`
   (SQLite has no regular expressions by default).
 - **No history**: rows are overwritten in place (terms excepted: each version is a row, see `terms`).
-- **Settings are configuration until the website**: the accepted NAT hostname is in `config.toml`; access modes
+- **Settings are configuration until the website**: the accepted NAT hostname is an environment variable; access modes
   and registration come with the website (M8, a `settings` table), until then access is open.
-- **Texts are a dictionary in the code**: every key (an enum) has its English text, so a missing text is a compile
-  error. Overrides from the database and the per-language lookup come with the website (M8, a `texts` table).
+- **Texts are a dictionary in the code**: `text(Text, Language)`, a `match` with every key's English text, so a
+  missing text is a compile error. Overrides and translations come with the website (M8, a `texts` table) by
+  changing only that function's body.
   **Terms** are already overridable (`terms` table) because the console's terms version must change when they do.
 - **Only permanent data.** Sessions, tickets, pairing codes, presence, populations and live worlds (gates, cities,
   quests in progress) are in the server's memory.
@@ -46,8 +47,7 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 
 Not in the database: **world servers** (the 12 of MH3SP: names, types, capacity), **server types** (HR limits) and
 the **world layout** (40 gates × 100 players, 40 cities × 4 per gate). They are game constants in the code,
-optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only. A world server is
-identified by its name (`Valor1`) in logs and presence.
+not overridable. A world server is identified by its name (`Valor1`) in logs and presence.
 
 ## Later tables, sketched to check the M1 tables hold
 
@@ -102,7 +102,7 @@ admin_actions   (id BLOB PRIMARY KEY /* UUID v7; audit log: append-only */, admi
 3. Region: on the console.
 4. Texts: a dictionary in the code only, until the website (M8) brings the `texts` override table back. Terms in
    their own table, the key being the version (built-in = 1, overrides from 2).
-5. World servers: built-in constants (overridable at startup by `config.toml`), identified by name; not in the
+5. World servers: built-in constants, identified by name; not in the
    database. Same for server types and the world layout.
 6. Access: open until the website (M8) brings the `settings` table with `access` (open / on_register / admin) and
    `registration` (open/closed). The server never depends on the website (standalone: server + database, `access = open`).

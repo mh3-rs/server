@@ -1,6 +1,6 @@
 #!/bin/sh
-# Prepare the dev environment: make sure .env has every key the server and sqlx need, and create config.toml
-# from config.example.toml. Idempotent: existing .env values and an existing config.toml are kept.
+# Prepare the dev environment: make sure .env has the keys the server and sqlx use in dev (every other
+# setting has a default, see crates/server/src/config.rs). Idempotent: existing .env values are kept.
 #   scripts/dev.sh --reset   also deletes the dev database (needed after a schema change: before 1.0.0 the schema
 #                            file is rewritten in place, which sqlx refuses on an existing database)
 set -eu
@@ -21,7 +21,6 @@ echo "$DEFAULTS" | while IFS= read -r line; do
   grep -q "^$key=" .env || { echo "$line" >> .env; echo "added $key to .env"; }
 done
 
-[ -f config.toml ] || { cp config.example.toml config.toml; echo "created config.toml"; }
 mkdir -p data
 
 echo "dev env ready: database data/mh3sp.db (created on first start)"

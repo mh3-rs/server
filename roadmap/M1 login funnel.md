@@ -63,21 +63,20 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ### Settled
 
 - **D1 Texts** (announce, no-charge, refusal and kick messages, vulgarity lists, server type names and
-  descriptions): **one dictionary in the code** (an enum of keys, each with its English text). Overrides from the
-  database and other languages come with the website (M8), registered as `Later::TextOverrides` (decision 10). **Terms and sub-terms**
-  are overridable already (`terms` table): the console remembers the terms version it accepted and re-shows them
-  when it changes, so an edit must change the version. Texts use the game's markup (`<BR>`, `<CENTER>`,
-  `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
+  descriptions): `enum Text` and `text(Text, Language) -> Cow<'static, str>`, a `match` returning the English text
+  for now (language ignored). Database overrides and other languages come with the website (M8) by changing only
+  that function's body (decision 10). **Terms and sub-terms** are overridable already (`terms` table): the console
+  remembers the terms version it accepted and re-shows them when it changes, so an edit must change the version.
+  Texts use the game's markup (`<BR>`, `<CENTER>`, `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
 - **D2 World servers**: game constants in the code (MH3SP's 12: Valor1–4 Open, Beginners1–2 Rookie, Veterans1–2
-  Expert, Greed1–4 Recruiting; server types with their HR limits; the world layout of 40 gates × 40 cities),
-  optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only and validated (unique
-  names, length, known types). Identified by name in logs and presence. Not in the database, not editable from the website (YAGNI).
+  Expert, Greed1–4 Recruiting; server types with their HR limits; the world layout of 40 gates × 40 cities). No
+  override (YAGNI). Identified by name in logs and presence. Not in the database, not editable from the website.
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
   future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
   hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
   (no DNS change for players), so we own the whole chain, and our NAT negotiation makes the hybrid relay strategy
-  possible. The accepted NAT negotiation hostname is ours: `natneg_hostname` in `config.toml`, derived from the
-  deployment's domain;
+  possible. The accepted NAT negotiation hostname is ours: `MH3SP_NATNEG_HOSTNAME`, derived from the deployment's
+  domain;
   a disc with another name didn't use our patch and is refused with a message pointing to the website. The website
   generates the patch for its own domain (which must fit the replaced strings: `nintendowifi.net` is 16
   characters). Services to run, as observed in the captures: the Nintendo login (HTTP), GameSpy's availability
@@ -85,7 +84,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
   `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M6), not
   not allowed (`access`, M8); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
-  `mh3sp maintenance "<message>"`: no database (it only reads `config.toml` for ports and the TLS
+  `mh3sp maintenance "<message>"`: no database (it only reads the environment for ports and the TLS
   certificate); it listens on OPN (Wii TLS), refuses everyone with that message, and serves `/health/live`. With
   compose: add `command: ["maintenance", "…"]` and `docker compose up -d`; remove it and `up -d` again to come back.
 - **D5 The pause before `ReqConnection`**: probably needed (the same issue was met in an earlier attempt), likely
@@ -153,18 +152,17 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] PAT tickets in memory with an expiry (`AnsTicket`); the next connection finds its session by ticket.
 - [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
 - [ ] Server time.
-- [ ] World servers from the built-in list or the `config.toml` override (D2), validated at startup.
 - [ ] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
       external address.
 
 ### Config
-- [ ] `external_address`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
-- [ ] `natneg_hostname`: the only accepted NAT negotiation hostname (D3); absent = every disc refused, with a clear
-      `error` at startup ("server not configured").
+- [ ] `MH3SP_EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
+- [ ] `MH3SP_NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
+      clear `error` at startup ("server not configured").
 
-### Deferred work
-- [ ] `crates/server/src/later.rs` with the first deferred item (decision 10 of the global roadmap): `TextOverrides`
-      (text dictionary, D1), `AccessModes` (access is open until M8).
+### Texts and access
+- [ ] `enum Text` + `text(Text, Language) -> Cow<'static, str>` (D1), English `match` for now.
+- [ ] `allowed(console) -> bool`, `true` until M8's access modes.
 
 ### Database
 - [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
@@ -175,7 +173,6 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ### Checks with a real console (Dolphin)
 - [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
 - [ ] Whether the game can delete a Capcom ID (schema, `hunters`).
-- [ ] The maximum world server name length the server list accepts (validated at startup for `config.toml` overrides).
 - [ ] Whether a menu shows the online support code.
 
 ### Corpus and harness

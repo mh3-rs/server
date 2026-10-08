@@ -1,6 +1,6 @@
-# mh3sp server image. Configuration: /opt/mh3sp/config.toml (a copy of config.example.toml;
-# mount your own to change it), DATABASE_URL overrides its URL. The SQLite database lives in the
-# /opt/mh3sp/data volume (mount it to keep it; a website on the same machine shares the file).
+# mh3sp server image. Configuration: environment variables, each with a default (see
+# crates/server/src/config.rs). The SQLite database lives in the /opt/mh3sp/data volume (mount it to
+# keep it; a website on the same machine shares the file).
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /src
 COPY . .
@@ -13,7 +13,6 @@ RUN apt-get update \
  && useradd --system --home /opt/mh3sp mh3sp
 WORKDIR /opt/mh3sp
 COPY --from=build /src/target/release/mh3sp /usr/local/bin/mh3sp
-COPY config.example.toml config.toml
 COPY certs/dev certs/dev
 RUN mkdir data && chown mh3sp data
 VOLUME /opt/mh3sp/data
