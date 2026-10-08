@@ -121,8 +121,9 @@ Tasks:
 Tests (tier 1):
 - [ ] Unit tests for every primitive, including truncated input and oversize length.
 - [ ] `proptest`: `decode(encode(x)) == x` for `Item` and `PatData`.
-- [ ] Corpus test: for every recorded connection and direction, decoding the stream into frames and re-encoding
-      gives back the exact bytes.
+- [x] Corpus test (`testkit/tests/corpus_roundtrip.rs`): for every recorded connection and direction, decoding the
+      stream into frames and re-encoding gives back the exact bytes; committed `tcp/`/`udp/` files must match what
+      `raw/` regenerates (stale files fail). `CORPUS_DIR` points it at another corpus.
 - [ ] `PatData` round-trip on real payloads that are known to be PatData: `AnsConnection` (`ConnectionData`),
       `NtcCollectionLog` (`CollectionLog`), `ReqCircleCreate` (`CircleInfo`).
 
@@ -143,11 +144,10 @@ whichever server is on the other end.
 
 Setup: the lab (`../mh3sp/lab`), Python MH3SP pinned at **`dev` @ `f53b06c`**, native AltWFC, hosts redirection on.
 
-`tools/record-scenario.sh <scenario>`:
-1. checks the lab is up (MH3SP, AltWFC, hosts), deletes MH3SP's `mh3sp.db` (fresh accounts each time), notes
-   the start time;
-2. the human plays the scenario (each console booted fresh, so each has exactly one new pcap);
-3. copies the new pcaps into `corpus/<scenario>/raw/<console>.pcap` and runs `corpus import`.
+`tools/record-scenario.sh <scenario> [consoles]` (written; first full run with the recordings):
+1. checks hosts redirection, AltWFC and the game image; restarts Python MH3SP on a fresh `mh3sp.db`;
+2. boots each console (`devN` → lab profile + MAC) and waits until every Dolphin window is closed;
+3. imports the one new capture per console with `corpus import` and creates `scenario.toml` if missing.
 
 ### Format
 
@@ -164,11 +164,16 @@ One JSON object per frame: `{"t": <µs since scenario start>, "dir": "c2s"|"s2c"
 files can be merged by `t`.
 
 Importer (`corpus import`):
-- [ ] Parse pcap (Ethernet link type), keep TCP/UDP payloads; key TCP connections by (client port, server port).
-- [ ] Reassemble each direction and split into frames with the `wire` codec (frames can span segments, and one
+- [x] Parse pcap (Ethernet link type), keep TCP/UDP payloads; key TCP connections by (client port, server port).
+- [x] Reassemble each direction and split into frames with the `wire` codec (frames can span segments, and one
       segment can hold several frames).
-- [ ] Name connections by server port (8200 → `opn`, 8201 → `lmp`, 8202 → `fmp`); ignore port 80 (NAS) and 53.
-- [ ] Fail loudly on anything that doesn't frame cleanly (that would be a capture or codec bug).
+- [x] Name connections by server port (8200 → `opn`, 8201 → `lmp`, 8202 → `fmp`); ignore port 80 (NAS) and 53.
+- [x] `raw/<console>.pcap` is a **filtered** copy: only game TCP (8200–8203) and non-DNS UDP. Nintendo login
+      (HTTP) and GameSpy profile traffic identify the console and stay in the lab.
+- [x] Fail loudly on anything that doesn't frame cleanly (that would be a capture or codec bug).
+- [x] Validated on the first lab session's captures (2 consoles, 32 connections, ~2100 frames, ~3200 datagrams,
+      two server restarts included): every stream frames cleanly and re-encodes byte for byte, so Dolphin's
+      decrypted TLS stream is complete.
 
 ### Volatile fields
 
