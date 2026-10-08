@@ -228,4 +228,3 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
   waits on frames, never on fixed sleeps.
 - **Stable inputs**: the consoles' saves keep their support codes between recordings; wiping `mh3sp.db` gives new
   Capcom IDs each time, which the masks must absorb.
-- **Licensing of copied assets**: `certs/dev/` and the catalogue's names come from MH3SP and MHTrIDA.
