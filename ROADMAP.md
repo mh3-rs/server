@@ -87,6 +87,15 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
 8. **Logging:** `tracing`; packet-level logs with names and, behind a flag, full hexdumps in the same format as
    MH3SP `-d`, so the two can be diffed.
 
+## Dev environment
+
+- `docker compose up -d --wait`: PostgreSQL 17 on `localhost:55432`
+  (`DATABASE_URL=postgres://mh3sp:mh3sp@localhost:55432/mh3sp`; 55432 avoids clashing with a local Postgres).
+- The server runs with `cargo run`; migrations with `sqlx migrate run`.
+- Game side: the lab in `../mh3sp/lab` (Dolphin profiles, hosts toggle, native AltWFC, Python MH3SP as oracle).
+- Deliberately not in compose: AltWFC / NAT negotiation (Docker port mapping rewrites client addresses → P2P fails).
+  Python MH3SP may join compose later for tier 4 (TCP only, no such problem).
+
 ## Testing strategy
 
 Python MH3SP is the oracle. A diff against it is a finding, not a nuisance: it is reverse-engineering knowledge
@@ -112,6 +121,8 @@ timestamps, random IDs) are masked per packet type.
 - Pushes to Gitea trigger Woodpecker pipelines (`.woodpecker/*.yml`).
 - Secrets available to pipelines: `gitea_user`, `gitea_token` (Gitea registries: Cargo, npm, container).
 - `push` pipeline: `fmt`, `clippy -D warnings`, tiers 1–3 and 5, coverage report on tiers 1–3.
+  A `postgres:17` Woodpecker service for tests (each test gets its own database via `#[sqlx::test]`);
+  `SQLX_OFFLINE=true` for the build, plus a check that `.sqlx/` is up to date.
   Cache `~/.cargo` and `target/` between runs.
 - `nightly` pipeline (Woodpecker cron): tier 4, with Python 3 + a pinned MH3SP checkout.
 - `dolphin` pipeline: tier 6 on a Woodpecker agent running on the Mac (local backend, own label), because the
@@ -125,6 +136,8 @@ timestamps, random IDs) are masked per packet type.
 
 ### M0 — Foundations
 - [ ] Cargo project; `.woodpecker/push.yml` (fmt, clippy, test).
+- [x] `docker-compose.yml` with PostgreSQL.
+- [ ] `sqlx` wired in: pool, first migration, `#[sqlx::test]` example, offline cache in CI.
 - [ ] `wire`: framing codec (tokio `Decoder`/`Encoder`), items (`Byte`, `Word`, `Long`, `LongLong`, `String`,
       `Binary`), `lp_string`/`lp2_string`, `PatData` with field-id maps.
 - [ ] Packet catalogue: all 301 IDs with names (from `mh/constants.py` `PAT_NAMES` + MHTrIDA `PAT.MD`), category/kind decoding.
@@ -143,7 +156,7 @@ timestamps, random IDs) are masked per packet type.
       announce, no-charge, vulgarity, `CommonKey` dodge, `LmpConnect`, `Shut`.
 - [ ] LMP: login info, support code + PAT ticket issuing, user list (6 slots), user object (Capcom ID assignment),
       server time, FMP list + FMP info (per world-server address).
-- [ ] Accounts in SQLite.
+- [ ] Accounts, sessions and PAT tickets in PostgreSQL (migrations).
 - [ ] Tier 3: scripted login scenario (all 6 connections) in CI.
 - [ ] Tier 4: live differential job against Python MH3SP.
 - [ ] Tier 6 spike: can Dolphin be driven unattended (input automation, reading the error code from memory)?
