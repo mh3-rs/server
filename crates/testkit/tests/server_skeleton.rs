@@ -21,9 +21,9 @@ fn config() -> (Config, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
     let config = Config {
-        opn: Some(any),
-        lmp: Some(any),
-        fmp: Some(any),
+        opn: any,
+        lmp: any,
+        fmp: any,
         health: any,
         tls_cert: repo().join("certs/dev/server.crt"),
         tls_key: repo().join("certs/dev/server.key"),
@@ -49,7 +49,7 @@ async fn accepts_wii_tls_and_reports_health() {
     let running = server::start(&config).await.unwrap();
 
     // OPN: the scripted console speaks TLS like a Wii (TLS 1.0, AES128-SHA).
-    let mut opn = Console::connect(running.opn.unwrap(), true).await.unwrap();
+    let mut opn = Console::connect(running.opn, true).await.unwrap();
     let ping = wire::Frame {
         seq: 1,
         id: wire::PacketId(0x6001_0200),
@@ -62,7 +62,7 @@ async fn accepts_wii_tls_and_reports_health() {
         .await
         .unwrap();
     assert!(matches!(silence, Received::Timeout));
-    Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    Console::connect(running.lmp, false).await.unwrap();
 
     assert_eq!(http_status(running.health, "/health/live").await, "200");
     assert_eq!(http_status(running.health, "/health/ready").await, "200");
@@ -97,9 +97,9 @@ async fn reached_scenarios_replay_cleanly() {
         let (config, _db) = config();
         let running = server::start(&config).await.unwrap();
         let targets = Targets {
-            opn: running.opn.unwrap(),
-            lmp: running.lmp.unwrap(),
-            fmp: running.fmp.unwrap(),
+            opn: running.opn,
+            lmp: running.lmp,
+            fmp: running.fmp,
             nudge: false,
         };
         let reports = replay::replay(&scenario, &targets, &masks).await.unwrap();
@@ -124,7 +124,7 @@ async fn replay_reaches_the_skeleton() {
     let opn = &recording[0].connections[0];
     let report = replay::replay_connection(
         "dev3-01-opn".into(),
-        running.opn.unwrap(),
+        running.opn,
         true,
         false,
         &opn.frames,

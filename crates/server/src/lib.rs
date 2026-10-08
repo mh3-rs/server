@@ -20,9 +20,9 @@ use net::Role;
 /// A started server. Dropping it doesn't stop it: call [`Running::stop`].
 pub struct Running {
     /// Bound addresses (useful when the config asked for port 0).
-    pub opn: Option<SocketAddr>,
-    pub lmp: Option<SocketAddr>,
-    pub fmp: Option<SocketAddr>,
+    pub opn: SocketAddr,
+    pub lmp: SocketAddr,
+    pub fmp: SocketAddr,
     pub health: SocketAddr,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
@@ -47,21 +47,17 @@ pub async fn start(config: &Config) -> Result<Running> {
 
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
-    let mut bound = [None; 3];
-    for (i, (role, addr)) in [
+    let mut bound = Vec::new();
+    for (role, addr) in [
         (Role::Opn, config.opn),
         (Role::Lmp, config.lmp),
         (Role::Fmp, config.fmp),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let Some(addr) = addr else { continue };
+    ] {
         let listener = TcpListener::bind(addr)
             .await
             .with_context(|| format!("bind {role} on {addr}"))?;
         net::announce(role, &listener)?;
-        bound[i] = Some(listener.local_addr()?);
+        bound.push(listener.local_addr()?);
         let tls = match role {
             Role::Opn => Some(tls::context(&config.tls_cert, &config.tls_key)?),
             _ => None,

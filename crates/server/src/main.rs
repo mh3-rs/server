@@ -1,7 +1,7 @@
 //! `mh3sp`              run the server
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
 //!
-//! Configuration comes from environment variables, see `server::config`.
+//! Configuration: fixed ports, environment variables for the rest, see `server::config`.
 
 use anyhow::Result;
 use server::Config;
@@ -11,7 +11,7 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     // Dev convenience: `.env` fills in variables that aren't already set.
     let _ = dotenvy::dotenv();
-    let config = Config::from_env()?;
+    let config = Config::from_env();
 
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         return server::health::check(config.health);
