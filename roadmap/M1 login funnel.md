@@ -69,18 +69,14 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - **D2 World servers** (names, types Open/Rookie/Expert/Recruiting, HR limits, capacities, gates × cities): in
   PostgreSQL, seeded with MH3SP's 12 servers. Every node of a fleet reads the same list.
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
-  future step (it needs the EC/shop patch). The second memory check returns the NAT negotiation hostname compiled
-  into the disc: players can only play together if their consoles reach the same NAT negotiation service. We accept
-  **one** hostname, a `settings` row in the database; any other disc is refused straight away with a clear
-  message. It is mostly the player's concern (their patch decides it); ours is to detect a mismatch and say so.
-  Default: **the patch is the player's only step** (a tool and a guide), no DNS change (impractical for most
-  players, Dolphin users included). Consequences:
-  - our own patch (Riivolution XML + ISO patcher) rewrites **every** hostname the game uses (Nintendo login, GameSpy
-    services, NAT negotiation, `mh.capcom.co.jp`) to our domain, in place: each replacement must fit the original
-    string's length (`nintendowifi.net` is 16 characters), so the domain must be short;
-  - whoever owns those names runs the services behind them: the Nintendo login (AltWFC until our own NAS) and NAT
-    negotiation (AltWFC until M4), next to the server.
-  Our NAT negotiation hands consoles each other's address by default (direct P2P); relaying is a fallback strategy.
+  future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
+  hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
+  (no DNS change for players), so we own the whole chain, and our NAT negotiation makes the hybrid relay strategy
+  possible. The accepted NAT negotiation hostname is ours: a `settings` row derived from the deployment's domain;
+  a disc with another name didn't use our patch and is refused with a message pointing to the website. The website
+  generates the patch for its own domain (which must fit the replaced strings: `nintendowifi.net` is 16
+  characters). Services to run, as observed in the captures: the Nintendo login (HTTP), GameSpy's availability
+  check (UDP 27900), NAT negotiation (UDP 27901): AltWFC until our own.
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
   `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M5), not
   whitelisted (M5); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
@@ -98,21 +94,17 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Open
 
-- [ ] **Schema** (last, shaped by the decisions above), and whether to design for the website now: hashed support
-      codes, 6 slots per console, what to keep per hunter, website accounts linking consoles (see the whitelist idea
-      in M5/M7).
+- [ ] **Schema**: drafted in [`M1 schema.md`](M1%20schema.md), under review.
 - [x] **V1 Cache**: Valkey is optional. A `Cache` trait with two implementations, chosen at startup: Valkey when
       configured, in-memory otherwise (single node only; the `[valkey]` config section and the compose service are
       optional). Covers JSON values with an expiry, delete, set-if-absent (ownership leases), publish/subscribe.
       Never a source of truth, no persistence; not needed to be live.
-- [ ] **V1 details to confirm**:
-      - no switch at runtime: with Valkey configured and down, the server is not ready (new logins refused, players
-        in game unaffected) rather than falling back to memory, because sessions and leases written in memory would
-        be invisible to other nodes and disagree with Valkey when it returns;
-      - a shared handle (`Arc<dyn Cache>`) passed to the code that needs it, not a global: a global lock would
-        serialise every connection (against the relay latency target) and tests run several servers in one
-        process; the in-memory version is concurrent inside (e.g. `moka` for expiries, an in-process channel for
-        publish/subscribe).
+- [x] **V1 runtime**: the cache is chosen once at startup and never switched; with Valkey configured and unreachable,
+      it's an error and the server is live but not ready (no new players) until Valkey answers again. The handle is
+      passed to the code that needs it (not a global: tests run several servers in one process).
+- [ ] **Startup with a dependency down** (changes decision 9 of the global roadmap): proposed for both Postgres and
+      Valkey: start anyway, log the error, retry in the background, run migrations once Postgres answers, then
+      become ready; instead of exiting at startup.
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
@@ -125,8 +117,6 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       expiring after ~10 minutes; the website limits attempts per account.
 - [x] **Identity**: every entity has a UUID (v7: time-ordered, indexes well); connection spans carry the `console`
       UUID from LMP on, and the `account` UUID once linked.
-- [ ] **`settings` table** (key → value): proposed `varchar(32)` keys rather than `char(32)` (Postgres pads `char(n)`
-      with spaces).
 
 ## Work
 
