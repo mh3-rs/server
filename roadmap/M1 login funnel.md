@@ -64,7 +64,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 - **D1 Texts** (announce, no-charge, refusal and kick messages, vulgarity lists, server type names and
   descriptions): **one dictionary in the code** (an enum of keys, each with its English text). Overrides from the
-  database and other languages come with the website (M8), marked `LATER(M8)` in the code. **Terms and sub-terms**
+  database and other languages come with the website (M8), registered as `Later::TextOverrides` (decision 10). **Terms and sub-terms**
   are overridable already (`terms` table): the console remembers the terms version it accepted and re-shows them
   when it changes, so an edit must change the version. Texts use the game's markup (`<BR>`, `<CENTER>`,
   `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
@@ -76,7 +76,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
   hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
   (no DNS change for players), so we own the whole chain, and our NAT negotiation makes the hybrid relay strategy
-  possible. The accepted NAT negotiation hostname is ours: a `settings` row derived from the deployment's domain;
+  possible. The accepted NAT negotiation hostname is ours: `natneg_hostname` in `config.toml`, derived from the
+  deployment's domain;
   a disc with another name didn't use our patch and is refused with a message pointing to the website. The website
   generates the patch for its own domain (which must fit the replaced strings: `nintendowifi.net` is 16
   characters). Services to run, as observed in the captures: the Nintendo login (HTTP), GameSpy's availability
@@ -158,6 +159,12 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Config
 - [ ] `external_address`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
+- [ ] `natneg_hostname`: the only accepted NAT negotiation hostname (D3); absent = every disc refused, with a clear
+      `error` at startup ("server not configured").
+
+### Deferred work
+- [ ] `crates/server/src/later.rs` with the first deferred item (decision 10 of the global roadmap): `TextOverrides`
+      (text dictionary, D1), `AccessModes` (access is open until M8).
 
 ### Database
 - [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
