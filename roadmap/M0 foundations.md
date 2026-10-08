@@ -92,16 +92,16 @@ Facts checked against MH3SP `dev` and MHTrIDA:
   `0x65` Circle, `0x66` User, `0x69` Agreement), `NN` message, `KK` kind (`01` Req, `02` Ans, `10` Ntc). The low
   byte is always `00`: MH3SP and MHTrIDA list the **same 301 IDs**, none with a non-zero low byte.
 - **Items** (tag byte + value): `1` Byte (`u8`), `2` Word (`u16`), `3` Long (`u32`), `4` LongLong (`u64`),
-  `5` String (`u16` length + bytes), `6` Binary (`u16` length + bytes), `0` Custom (raw bytes, see quirk below).
-  Tag `7` (Object) exists in MH3SP's enum but is never used.
+  `5` String (`u16` length + bytes), `6` Binary (`u16` length + bytes). MH3SP's enum also has `0` Custom and
+  `7` Object; neither is used (see the quirk below).
 - **Strings are bytes**, not UTF-8: names and texts can be Shift-JIS. Keep them as `Bytes` everywhere.
 - **PatData**: `u8 count`, then `count × (u8 field_id, item)`. Field **order matters** for byte equality, so it is
   stored in order (`Vec`), never a map. Some answers only contain the fields the client asked for: the request
   carries a byte list (`u8 count` + field ids), see MH3SP `pack_fields` / `AnsFmpInfo`.
 - Other primitives: `lp_string` (`u8` length), `lp2_string` (`u16` length), byte lists (`u8` count + bytes).
-- **Quirk**: the game mis-parses `LayerData` field `0x17` and swallows the next field id (MH3SP `FallthroughBug`,
-  `mh/pat_item.py`); MH3SP writes a dummy `Custom` field `0xff` to be clobbered. `wire` must be able to emit that
-  (`Custom` item); the record itself comes in M2.
+- **Quirk (historical)**: MH3SP once worked around the game mis-parsing `LayerData` field `0x17` with a dummy
+  `Custom` field (`FallthroughBug`); on `dev` the workaround is commented out, so `wire` has no `Custom` item.
+  To re-check against the corpus when `LayerData` is implemented (M2).
 
 Tasks:
 - [x] `Frame { seq, id, payload }` + `FrameCodec` (`Decoder`/`Encoder`): partial frames, several frames per read,
@@ -113,19 +113,20 @@ Tasks:
       packets), so names come from `PatID4`, which is unique (`ReqFmpInfo` = 61340100, `ReqFmpInfo2` = 63140100).
       Two ids, 64160200 and 64170200, carry the Ans kind byte but the game itself names them
       `NtcLayerJumpReady`/`NtcLayerJumpGo` (described as "reply"): kept as the game names them.
-- [ ] `Item`, `PatData` (ordered fields, `encode`, `decode`, `select(&fields)`), `lp_string`, `lp2_string`,
-      byte lists; a small cursor-style reader/writer over `Bytes`/`BytesMut` with precise errors (offset, expected).
+- [x] `Item`, `PatData` (ordered fields, `select(&fields)`), `OptionalFields`, `lp_string`, `lp2_string`, byte
+      lists (`wire/src/pat.rs`): a `Reader` cursor whose errors carry the offset (truncated, unknown item type,
+      trailing bytes), and a `PatWrite` trait on `BytesMut`/`Vec<u8>` whose length prefixes can't overflow silently.
 - [ ] Typed packet structs: **not in M0**. Each one arrives with the handler that needs it (M1+), so its shape is
       checked against the corpus at the same time.
 
 Tests (tier 1):
-- [ ] Unit tests for every primitive, including truncated input and oversize length.
-- [ ] `proptest`: `decode(encode(x)) == x` for `Item` and `PatData`.
+- [x] Unit tests for every primitive, including truncated input and oversize length.
+- [x] `proptest`: `decode(encode(x)) == x` for `PatData` and `OptionalFields`, and decoding random bytes never panics.
 - [x] Corpus test (`testkit/tests/corpus_roundtrip.rs`): for every recorded connection and direction, decoding the
       stream into frames and re-encoding gives back the exact bytes; committed `tcp/`/`udp/` files must match what
       `raw/` regenerates (stale files fail). `CORPUS_DIR` points it at another corpus.
-- [ ] `PatData` round-trip on real payloads that are known to be PatData: `AnsConnection` (`ConnectionData`),
-      `NtcCollectionLog` (`CollectionLog`), `ReqCircleCreate` (`CircleInfo`).
+- [x] `PatData` round-trip on real payloads known to be PatData: `AnsConnection` (`ConnectionData`, whole payload)
+      and `ReqCircleCreate` (`CircleInfo` prefix), 30 payloads. `NtcCollectionLog` joins when a recording has one.
 
 ## 4. Corpus
 

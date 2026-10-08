@@ -80,3 +80,39 @@ fn committed_files_match_the_raw_captures() {
         }
     }
 }
+
+/// Real payloads known to start with a `PatData` record (per MH3SP's handlers): the record decodes,
+/// re-encodes byte for byte, and for `AnsConnection` (the console's connection data) fills the payload.
+#[test]
+fn real_pat_data_records_reencode() {
+    use wire::{PatWrite, Reader};
+    let mut checked = 0;
+    for scenario in scenarios() {
+        for rec in corpus::load(&scenario).unwrap() {
+            for f in rec.connections.iter().flat_map(|c| &c.frames) {
+                if !matches!(f.name.as_str(), "AnsConnection" | "ReqCircleCreate") {
+                    continue;
+                }
+                let payload = corpus::unhex(&f.payload).unwrap();
+                let mut reader = Reader::new(&payload);
+                let data = reader.pat_data().unwrap();
+                if f.name == "AnsConnection" {
+                    reader.finish().unwrap();
+                }
+                let mut out = Vec::new();
+                out.put_pat_data(&data).unwrap();
+                assert_eq!(
+                    out,
+                    payload[..out.len()],
+                    "{}: {}",
+                    scenario.display(),
+                    f.name
+                );
+                checked += 1;
+            }
+        }
+    }
+    if !scenarios().is_empty() {
+        assert!(checked > 0, "no PatData payload found in the corpus");
+    }
+}

@@ -10,3 +10,6 @@ publish.workspace = true
 bytes = "1.12.1"
 thiserror = "2.0.21"
 tokio-util = { version = "0.7.19", features = ["codec"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
