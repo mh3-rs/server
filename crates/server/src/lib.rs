@@ -1,6 +1,7 @@
 //! The mh3sp server. [`start`] brings every configured role up; the binary and the tests both use it.
 
 pub mod config;
+mod database;
 pub mod health;
 mod net;
 mod tls;
@@ -35,12 +36,10 @@ impl Running {
     }
 }
 
-/// Connects to PostgreSQL (failing if it is unreachable), runs migrations, binds
+/// Opens the database (failing if it can't), runs migrations, binds
 /// every configured listener and starts serving.
 pub async fn start(config: &Config) -> Result<Running> {
-    let db = sqlx::PgPool::connect(&config.database.url)
-        .await
-        .context("connect to Postgres")?;
+    let db = database::open(&config.database.url).await?;
     sqlx::migrate!("../../migrations")
         .run(&db)
         .await

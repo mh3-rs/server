@@ -1,5 +1,5 @@
 //! The Rust server, started in-process on random ports, against the scripted console and the corpus.
-//! Needs PostgreSQL: `DATABASE_URL` (scripts/dev.sh locally, a service in CI).
+//! Each server gets its own throw-away SQLite file.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -15,9 +15,13 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn env(key: &str) -> String {
-    std::env::var(key)
-        .unwrap_or_else(|_| panic!("{key} is not set: run scripts/dev.sh (or use CI)"))
+/// A fresh database file per server, so tests never share state (or a schema version).
+fn database_url() -> String {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mh3sp-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    format!("sqlite://{}/db{n}.sqlite", dir.display())
 }
 
 fn config() -> Config {
@@ -34,7 +38,7 @@ fn config() -> Config {
             key: repo().join("certs/dev/server.key"),
         },
         database: Url {
-            url: env("DATABASE_URL"),
+            url: database_url(),
         },
     }
 }

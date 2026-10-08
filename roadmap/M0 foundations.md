@@ -1,7 +1,7 @@
 # M0 — Foundations
 
-**Status: done (2026-10-08).** All exit criteria met. (Valkey, part of this milestone's skeleton and CI, was removed
-during M1's decisions: temporary data lives in memory.)
+**Status: done (2026-10-08).** All exit criteria met. (Postgres and Valkey, part of this milestone's skeleton and CI,
+were replaced during M1's decisions: SQLite for the database, memory for temporary data.)
 
 Everything the later milestones stand on: the workspace, CI, the packet layer, a recorded corpus of real
 game sessions, and a replay harness proven against Python MH3SP. No game logic yet.

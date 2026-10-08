@@ -1,20 +1,11 @@
 when:
   - event: [push, pull_request, manual]
 
-services:
-  - name: postgres
-    image: postgres:18
-    environment:
-      POSTGRES_USER: mh3sp
-      POSTGRES_PASSWORD: mh3sp
-      POSTGRES_DB: mh3sp
-
 steps:
   - name: check
     image: rust:1.98.0-bookworm
     environment:
       # Separate from the developer's target/ when the local runner mounts the working tree.
       CARGO_TARGET_DIR: target/ci
-      DATABASE_URL: postgres://mh3sp:mh3sp@postgres:5432/mh3sp
     commands:
       - scripts/ci-tests.sh

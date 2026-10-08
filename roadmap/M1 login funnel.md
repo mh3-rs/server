@@ -62,7 +62,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Settled
 
-- **D1 Texts** (terms, sub-terms, announce, no-charge, refusal and kick messages, vulgarity lists): in PostgreSQL,
+- **D1 Texts** (terms, sub-terms, announce, no-charge, refusal and kick messages, vulgarity lists): in the database,
   seeded with default values. The console remembers the terms version it accepted and re-shows the terms only when
   the version changes: editing the terms bumps their version. Texts use the game's markup (`<BR>`, `<CENTER>`,
   `<SIZE=n>`, `<C=n>`, `<LEFT>`, `<END>`).
@@ -101,9 +101,10 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       server's memory (no Valkey, no cache abstraction). A session (Capcom ID, slot, language, region, NAT hostname,
       stage) expires after about 2 minutes and is refreshed while its console is connected. A restart loses them,
       which only affects people connected at that moment.
-- [x] **Database outages**:
+- [x] **Database: SQLite** (a file next to the server, shared with a website on the same machine through WAL mode).
+- [x] **Database outages** (with a local file: it can't be opened, disk full, corruption):
       - at startup: the server starts anyway, logs the error and retries in a loop; it is **unhealthy**
-        (`/health/live` fails) until the database is up, the migrations have run and it has become ready once
+        (`/health/live` fails) until the database opens, the migrations have run and it has become ready once
         (nobody can be connected yet, so a restart loses nothing);
       - after that: the database down makes it **not ready** (no new players; `/health/ready` says why), never
         unhealthy (a restart would disconnect every player and fix nothing), logged at `error`;
@@ -116,7 +117,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       reveals nothing.
 - [x] **Pairing** (whitelist, M5/M7): starts from a console connection, never shows a secret; a 6-digit one-time code,
       expiring after ~10 minutes; the website limits attempts per account.
-- [x] **Identity**: internal `bigint` keys never leave the database; people and logs see `public_id` UUIDs (v7).
+- [x] **Identity**: internal integer keys never leave the database; people and logs see `public_id` UUIDs (v7).
       Connection spans carry the `console` public id from LMP on, and the `account` one once linked.
 
 ## Work
@@ -160,7 +161,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
       since `sqlx::migrate!` embeds migrations at compile time).
 - [x] `scripts/dev.sh --reset`: drops the dev database, for schema changes.
-- [ ] Tests use a fresh database each run (`#[sqlx::test]`), so a rewritten schema file never trips them.
+- [x] Tests use a fresh database file per server, so a rewritten schema file never trips them.
 
 ### Checks with a real console (Dolphin)
 - [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …

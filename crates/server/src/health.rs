@@ -3,7 +3,7 @@
 //!
 //! - `GET /health/live`: 200 when the server's runtime answers. The container healthcheck; failing
 //!   it justifies a restart.
-//! - `GET /health/ready`: 200 when PostgreSQL answers too, 503 (with the reason) otherwise.
+//! - `GET /health/ready`: 200 when the database answers too, 503 (with the reason) otherwise.
 //!   A database outage doesn't make the server unhealthy: players already in town or on a quest
 //!   don't need it, a restart would drop them, and the pool reconnects by itself. It only means
 //!   "don't send new players here".
@@ -13,7 +13,7 @@ use std::net::{SocketAddr, TcpStream as StdTcpStream};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,7 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct Deps {
-    pub db: PgPool,
+    pub db: SqlitePool,
 }
 
 pub async fn serve(listener: TcpListener, deps: Deps, shutdown: CancellationToken) {
@@ -69,8 +69,8 @@ async fn answer(mut stream: TcpStream, deps: &Deps) -> Result<()> {
 async fn not_ready(deps: &Deps) -> Option<String> {
     match tokio::time::timeout(CHECK_TIMEOUT, sqlx::query("SELECT 1").execute(&deps.db)).await {
         Ok(Ok(_)) => None,
-        Ok(Err(e)) => Some(format!("postgres: {e}\n")),
-        Err(_) => Some("postgres: timed out\n".to_owned()),
+        Ok(Err(e)) => Some(format!("database: {e}\n")),
+        Err(_) => Some("database: timed out\n".to_owned()),
     }
 }
 

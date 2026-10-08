@@ -6,7 +6,7 @@
 opn = "0.0.0.0:8200"
 lmp = "0.0.0.0:8201"
 fmp = "0.0.0.0:8202"
-# HTTP: /health/live (process works) and /health/ready (PostgreSQL reachable).
+# HTTP: /health/live (process works) and /health/ready (database answers).
 health = "0.0.0.0:8280"
 
 [tls]
@@ -15,5 +15,6 @@ cert = "certs/dev/server.crt"
 key = "certs/dev/server.key"
 
 [database]
-url = "postgres://mh3sp:mh3sp@localhost:55432/mh3sp"
+# SQLite file, created if missing (with its -wal and -shm companions).
+url = "sqlite://data/mh3sp.db"
 
