@@ -23,6 +23,22 @@ use wire::FrameCodec;
 
 use crate::pcap::{self, Packet, Proto};
 
+/// The milestone the Rust server has reached. Every scenario whose `milestone` (in its
+/// `scenario.toml`) is at or before this one must replay cleanly against the Rust server.
+pub const REACHED: &str = "M0";
+
+/// The `milestone` field of a scenario's `scenario.toml`.
+pub fn milestone(scenario: &Path) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Meta {
+        milestone: String,
+    }
+    let path = scenario.join("scenario.toml");
+    let text = fs::read_to_string(&path).with_context(|| format!("{}", path.display()))?;
+    let meta: Meta = toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
+    Ok(meta.milestone)
+}
+
 /// Server ports of the Capcom servers: OPN, LMP, FMP, RFP.
 const GAME_PORTS: [(u16, &str); 4] = [(8200, "opn"), (8201, "lmp"), (8202, "fmp"), (8203, "rfp")];
 const DNS_PORT: u16 = 53;

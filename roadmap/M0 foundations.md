@@ -58,7 +58,7 @@ Edition 2024, latest stable toolchain pinned in `rust-toolchain.toml`.
 - [x] `.woodpecker/push.yml` (calls `scripts/ci-tests.sh`):
   - image `rust:<pinned>-bookworm` (has `libssl-dev`), `rustup component add rustfmt clippy`;
   - steps: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`;
-  - services (added with the first test that needs them, step 7): `postgres:17` (user/password/db `mh3sp`) and `valkey/valkey:8`;
+  - services: `postgres:17` (user/password/db `mh3sp`) and `valkey/valkey:8`;
   - env: `DATABASE_URL=postgres://mh3sp:mh3sp@postgres:5432/mh3sp`, `VALKEY_URL=redis://valkey:6379`,
     `SQLX_OFFLINE=true`;
   - no build cache in M0; add one (agent volume) only if pipelines get slow.
@@ -68,20 +68,24 @@ Edition 2024, latest stable toolchain pinned in `rust-toolchain.toml`.
 
 Only what M1 builds on; nothing here gets thrown away.
 
-- [ ] `mh3sp [config.toml]` (default `config.toml`). Config: listeners (`opn`, `lmp`, `fmp`: bind address +
-      enabled), `external_address` (the address handed to consoles, never guessed from `0.0.0.0`), TLS cert/key,
-      `database.url`, `valkey.url`. `DATABASE_URL` / `VALKEY_URL` env vars override the file.
-- [ ] Startup: connect Postgres (pool) and run `sqlx::migrate!()`; connect Valkey (connection manager) and `PING`.
-      Either unreachable → exit with a clear error.
-- [ ] Listeners: one tokio task per listener, one task per connection. OPN is TLS through `tokio-openssl` with the
+- [x] `mh3sp [config.toml]` (default `config.toml`). Config: listeners (`opn`, `lmp`, `fmp`: bind address, absent
+      = disabled; `health`), TLS cert/key, `database.url`, `valkey.url`; unknown keys are rejected.
+      `DATABASE_URL` / `VALKEY_URL` env vars override the file. `external_address` arrives with `AnsLmpConnect` (M1).
+- [x] Startup: connect Postgres (pool) and run `sqlx::migrate!()`; connect Valkey (connection manager) and `PING`.
+      Either unreachable → exit 1 with a clear error.
+- [x] Listeners: one tokio task per listener, one task per connection. OPN is TLS through `tokio-openssl` with the
       legacy setup (decision 6 in `00. global.md`): `@SECLEVEL=0`, minimum protocol SSLv3/TLS 1.0, ciphers
       `AES128-SHA:AES256-SHA:DES-CBC-SHA:DES-CBC3-SHA:RC4-MD5:RC4-SHA` (same list as MH3SP `other/utils.py`).
-- [ ] Logging per decision 8 of `00. global.md`: `tracing-subscriber` terminal output with `EnvFilter`, one span per
+- [x] Logging per decision 8 of `00. global.md` (colours only on a terminal): `tracing-subscriber` terminal output with `EnvFilter`, one span per
       connection (`conn`, `role`); anonymous (no names, no IPs) and no secrets.
-- [ ] Each connection: read frames with the `wire` codec, log one line per frame (`RECV <name> id seq len`, hexdump at
+- [x] Each connection: read frames with the `wire` codec, log one line per frame (`RECV <name> id seq len`, hexdump at
       `debug`), keep the connection open until the peer closes it. No replies yet (M1 adds `ReqConnection`).
-- [ ] Graceful shutdown on Ctrl-C (stop accepting, close connections).
-- [ ] `certs/dev/`: copy of MH3SP `cert/server.crt` + `server.key` (+ `ca.der` for reference).
+- [x] Graceful shutdown on Ctrl-C and SIGTERM (`docker stop`): stop accepting, close connections.
+- [x] Health endpoints and `mh3sp healthcheck` (decision 9 of `00. global.md`). Verified: Valkey or Postgres
+      stopped → live 200, ready 503 with the reason, back to ready by itself when they return.
+- [x] `Dockerfile` (+ `.dockerignore`): verified healthy under Docker, Wii TLS handshake with Debian's OpenSSL,
+      `docker stop` exits 0.
+- [x] `certs/dev/`: copy of MH3SP `cert/server.crt` + `server.key` (+ `ca.der` for reference).
 
 ## 3. Packet layer (`crates/wire`)
 
@@ -231,8 +235,10 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
 - [x] **Targets**: `corpus replay <scenario>... [--host <ip>] [--before <command>]` (standard ports on one host);
       `--before tools/oracle.sh` gives each scenario a fresh Python MH3SP, as when it was recorded. Tests will
       start the Rust server in-process on random ports (step 7).
-- [ ] **Outcome per scenario**: `scenario.toml`'s `milestone` decides whether a failure breaks CI (milestone reached)
-      or is only reported (not yet). During M0 nothing is reached, so the Rust run reports without failing.
+- [x] **Outcome per scenario**: `scenario.toml`'s `milestone` decides whether a failure breaks CI: every scenario at
+      or before `testkit::corpus::REACHED` must replay cleanly against the Rust server
+      (`testkit/tests/server_skeleton.rs`, a fresh in-process server per scenario). `REACHED` is `M0`, so none
+      yet; a smoke test proves the harness reaches the skeleton over TLS (the first expected frame times out).
 - [x] Validation against Python MH3SP: `corpus replay corpus/s* --before tools/oracle.sh --nudge` replays every
       single-console scenario clean (637/637 server frames, twice in a row): exit criterion 4 for `s00`–`s03`.
       Manual in M0; it becomes the nightly tier 4 job in M1. Multi-console scenarios follow at step 8.

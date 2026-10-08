@@ -1,0 +1,6 @@
+target
+data
+corpus
+.git
+.env
+config.toml
