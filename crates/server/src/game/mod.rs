@@ -1,20 +1,25 @@
 //! Game logic: what the server answers. No sockets: handlers get a frame and return the frames to send back;
 //! `net` does the I/O.
 
+pub mod fmp;
 pub mod lmp;
 pub mod opn;
+pub mod players;
 
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
 use sqlx::SqlitePool;
-use wire::packets::{Packet, ReqConnection};
+use wire::packets::{AnsServerTime, Packet, ReqConnection};
 use wire::{DecodeError, EncodeError, Frame, PacketId};
 
 use crate::Shared;
 use crate::accounts::Console;
+use fmp::Fmp;
 use lmp::Lmp;
 use opn::Opn;
+use players::Mailbox;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -37,20 +42,22 @@ impl fmt::Display for Role {
 pub enum Handler {
     Opn(Opn),
     Lmp(Lmp),
-    /// FMP (M2) only opens the connection so far.
-    Unhandled,
+    Fmp(Fmp),
 }
 
 impl Handler {
     /// The handler, and what the server sends first.
-    pub fn start(role: Role) -> (Self, Handled) {
+    pub fn start(role: Role, mailbox: Mailbox) -> (Self, Handled) {
         match role {
             Role::Opn => {
                 let (opn, frames) = Opn::start();
                 (Handler::Opn(opn), frames)
             }
             Role::Lmp => (Handler::Lmp(Lmp::new()), req_connection().map(|f| vec![f])),
-            Role::Fmp => (Handler::Unhandled, req_connection().map(|f| vec![f])),
+            Role::Fmp => (
+                Handler::Fmp(Fmp::new(mailbox)),
+                req_connection().map(|f| vec![f]),
+            ),
         }
     }
 
@@ -58,14 +65,23 @@ impl Handler {
         match self {
             Handler::Opn(opn) => opn.handle(shared, req).await,
             Handler::Lmp(lmp) => lmp.handle(shared, req).await,
-            Handler::Unhandled => Err(unexpected(req.id)),
+            Handler::Fmp(fmp) => fmp.handle(shared, req).await,
         }
     }
 
     /// The console announced it leaves (`ReqShut`).
     pub fn leave(&mut self, shared: &Shared) {
-        if let Handler::Lmp(lmp) = self {
-            lmp.leave(shared);
+        match self {
+            Handler::Opn(_) => {}
+            Handler::Lmp(lmp) => lmp.leave(shared),
+            Handler::Fmp(fmp) => fmp.leave(shared),
+        }
+    }
+
+    /// The connection is closed, whatever the reason.
+    pub fn close(&mut self, shared: &Shared) {
+        if let Handler::Fmp(fmp) = self {
+            fmp.close(shared);
         }
     }
 }
@@ -118,6 +134,20 @@ pub fn frame<P: Packet>(seq: u16, packet: &P) -> Result<Frame, Fault> {
 
 pub fn reply<P: Packet>(seq: u16, packet: &P) -> Handled {
     Ok(vec![frame(seq, packet)?])
+}
+
+/// `AnsServerTime`: seconds since the epoch, twice.
+pub fn server_time(seq: u16) -> Handled {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as u32);
+    reply(
+        seq,
+        &AnsServerTime {
+            server_time: now,
+            current_time: now,
+        },
+    )
 }
 
 pub fn unexpected(id: PacketId) -> Fault {

@@ -349,6 +349,73 @@ async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: &str) -> S
     string(expect::<AnsUserObject>(&mut console).await.user.get(0x02))
 }
 
+/// The whole login of `support_code`'s console playing `slot`: the ticket FMP takes.
+async fn login(lmp: SocketAddr, support_code: &str, slot: u32) -> String {
+    let (_, ticket, _) = first_visit(lmp, Some(support_code)).await;
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(None, Some(&ticket)),
+        },
+    )
+    .await;
+    expect::<NtcLogin>(&mut console).await;
+    let user = PatData::new().with(0x03, Item::String(Bytes::from_static(b"Aiko")));
+    send(&mut console, 1, ReqUserObject { unk: 1, slot, user }).await;
+    expect::<AnsUserObject>(&mut console).await;
+    send(&mut console, 2, ReqTicket {}).await;
+    let ticket = expect::<AnsTicket>(&mut console).await.ticket;
+    send(&mut console, 3, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut console).await;
+    String::from_utf8(ticket.to_vec()).unwrap()
+}
+
+async fn fmp_login(fmp: SocketAddr, ticket: &str) -> Console {
+    let mut console = Console::connect(fmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(None, Some(ticket)),
+        },
+    )
+    .await;
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 3);
+    console
+}
+
+/// Both FMP connections come with the ticket of the last LMP visit; a second login of the same Capcom ID kicks
+/// the first.
+#[tokio::test]
+async fn fmp_sessions_hop_and_kick() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (code, _, _) = first_visit(lmp, None).await;
+    let ticket = login(lmp, &code, 1).await;
+
+    // Server selection, then the world server: the same ticket twice.
+    let mut selection = fmp_login(fmp, &ticket).await;
+    send(&mut selection, 1, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut selection).await;
+    let mut world = fmp_login(fmp, &ticket).await;
+    send(&mut world, 1, ReqServerTime { country: 0 }).await;
+    expect::<AnsServerTime>(&mut world).await;
+
+    // The same console logs in again on the same slot: the first connection is dropped.
+    let again = login(lmp, &code, 1).await;
+    let _second = fmp_login(fmp, &again).await;
+    assert!(matches!(
+        world.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
 /// Tier 3: accounts through LMP, and across a restart.
 #[tokio::test]
 async fn consoles_keep_their_hunters() {

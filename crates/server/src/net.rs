@@ -22,6 +22,7 @@ use wire::packets::{AnsLineCheck, AnsShut, Packet, ReqLineCheck, ReqShut};
 use wire::{Frame, FrameCodec};
 
 use crate::Shared;
+use crate::game::players::Mailbox;
 use crate::game::{Fault, Handled, Handler, Role, frame, reply};
 
 /// A console that hasn't finished its TLS handshake by then is dropped.
@@ -74,7 +75,7 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         tokio::spawn(
             async move {
-                match connection(tcp, role, tls, &shared, shutdown).await {
+                match connection(tcp, conn, role, tls, &shared, shutdown).await {
                     Ok(()) => debug!("disconnected"),
                     Err(Fault::Client(e)) => warn!(error = %format!("{e:#}"), "connection dropped"),
                     Err(Fault::Server(e)) => {
@@ -89,6 +90,7 @@ pub async fn serve(
 
 async fn connection(
     tcp: TcpStream,
+    conn: u64,
     role: Role,
     tls: Option<SslContext>,
     shared: &Shared,
@@ -115,8 +117,23 @@ async fn connection(
         _ = shutdown.cancelled() => return Ok(()),
         _ = tokio::time::sleep(PAUSE) => {}
     }
-    let (mut handler, first) = Handler::start(role);
-    if !send(&mut framed, first?).await {
+    let (mailbox, kicked) = Mailbox::new(conn);
+    let (mut handler, first) = Handler::start(role, mailbox);
+    let result = serve_frames(&mut framed, &mut handler, first, &kicked, shared, &shutdown).await;
+    handler.close(shared);
+    result
+}
+
+/// Requests in, answers out, until the connection ends.
+async fn serve_frames(
+    framed: &mut Framed<Box<dyn Io>, FrameCodec>,
+    handler: &mut Handler,
+    first: Handled,
+    kicked: &CancellationToken,
+    shared: &Shared,
+    shutdown: &CancellationToken,
+) -> Result<(), Fault> {
+    if !send(framed, first?).await {
         return Ok(());
     }
 
@@ -125,6 +142,10 @@ async fn connection(
     loop {
         let out = tokio::select! {
             _ = shutdown.cancelled() => return Ok(()),
+            _ = kicked.cancelled() => {
+                info!("kicked");
+                return Ok(());
+            }
             _ = line_check.tick() => {
                 if !answered {
                     info!("line check unanswered, disconnecting");
@@ -158,7 +179,7 @@ async fn connection(
                 }
             }
         };
-        if !send(&mut framed, out).await {
+        if !send(framed, out).await {
             return Ok(());
         }
     }

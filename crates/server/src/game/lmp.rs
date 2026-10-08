@@ -7,15 +7,13 @@
 //!
 //! The session goes from one visit to the next through the ticket cache (decision 4).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::anyhow;
 use bytes::Bytes;
 use tracing::{Span, info};
 use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
-use super::{Fault, Handled, Session, reply, unexpected};
+use super::{Fault, Handled, Session, reply, server_time, unexpected};
 use crate::Shared;
 use crate::accounts::{self, SUPPORT_CODE_LEN, random_id};
 
@@ -204,16 +202,7 @@ impl Lmp {
             }
             (Stage::FirstVisit, ReqServerTime::ID) => {
                 ReqServerTime::decode(p)?;
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs() as u32);
-                reply(
-                    seq,
-                    &AnsServerTime {
-                        server_time: now,
-                        current_time: now,
-                    },
-                )
+                server_time(seq)
             }
             (Stage::SecondVisit, ReqUserObject::ID) => {
                 let r = ReqUserObject::decode(p)?;

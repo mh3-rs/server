@@ -78,6 +78,11 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       u8-counted record list, and `Rest` (opaque trailing bytes). Messages relaying game data
       (`NtcLayerBinary`, `NtcCircleBinary`, `NtcLayerUserPosition`, …) have a layout per direction: their common
       prefix is typed, the rest kept opaque (so only that prefix is checked).
+- [x] FMP lifecycle: both FMP connections take the session by the ticket of the last LMP visit (`NtcLogin` 3)
+      and give it back under the same ticket at `ReqShut` (FMP issues none). Players registry
+      (`Players`, a `DashMap` by Capcom ID) with a mailbox per connection; a second login of the same Capcom ID
+      kicks the first; a disconnect unregisters only its own entry. The mailbox's frame channel comes with the
+      first notification sent to someone else. Scripted test: `fmp_sessions_hop_and_kick`.
 - [ ] FMP connection 1: content downloads, world server list (populations from the world), pick.
 - [ ] FMP connection 2: gates, entering a gate, city list and creation, layer user lists.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.

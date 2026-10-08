@@ -21,6 +21,7 @@ use tracing::{error, info};
 
 pub use config::Config;
 use database::Database;
+use game::players::Players;
 use game::{Role, Session};
 
 /// How long a session waits for the console's next connection (decision 4).
@@ -35,6 +36,8 @@ struct Shared {
     fmp_port: u16,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
+    /// Players logged in on FMP, by Capcom ID.
+    players: Players,
 }
 
 impl Shared {
@@ -118,6 +121,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
+        players: Players::default(),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!(
