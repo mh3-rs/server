@@ -125,6 +125,7 @@ fn typed_packets_reencode() {
     use wire::packets::{TYPED, reencode};
 
     let mut seen = BTreeSet::new();
+    let mut failures = BTreeSet::<String>::new();
     for scenario in scenarios() {
         for rec in corpus::load(&scenario).unwrap() {
             for c in &rec.connections {
@@ -142,16 +143,36 @@ fn typed_packets_reencode() {
                         f.seq
                     );
                     match result {
-                        Ok(out) => {
-                            assert!(out == payload, "{at}: {} re-encodes differently", f.name)
+                        Ok(out) if out == payload => {}
+                        Ok(_) => {
+                            failures.insert(format!("{}: re-encodes differently ({at})", f.name));
                         }
-                        Err(e) => panic!("{at}: {}: {e}", f.name),
+                        Err(e) => {
+                            failures.insert(format!("{}: {e} ({at})", f.name));
+                        }
                     }
                     seen.insert(f.name.clone());
                 }
             }
         }
     }
+    // One line per packet type is enough to see what to fix.
+    let mut by_type = std::collections::BTreeMap::new();
+    for f in &failures {
+        by_type
+            .entry(f.split(':').next().unwrap().to_owned())
+            .or_insert(f);
+    }
+    assert!(
+        by_type.is_empty(),
+        "{} layouts wrong:\n{}",
+        by_type.len(),
+        by_type
+            .values()
+            .map(|f| f.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     if !scenarios().is_empty() {
         let never_recorded = ["ReqMaintenance", "AnsMaintenance"];
         let missing: Vec<_> = TYPED

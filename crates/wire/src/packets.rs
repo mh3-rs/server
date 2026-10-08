@@ -1,14 +1,16 @@
 //! Typed packets: one struct per message, decoded from and encoded to its payload byte for byte.
 //!
 //! Field types map to the wire as: `u8`/`u16`/`u32`/`u64` big-endian, `Bytes` a lp2 string, `PatData` a record,
-//! `Vec<u8>` a byte list (u8 count, then the bytes), `Vec<PatData>` a record list (u32 count, then the records).
+//! `Vec<u8>` a byte list (u8 count, then the bytes), `Vec<PatData>` a record list (u32 count, then the records),
+//! `Vec<(PatData, OptionalFields)>` the same with optional fields after each record, [`ShortList`] a record list
+//! with a u8 count, `OptionalFields`, and [`Rest`] the bytes left (opaque).
 //! Fields whose meaning is unknown are kept as `unk*` so re-encoding gives back the same bytes.
 //! Layouts come from MH3SP and are checked against every recorded payload (`testkit/tests/corpus_roundtrip.rs`);
 //! the few never recorded say so.
 
 use bytes::Bytes;
 
-use crate::{DecodeError, EncodeError, PacketId, PatData, PatWrite, Reader};
+use crate::{DecodeError, EncodeError, OptionalFields, PacketId, PatData, PatWrite, Reader};
 
 pub trait Packet: Sized {
     const ID: PacketId;
@@ -71,13 +73,73 @@ impl Field for Vec<PatData> {
         (0..r.u32()?).map(|_| r.pat_data()).collect()
     }
     fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
-        let n = u32::try_from(self.len()).map_err(|_| EncodeError::TooLong {
-            len: self.len(),
-            max: u32::MAX as usize,
-        })?;
-        out.put_u32(n);
+        out.put_u32(count(self.len(), u32::MAX as usize)? as u32);
         self.iter().try_for_each(|d| out.put_pat_data(d))
     }
+}
+
+impl Field for OptionalFields {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        r.optional_fields()
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_optional_fields(self)
+    }
+}
+
+impl Field for Vec<(PatData, OptionalFields)> {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        (0..r.u32()?)
+            .map(|_| Ok((r.pat_data()?, r.optional_fields()?)))
+            .collect()
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_u32(count(self.len(), u32::MAX as usize)? as u32);
+        self.iter().try_for_each(|(d, o)| {
+            out.put_pat_data(d)?;
+            out.put_optional_fields(o)
+        })
+    }
+}
+
+/// A record list with a u8 count.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShortList(pub Vec<PatData>);
+
+impl Field for ShortList {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        Ok(ShortList(
+            (0..r.u8()?)
+                .map(|_| r.pat_data())
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_u8(count(self.0.len(), u8::MAX as usize)? as u8);
+        self.0.iter().try_for_each(|d| out.put_pat_data(d))
+    }
+}
+
+/// The bytes left in the payload, kept as they are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rest(pub Bytes);
+
+impl Field for Rest {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        let n = r.rest().len();
+        Ok(Rest(Bytes::copy_from_slice(r.bytes(n)?)))
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_slice(&self.0);
+        Ok(())
+    }
+}
+
+fn count(len: usize, max: usize) -> Result<usize, EncodeError> {
+    if len > max {
+        return Err(EncodeError::TooLong { len, max });
+    }
+    Ok(len)
 }
 
 macro_rules! packets {
@@ -212,6 +274,130 @@ packets! {
     /// The FMP address (0x02) and port (0x03) of world server `index`: `fields` lists the fields wanted.
     ReqFmpInfo = 0x61340100 { index: u32, fields: Vec<u8> }
     AnsFmpInfo = 0x61340200 { data: PatData }
+
+    // FMP: content downloads.
+    /// `kind`: the content type (`0x01`–`0x0f` the English set: server types, time events, quests, …).
+    ReqBinaryVersion = 0x63010100 { kind: u8 }
+    AnsBinaryVersion = 0x63010200 { unk: u8, version: u32 }
+    ReqBinaryHead = 0x63020100 { kind: u8 }
+    AnsBinaryHead = 0x63020200 { version: u32, size: u32 }
+    ReqBinaryData = 0x63030100 { kind: u8, version: u32, offset: u32, size: u32 }
+    AnsBinaryData = 0x63030200 { version: u32, offset: u32, size: u32, chunk: Bytes }
+    ReqBinaryFoot = 0x63040100 { kind: u8 }
+    AnsBinaryFoot = 0x63040200 {}
+    // FMP: the world server list, as LMP's (the `2` versions are the ones the console shows).
+    ReqFmpListVersion2 = 0x63100100 {}
+    AnsFmpListVersion2 = 0x63100200 { version: u32 }
+    ReqFmpListHead2 = 0x63110100 { version: u32, first: u32, count: u32, fields: Vec<u8> }
+    AnsFmpListHead2 = 0x63110200 { unk: u32, count: u32 }
+    ReqFmpListData2 = 0x63120100 { first: u32, count: u32 }
+    AnsFmpListData2 = 0x63120200 { unk: u32, servers: Vec<PatData> }
+    ReqFmpListFoot2 = 0x63130100 {}
+    AnsFmpListFoot2 = 0x63130200 {}
+    ReqFmpInfo2 = 0x63140100 { index: u32, fields: Vec<u8> }
+    AnsFmpInfo2 = 0x63140200 { data: PatData }
+    // FMP: layers (world server, gates, cities).
+    ReqLayerStart = 0x64010100 { fields: Vec<u8>, fields2: Vec<u8> }
+    AnsLayerStart = 0x64010200 { layer: PatData }
+    ReqLayerEnd = 0x64020100 {}
+    AnsLayerEnd = 0x64020200 {}
+    ReqLayerChildListHead = 0x64240100 { first: u32, count: u32, fields: Vec<u8> }
+    AnsLayerChildListHead = 0x64240200 { unk: u32, count: u32 }
+    ReqLayerChildListData = 0x64250100 { first: u32, count: u32 }
+    AnsLayerChildListData = 0x64250200 { first: u32, children: Vec<(PatData, OptionalFields)> }
+    ReqLayerChildListFoot = 0x64260100 {}
+    AnsLayerChildListFoot = 0x64260200 {}
+    /// `rest`: a list of (field, byte) pairs, meaning unknown.
+    ReqLayerChildInfo = 0x64230100 { unk: u16, fields: Vec<u8>, rest: Rest }
+    AnsLayerChildInfo = 0x64230200 { unk: u16, layer: PatData, unk2: u16 }
+    ReqLayerDown = 0x64140100 { layer: u16, info: PatData }
+    AnsLayerDown = 0x64140200 { layer: u16 }
+    ReqLayerUp = 0x64150100 {}
+    AnsLayerUp = 0x64150200 {}
+    ReqLayerCreateHead = 0x64110100 { number: u16 }
+    AnsLayerCreateHead = 0x64110200 { number: u16 }
+    ReqLayerCreateSet = 0x64120100 { number: u16, layer: PatData, extra: OptionalFields }
+    AnsLayerCreateSet = 0x64120200 { number: u16 }
+    ReqLayerCreateFoot = 0x64130100 { number: u16, unk: u8 }
+    AnsLayerCreateFoot = 0x64130200 { number: u16 }
+    /// `layer`: a layer path (depth, world server, …), 14 bytes.
+    ReqLayerHost = 0x64410100 { layer: Bytes }
+    AnsLayerHost = 0x64410200 { layer: Bytes, capcom_id: Bytes, name: Bytes }
+    NtcLayerHost = 0x64411000 { layer: Bytes, capcom_id: Bytes, name: Bytes }
+    ReqLayerUserList = 0x64630100 { fields: Vec<u8> }
+    AnsLayerUserList = 0x64630200 { users: Vec<PatData> }
+    ReqLayerUserListHead = 0x64640100 { unk: u8, layer: Bytes, first: u32, count: u32, fields: Vec<u8> }
+    AnsLayerUserListHead = 0x64640200 { first: u32, count: u32 }
+    ReqLayerUserListData = 0x64650100 { first: u32, count: u32 }
+    AnsLayerUserListData = 0x64650200 { unk: u32, users: Vec<(PatData, OptionalFields)> }
+    ReqLayerUserListFoot = 0x64660100 {}
+    AnsLayerUserListFoot = 0x64660200 {}
+    ReqLayerMediationList = 0x64820100 { unk: u8, unk2: u8, fields: Vec<u8> }
+    AnsLayerMediationList = 0x64820200 { unk: u8, items: ShortList }
+    NtcLayerIn = 0x64141000 { capcom_id: Bytes, user: PatData }
+    NtcLayerOut = 0x64151000 { capcom_id: Bytes }
+    /// The console's position in town; relayed with the sender's Capcom ID in front (a layout per direction).
+    NtcLayerUserPosition = 0x64711000 { data: Rest }
+    /// Game data relayed to the layer (a layout per direction).
+    NtcLayerBinary = 0x64701000 { data: Rest }
+    /// Game data for one player (`capcom_id`: the partner from the console, the sender from the server).
+    NtcLayerBinary2 = 0x64751000 { capcom_id: Bytes, data: Rest }
+    // FMP: circles (quests).
+    ReqCircleInfoNoticeSet = 0x65800100 { fields: Vec<u8>, fields2: Vec<u8> }
+    AnsCircleInfoNoticeSet = 0x65800200 {}
+    /// `rest`: a list of (field, byte) pairs, meaning unknown.
+    ReqCircleListLayer = 0x65270100 { fields: Vec<u8>, rest: Rest }
+    AnsCircleListLayer = 0x65270200 { unk: u32, circles: Vec<(PatData, OptionalFields)> }
+    NtcCircleListLayerChange = 0x65821000 { circle: u32, info: PatData, extra: OptionalFields }
+    ReqCircleCreate = 0x65010100 { info: PatData, extra: OptionalFields }
+    AnsCircleCreate = 0x65010200 { circle: u32 }
+    ReqCircleInfo = 0x65020100 { circle: u32, fields: Vec<u8>, fields2: Vec<u8> }
+    AnsCircleInfo = 0x65020200 { circle: u32, info: PatData, extra: OptionalFields }
+    ReqCircleInfoSet = 0x65200100 { circle: u32, info: PatData, extra: OptionalFields }
+    AnsCircleInfoSet = 0x65200200 { circle: u32 }
+    NtcCircleInfoSet = 0x65201000 { circle: u32, info: PatData, extra: OptionalFields }
+    ReqCircleJoin = 0x65030100 { circle: u32, info: PatData }
+    AnsCircleJoin = 0x65030200 { circle: u32, player: u8 }
+    NtcCircleJoin = 0x65031000 { circle: u32, capcom_id: Bytes, name: Bytes, player: u8, state: u8 }
+    ReqCircleLeave = 0x65040100 { circle: u32 }
+    AnsCircleLeave = 0x65040200 { circle: u32 }
+    NtcCircleLeave = 0x65041000 { circle: u32, capcom_id: Bytes, player: u8, unk: u8 }
+    ReqCircleHost = 0x65410100 { circle: u32 }
+    AnsCircleHost = 0x65410200 { circle: u32, leader: u8, capcom_id: Bytes, name: Bytes }
+    NtcCircleHost = 0x65411000 { unk: u32, leader: u8, capcom_id: Bytes, name: Bytes }
+    ReqCircleUserList = 0x65600100 { fields: Vec<u8> }
+    AnsCircleUserList = 0x65600200 { users: Vec<PatData> }
+    ReqCircleMatchOptionSet = 0x65100100 { options: PatData }
+    AnsCircleMatchOptionSet = 0x65100200 {}
+    NtcCircleMatchOptionSet = 0x65101000 { options: PatData }
+    ReqCircleMatchStart = 0x65120100 {}
+    AnsCircleMatchStart = 0x65120200 {}
+    /// The players departing: a count, then per player its index, Capcom ID and a flag.
+    NtcCircleMatchStart = 0x65121000 { data: Bytes, rest: Rest }
+    ReqCircleMatchEnd = 0x65130100 { unk: u8 }
+    AnsCircleMatchEnd = 0x65130200 {}
+    /// Game data relayed to the circle (a layout per direction).
+    NtcCircleBinary = 0x65701000 { circle: u32, data: Rest }
+    NtcCircleBinary2 = 0x65711000 { circle: u32, capcom_id: Bytes, data: Rest }
+    // FMP: users.
+    ReqUserSearchInfoMine = 0x66370100 { info: PatData }
+    AnsUserSearchInfoMine = 0x66370200 { info: PatData }
+    /// Part of the hunter's 256-byte profile block.
+    ReqUserBinarySet = 0x66310100 { offset: u32, data: Bytes }
+    AnsUserBinarySet = 0x66310200 {}
+    ReqUserBinaryNotice = 0x66320100 { unk: u8, capcom_id: Bytes, offset: u32, size: u32 }
+    AnsUserBinaryNotice = 0x66320200 {}
+    NtcUserBinaryNotice = 0x66321000 { unk: u8, capcom_id: Bytes, offset: u32, data: Bytes }
+    ReqUserSearchSet = 0x66300100 { extra: OptionalFields }
+    AnsUserSearchSet = 0x66300200 {}
+    ReqUserStatusSet = 0x66400100 { status: PatData }
+    AnsUserStatusSet = 0x66400200 {}
+    ReqFriendList = 0x66540100 { first: u32, count: u32, fields: Vec<u8> }
+    AnsFriendList = 0x66540200 { unk: u32, friends: Vec<PatData> }
+    ReqBlackList = 0x66620100 { first: u32, count: u32, fields: Vec<u8> }
+    AnsBlackList = 0x66620200 { unk: u32, users: Vec<PatData> }
+    /// The game's own integrity report (anti-cheat, M6).
+    NtcCheatCheck = 0x60801000 { data: Rest }
 }
 
 #[cfg(test)]

@@ -73,7 +73,11 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
 
 ## Work
 
-- [ ] FMP packets typed (the 87 types above), round-tripped on the corpus.
+- [x] FMP packets typed: all 107 types the corpus has (M3's multiplayer ones too), each recorded payload decoded
+      whole and re-encoded byte for byte. New field shapes: optional fields, records with optional fields, a
+      u8-counted record list, and `Rest` (opaque trailing bytes). Messages relaying game data
+      (`NtcLayerBinary`, `NtcCircleBinary`, `NtcLayerUserPosition`, …) have a layout per direction: their common
+      prefix is typed, the rest kept opaque (so only that prefix is checked).
 - [ ] FMP connection 1: content downloads, world server list (populations from the world), pick.
 - [ ] FMP connection 2: gates, entering a gate, city list and creation, layer user lists.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
