@@ -61,7 +61,7 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
      node's memory, so town/party broadcasts never leave the process. `AnsFmpInfo` hands the console the owning
      node's address: that is the only "redirect", and the game already does it natively.
    - **Cross-node traffic is rare** (tells and friend requests to a player on another world server, user search,
-     population counts, admin announcements): it goes through Valkey pub/sub (fleet phase only).
+     population counts, admin announcements): it goes through Valkey pub/sub, used from M3 even on a single node.
    - **Gameplay never touches the fleet** in `p2p` mode; in `relay` mode it goes through the relay of the node that
      ran the NAT negotiation, which needs a public IP without address rewriting.
 2. **Three layers, strict direction:**
@@ -77,12 +77,13 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
      them would save nothing. Sharing them would turn every town update into store write + pub/sub + race-prone
      leadership changes.
    - **PostgreSQL (permanent):** accounts (support code + slot → Capcom ID + name), friend lists, blacklists, bans.
-   - **Valkey (temporary, shared; fleet phase):** sessions + PAT tickets (TTL), presence (who is online where, TTL),
+   - **Valkey (temporary, shared):** sessions + PAT tickets (TTL), presence (who is online where, TTL),
      population per world server/gate (written by the owning node, read by any node's LMP), cross-node messages
      (pub/sub), world server → node ownership as a lease with TTL (a dead node's world servers get taken over and
      players reconnect there).
-   - Single-node phase (M0–M5): Valkey's role is played by in-process implementations of the same traits
-     (`SessionStore`, `PresenceStore`, `Bus`, `OwnershipStore`). Adding Valkey changes no game logic.
+   - **Write it once:** no in-process stand-ins to be replaced later. A feature that needs shared temporary data
+     uses Valkey from its first line, even on a single node, and therefore no trait with a single implementation.
+     Client: `redis` crate (tokio, Valkey-compatible).
 5. **Database: PostgreSQL through `sqlx`.** Chosen over SQLite (can't be shared by a fleet) and MariaDB (no real
    advantage here). One engine everywhere: dev, CI, prod.
    Migrations with `sqlx migrate` (`migrations/`); compile-time checked queries with the offline cache
@@ -96,11 +97,12 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
 ## Dev environment
 
 - `docker compose up -d --wait`: PostgreSQL 17 on `localhost:55432`
-  (`DATABASE_URL=postgres://mh3sp:mh3sp@localhost:55432/mh3sp`; 55432 avoids clashing with a local Postgres).
+  (`DATABASE_URL=postgres://mh3sp:mh3sp@localhost:55432/mh3sp`) and Valkey 8 on `localhost:56379`
+  (`VALKEY_URL=redis://localhost:56379`). Shifted ports avoid clashing with local instances.
 - The server runs with `cargo run`; migrations with `sqlx migrate run`.
 - Game side: the lab in `../mh3sp/lab` (Dolphin profiles, hosts toggle, native AltWFC, Python MH3SP as oracle).
 - Deliberately not in compose: AltWFC / NAT negotiation (Docker port mapping rewrites client addresses → P2P fails).
-  Python MH3SP may join compose later for tier 4 (TCP only, no such problem). Valkey joins compose with the fleet work.
+  Python MH3SP may join compose later for tier 4 (TCP only, no such problem).
 
 ## Testing strategy
 
@@ -127,7 +129,7 @@ timestamps, random IDs) are masked per packet type.
 - Pushes to Gitea trigger Woodpecker pipelines (`.woodpecker/*.yml`).
 - Secrets available to pipelines: `gitea_user`, `gitea_token` (Gitea registries: Cargo, npm, container).
 - `push` pipeline: `fmt`, `clippy -D warnings`, tiers 1–3 and 5, coverage report on tiers 1–3.
-  A `postgres:17` Woodpecker service for tests (each test gets its own database via `#[sqlx::test]`);
+  `postgres:17` and `valkey/valkey:8` Woodpecker services for tests (each test gets its own database via `#[sqlx::test]`);
   `SQLX_OFFLINE=true` for the build, plus a check that `.sqlx/` is up to date.
   Cache `~/.cargo` and `target/` between runs.
 - `nightly` pipeline (Woodpecker cron): tier 4, with Python 3 + a pinned MH3SP checkout.
@@ -142,7 +144,7 @@ timestamps, random IDs) are masked per packet type.
 
 ### M0 — Foundations
 - [ ] Cargo project; `.woodpecker/push.yml` (fmt, clippy, test).
-- [x] `docker-compose.yml` with PostgreSQL.
+- [x] `docker-compose.yml` with PostgreSQL and Valkey.
 - [ ] `sqlx` wired in: pool, first migration, `#[sqlx::test]` example, offline cache in CI.
 - [ ] `wire`: framing codec (tokio `Decoder`/`Encoder`), items (`Byte`, `Word`, `Long`, `LongLong`, `String`,
       `Binary`), `lp_string`/`lp2_string`, `PatData` with field-id maps.
@@ -162,7 +164,7 @@ timestamps, random IDs) are masked per packet type.
       announce, no-charge, vulgarity, `CommonKey` dodge, `LmpConnect`, `Shut`.
 - [ ] LMP: login info, support code + PAT ticket issuing, user list (6 slots), user object (Capcom ID assignment),
       server time, FMP list + FMP info (per world-server address).
-- [ ] Accounts, sessions and PAT tickets in PostgreSQL (migrations).
+- [ ] Accounts in PostgreSQL (migrations); sessions + PAT tickets in Valkey with TTL (the FMP connections find them there).
 - [ ] Tier 3: scripted login scenario (all 6 connections) in CI.
 - [ ] Tier 4: live differential job against Python MH3SP.
 - [ ] Tier 6 spike: can Dolphin be driven unattended (input automation, reading the error code from memory)?
@@ -172,7 +174,8 @@ timestamps, random IDs) are masked per packet type.
 tiers 3–4 green for login.
 
 ### M2 — FMP, solo
-- [ ] Session hand-off by PAT ticket across connections (FMP staging → FMP real).
+- [ ] Session hand-off by PAT ticket across connections (FMP staging → FMP real), via Valkey.
+- [ ] Population, presence and world-server ownership (lease) in Valkey; `AnsFmpInfo` returns the owner's external address.
 - [ ] World model: 12 world servers (Open/Rookie/Expert/Recruiting), 40 gates, 40 cities, circles; capacities, HR limits.
 - [ ] Layer packets: start/end, child list/info, down/up, create (head/set/foot), user lists, detail search.
 - [ ] User packets: status/binary/search set, binary notice, search info.
@@ -187,7 +190,7 @@ tiers 3–4 green for login.
 **Done when:** one console creates a city, creates and starts a quest; solo corpus replays clean; tier 3 green.
 
 ### M3 — Multiplayer
-- [ ] Broadcast scopes: layer (gate/city), circle; `SendTo(capcom_id)`.
+- [ ] Broadcast scopes: layer (gate/city), circle (in-process: same owner node); `SendTo(capcom_id)` via Valkey pub/sub when the recipient may be elsewhere.
 - [ ] City join: `LayerHost`, `NtcLayerIn/Out`, `NtcLayerUserPosition`, `NtcLayerBinary`, `NtcLayerBinary2` (directed).
 - [ ] Circle join/leave/kick/break, host transfer, `NtcCircleBinary(2)`, list-change notifications.
 - [ ] Leader transfer on disconnect (city and circle).
@@ -259,10 +262,10 @@ The realistic goal is to stop casual cheats (Gecko codes, edited saves) and give
 
 ## After M5: fleet
 
-- [ ] Valkey in compose, CI service and prod.
-- [ ] Valkey implementations of `SessionStore`, `PresenceStore`, `Bus`, `OwnershipStore`.
-- [ ] Ownership leases + takeover; `AnsFmpInfo` returns the owning node's external address.
+The shared-data code already uses Valkey (see decision 4); what remains is running several nodes.
+- [ ] Ownership takeover when a node's lease expires; players reconnect to the new owner.
 - [ ] Tier 3 scenarios across 2–3 nodes (login on one node, play on another, tell across nodes, node kill + takeover).
+- [ ] Deployment: one public IP per node for NAT negotiation/relay, external address per node in config.
 
 ## Open questions
 
