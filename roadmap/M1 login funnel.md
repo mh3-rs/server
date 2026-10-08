@@ -161,6 +161,9 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       clear `error` at startup ("server not configured").
 - [ ] `SECRET`: the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
       never logged, never changed once accounts exist (every console would become unrecognisable).
+      `SECRET__FILE` (Docker secrets: compose `secrets:` mounts them under `/run/secrets/`) takes precedence: the
+      file's content is the secret, its trailing newline stripped. Unreadable or empty file, or neither variable
+      set: refuse to start, naming the variable. Both set: the file wins, `warn` that `SECRET` was ignored.
 
 ### Texts and access
 - [ ] `enum Text` + `text(Text, Language) -> Cow<'static, str>` (D1), English `match` for now.
