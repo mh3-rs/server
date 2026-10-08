@@ -93,13 +93,24 @@ timestamps, random IDs) are masked per packet type.
 | 5. NAT negotiation / relay | Fake UDP peers run NAT negotiation and exchange traffic in `p2p`, `relay`, `hybrid`; simulated NAT (address/port rewriting) and forced failures for the hybrid fallback | CI, every push | M4 |
 | 6. Dolphin E2E | Real game in Dolphin, automated: launch with `play.sh`-style config, drive menus, assert progress from server logs and game memory (error code via the PAL symbol maps), screenshots on failure | Self-hosted runner only (needs the game image), nightly / manual | Spike in M1, scenarios from M2 |
 
-CI (GitHub Actions or similar): `fmt`, `clippy -D warnings`, tiers 1–3 and 5 on every push; tier 4 nightly
-(needs Python 3 + a pinned MH3SP checkout); tier 6 on the self-hosted runner. Coverage report on tiers 1–3.
+### CI: self-hosted Gitea + Woodpecker
+
+- Pushes to Gitea trigger Woodpecker pipelines (`.woodpecker/*.yml`).
+- Secrets available to pipelines: `gitea_user`, `gitea_token` (Gitea registries: Cargo, npm, container).
+- `push` pipeline: `fmt`, `clippy -D warnings`, tiers 1–3 and 5, coverage report on tiers 1–3.
+  Cache `~/.cargo` and `target/` between runs.
+- `nightly` pipeline (Woodpecker cron): tier 4, with Python 3 + a pinned MH3SP checkout.
+- `dolphin` pipeline: tier 6 on a Woodpecker agent running on the Mac (local backend, own label), because the
+  game image never leaves that machine. Manual or nightly trigger.
+- `release` pipeline (on tag): container image built with `woodpeckerci/plugin-docker-buildx:5.0.0` (allowed as a
+  privileged plugin) and pushed to the Gitea container registry. The image must run with host networking (or a
+  public IP without address rewriting) whenever NAT negotiation is enabled.
+- The Cargo registry is only needed if crates get shared between repos (e.g. the test client); not before.
 
 ## Milestones
 
 ### M0 — Foundations
-- [ ] Cargo project, CI (fmt, clippy, test).
+- [ ] Cargo project; `.woodpecker/push.yml` (fmt, clippy, test).
 - [ ] `wire`: framing codec (tokio `Decoder`/`Encoder`), items (`Byte`, `Word`, `Long`, `LongLong`, `String`,
       `Binary`), `lp_string`/`lp2_string`, `PatData` with field-id maps.
 - [ ] Packet catalogue: all 301 IDs with names (from `mh/constants.py` `PAT_NAMES` + MHTrIDA `PAT.MD`), category/kind decoding.
