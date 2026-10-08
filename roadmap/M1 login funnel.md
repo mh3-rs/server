@@ -126,8 +126,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       reveals nothing.
 - [x] **Pairing** (whitelist, M5/M7): starts from a console connection, never shows a secret; a 6-digit one-time code,
       expiring after ~10 minutes; the website limits attempts per account.
-- [x] **Identity**: every entity has a UUID (v7: time-ordered, indexes well); connection spans carry the `console`
-      UUID from LMP on, and the `account` UUID once linked.
+- [x] **Identity**: internal `bigint` keys never leave the database; people and logs see `public_id` UUIDs (v7).
+      Connection spans carry the `console` public id from LMP on, and the `account` one once linked.
 
 ## Work
 
@@ -173,8 +173,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Checks with a real console (Dolphin)
 - [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
-- [ ] Terms version (schema, `texts`): does the game re-show the terms when the version number changes to a
-      *lower* value (1 → 2 → 1), or only when it grows?
+- [ ] Whether the game can delete a Capcom ID (schema, `hunters`).
 - [ ] Whether a menu shows the online support code.
 
 ### Corpus and harness
