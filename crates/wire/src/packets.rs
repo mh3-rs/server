@@ -1,6 +1,7 @@
 //! Typed packets: one struct per message, decoded from and encoded to its payload byte for byte.
 //!
-//! Field types map to the wire as: `u8`/`u16`/`u32`/`u64` big-endian, `Bytes` a lp2 string, `PatData` a record.
+//! Field types map to the wire as: `u8`/`u16`/`u32`/`u64` big-endian, `Bytes` a lp2 string, `PatData` a record,
+//! `Vec<u8>` a byte list (u8 count, then the bytes), `Vec<PatData>` a record list (u32 count, then the records).
 //! Fields whose meaning is unknown are kept as `unk*` so re-encoding gives back the same bytes.
 //! Layouts come from MH3SP and are checked against every recorded payload (`testkit/tests/corpus_roundtrip.rs`);
 //! the few never recorded say so.
@@ -56,6 +57,29 @@ impl Field for PatData {
     }
 }
 
+impl Field for Vec<u8> {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        r.byte_list()
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_byte_list(self)
+    }
+}
+
+impl Field for Vec<PatData> {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        (0..r.u32()?).map(|_| r.pat_data()).collect()
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        let n = u32::try_from(self.len()).map_err(|_| EncodeError::TooLong {
+            len: self.len(),
+            max: u32::MAX as usize,
+        })?;
+        out.put_u32(n);
+        self.iter().try_for_each(|d| out.put_pat_data(d))
+    }
+}
+
 macro_rules! packets {
     ($(
         $(#[$meta:meta])*
@@ -82,7 +106,26 @@ macro_rules! packets {
                 Ok(())
             }
         }
-    )*};
+    )*
+
+        /// Every typed packet's id and name.
+        pub const TYPED: &[(PacketId, &str)] = &[$((PacketId($id), stringify!($name))),*];
+
+        /// Decodes a payload with the packet type of `id` and encodes it again (`None`: not a typed packet). For
+        /// the corpus tests: a layout is right when every recorded payload comes back byte for byte.
+        #[doc(hidden)]
+        pub fn reencode(id: PacketId, payload: &[u8]) -> Option<Result<Vec<u8>, String>> {
+            fn run<P: Packet>(payload: &[u8]) -> Result<Vec<u8>, String> {
+                let mut out = Vec::new();
+                P::decode(payload).map_err(|e| e.to_string())?.encode(&mut out).map_err(|e| e.to_string())?;
+                Ok(out)
+            }
+            match id.0 {
+                $($id => Some(run::<$name>(payload)),)*
+                _ => None,
+            }
+        }
+    };
 }
 
 packets! {
@@ -133,6 +176,42 @@ packets! {
     AnsVulgarityInfoLow = 0x62560200 { unk: u32, info: u32, size: u32 }
     ReqAuthenticationToken = 0x62600100 { token: Bytes }
     AnsAuthenticationToken = 0x62600200 {}
+
+    // LMP.
+    ReqServerTime = 0x60020100 { country: u32 }
+    /// Seconds since the epoch, twice (a clock, and the time for the Wii Shop's tickets, per MH3SP).
+    AnsServerTime = 0x60020200 { server_time: u32, current_time: u32 }
+    ReqTicket = 0x60300100 {}
+    /// The PAT ticket: the session's key on the next connection.
+    AnsTicket = 0x60300200 { ticket: Bytes }
+    /// The Nintendo login's token (0x0a) and a state (0x09).
+    ReqLoginInfo = 0x61010100 { data: PatData }
+    /// `data` carries the console's online support code (0x07), issued here to a first-time console.
+    AnsLoginInfo = 0x61010200 { need_ticket: u8, unk: Bytes, data: PatData }
+    /// The Capcom ID slots, `count` from `first` (1-based); `fields` lists the record fields wanted.
+    ReqUserListHead = 0x61100100 { first: u32, count: u32, fields: Vec<u8> }
+    AnsUserListHead = 0x61100200 { first: u32, count: u32 }
+    ReqUserListData = 0x61110100 { first: u32, count: u32 }
+    /// One record per slot: index (0x01), Capcom ID (0x02, `******` when empty), hunter name (0x03).
+    AnsUserListData = 0x61110200 { first: u32, users: Vec<PatData> }
+    ReqUserListFoot = 0x61120100 {}
+    AnsUserListFoot = 0x61120200 {}
+    /// The chosen slot and the hunter playing it (name 0x03, …).
+    ReqUserObject = 0x61200100 { unk: u8, slot: u32, user: PatData }
+    /// The request's record with the slot's Capcom ID (0x02).
+    AnsUserObject = 0x61200200 { need_ticket: u8, unk: Bytes, unk2: u32, user: PatData }
+    ReqFmpListVersion = 0x61300100 {}
+    AnsFmpListVersion = 0x61300200 { version: u32 }
+    ReqFmpListHead = 0x61310100 { version: u32, first: u32, count: u32, fields: Vec<u8> }
+    AnsFmpListHead = 0x61310200 { unk: u32, count: u32 }
+    ReqFmpListData = 0x61320100 { first: u32, count: u32 }
+    /// One record per world server: index, address, port, type, population, capacity, name, …
+    AnsFmpListData = 0x61320200 { unk: u32, servers: Vec<PatData> }
+    ReqFmpListFoot = 0x61330100 {}
+    AnsFmpListFoot = 0x61330200 {}
+    /// The FMP address (0x02) and port (0x03) of world server `index`: `fields` lists the fields wanted.
+    ReqFmpInfo = 0x61340100 { index: u32, fields: Vec<u8> }
+    AnsFmpInfo = 0x61340200 { data: PatData }
 }
 
 #[cfg(test)]
@@ -140,44 +219,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ids_match_the_catalogue() {
-        macro_rules! check {
-            ($($p:ident),*) => {$(
-                assert_eq!(<$p as Packet>::ID.name(), Some(stringify!($p)));
-            )*};
+    fn names_match_the_catalogue() {
+        for &(id, name) in TYPED {
+            assert_eq!(id.name(), Some(name));
         }
-        check!(
-            ReqLineCheck,
-            AnsLineCheck,
-            ReqShut,
-            AnsShut,
-            ReqConnection,
-            AnsConnection,
-            NtcLogin,
-            ReqMemoryCheck,
-            AnsMemoryCheck,
-            ReqCommonKey,
-            ReqLmpConnect,
-            AnsLmpConnect,
-            ReqTermsVersion,
-            AnsTermsVersion,
-            ReqTerms,
-            AnsTerms,
-            ReqSubTermsInfo,
-            AnsSubTermsInfo,
-            ReqSubTerms,
-            AnsSubTerms,
-            ReqMaintenance,
-            AnsMaintenance,
-            ReqAnnounce,
-            AnsAnnounce,
-            ReqNoCharge,
-            AnsNoCharge,
-            ReqVulgarityInfoLow,
-            AnsVulgarityInfoLow,
-            ReqAuthenticationToken,
-            AnsAuthenticationToken
-        );
     }
 
     #[test]

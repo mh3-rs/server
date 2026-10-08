@@ -122,58 +122,7 @@ fn real_pat_data_records_reencode() {
 #[test]
 fn typed_packets_reencode() {
     use std::collections::BTreeSet;
-    use wire::packets::*;
-
-    fn roundtrip<P: Packet>(payload: &[u8]) -> Result<Vec<u8>, String> {
-        let packet = P::decode(payload).map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        packet.encode(&mut out).map_err(|e| e.to_string())?;
-        Ok(out)
-    }
-
-    macro_rules! typed {
-        ($($p:ident),*) => {
-            (
-                |name: &str, payload: &[u8]| match name {
-                    $(stringify!($p) => Some(roundtrip::<$p>(payload)),)*
-                    _ => None,
-                },
-                [$(stringify!($p)),*],
-            )
-        };
-    }
-    let (check, all) = typed!(
-        ReqLineCheck,
-        AnsLineCheck,
-        ReqShut,
-        AnsShut,
-        ReqConnection,
-        AnsConnection,
-        NtcLogin,
-        ReqMemoryCheck,
-        AnsMemoryCheck,
-        ReqCommonKey,
-        ReqLmpConnect,
-        AnsLmpConnect,
-        ReqTermsVersion,
-        AnsTermsVersion,
-        ReqTerms,
-        AnsTerms,
-        ReqSubTermsInfo,
-        AnsSubTermsInfo,
-        ReqSubTerms,
-        AnsSubTerms,
-        ReqMaintenance,
-        AnsMaintenance,
-        ReqAnnounce,
-        AnsAnnounce,
-        ReqNoCharge,
-        AnsNoCharge,
-        ReqVulgarityInfoLow,
-        AnsVulgarityInfoLow,
-        ReqAuthenticationToken,
-        AnsAuthenticationToken
-    );
+    use wire::packets::{TYPED, reencode};
 
     let mut seen = BTreeSet::new();
     for scenario in scenarios() {
@@ -181,7 +130,8 @@ fn typed_packets_reencode() {
             for c in &rec.connections {
                 for f in &c.frames {
                     let payload = corpus::unhex(&f.payload).unwrap();
-                    let Some(result) = check(&f.name, &payload) else {
+                    let id = PacketId(u32::from_str_radix(&f.id, 16).unwrap());
+                    let Some(result) = reencode(id, &payload) else {
                         continue;
                     };
                     let at = format!(
@@ -204,9 +154,10 @@ fn typed_packets_reencode() {
     }
     if !scenarios().is_empty() {
         let never_recorded = ["ReqMaintenance", "AnsMaintenance"];
-        let missing: Vec<_> = all
+        let missing: Vec<_> = TYPED
             .iter()
-            .filter(|n| !seen.contains(**n) && !never_recorded.contains(n))
+            .map(|(_, name)| *name)
+            .filter(|n| !seen.contains(*n) && !never_recorded.contains(n))
             .collect();
         assert!(missing.is_empty(), "never seen in the corpus: {missing:?}");
     }

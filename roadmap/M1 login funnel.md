@@ -130,7 +130,8 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       trait, a macro for the layout); every recorded payload decodes whole and re-encodes byte for byte
       (`typed_packets_reencode`), and every type must appear in the corpus except `ReqMaintenance` /
       `AnsMaintenance` (never recorded: checked with the refusal path).
-- [ ] LMP packets, the same way (with the LMP work below).
+- [x] LMP packets, the same way. The macro also lists every typed packet (`TYPED`) and re-encodes by id, so the
+      corpus test covers each new type without a hand-kept list.
 - [ ] Field types decided from the corpus (`str` vs `bytes` mixing in MH3SP): Capcom IDs, tickets and support codes
       are ASCII; hunter names are bytes.
 
@@ -205,7 +206,7 @@ missing at startup (unhealthy and "not ready" until it opens, then accepted). No
       declared divergences only.
 
 ## Tests
-- [ ] Tier 1: typed packet round-trips on every corpus payload of each type (OPN done; LMP with its packets).
+- [x] Tier 1: typed packet round-trips on every corpus payload of each type (OPN and LMP).
 - [ ] Tier 2: the replay gate above, in CI, against the in-process server.
 - [ ] Tier 3: scripted logins with the test client: a first-time console gets a support code and a Capcom ID; a
       returning console finds its hunters again (also after a server restart); two consoles get different Capcom IDs;
