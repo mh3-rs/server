@@ -1,0 +1,13 @@
+description = "Two-player quest party: dev1 creates a city and a quest, dev2 joins the city then the quest (CircleJoin, CircleHost, CircleUserList), dev1 starts it (NtcCircleMatchStart to both), both abandon; the leader leaving hands the party over (NtcCircleHost)."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city, create a quest",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city, join dev1's quest",
+  "dev1: start the quest",
+  "both: abandon the quest, back in the city",
+  "both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
