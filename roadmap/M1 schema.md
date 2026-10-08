@@ -82,10 +82,7 @@ friends         (hunter_id, friend_id, created_at, PRIMARY KEY (hunter_id, frien
 friend_requests (from_hunter_id, to_hunter_id, message bytea, created_at)
 blacklist       (hunter_id, blocked_hunter_id, created_at)
 
--- M2: event content.
-event_quests    (id, name, definition /* JSON text */, …)
-quest_rotation  (id, quest_id, starts_at, ends_at, …)   -- Jhen Mohran windows included
-trading_post    (…)
+-- M2: event content is files (MH3SP's JSON, `CONTENT_DIR`), not tables; the website (M8) decides again.
 
 -- M6/M7: anti-cheat and administration.
 anticheat_flags (id, hunter_id, kind, evidence /* JSON */, created_at, reviewed_by NULL, …)
