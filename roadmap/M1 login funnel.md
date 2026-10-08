@@ -1,7 +1,7 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: in progress. Packets, OPN, console checks and LMP done (steps 1–4); left: the Dolphin run to the server
-list, tier 4 (nightly against Python), tier 6 (decide).**
+**Status: in progress. Packets, OPN, console checks, LMP and the Dolphin run done; left: tier 4 (nightly against
+Python), tier 6 (decide).**
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -9,8 +9,11 @@ cities) is M2: in M1 the console reaches FMP and stops there.
 
 ## Exit criteria
 
-1. A Dolphin console goes from the title screen to the server list, picks Valor1 and connects to the Rust FMP
-   listener (which doesn't answer yet).
+1. ✓ A Dolphin console goes from the title screen through OPN and LMP and connects to the Rust FMP listener with
+   its ticket (which doesn't answer yet: "connection terminated due to network instability"). Done 2026-10-08,
+   twice: a new console got a support code and a Capcom ID, then logged in again and found its Capcom ID.
+   The console doesn't show the world server list on LMP: it fetches it and the FMP address, then goes straight
+   to FMP, where the server list screen is served (`LayerStart`, …: M2).
 2. Every OPN and LMP connection of the corpus replays cleanly against the Rust server, not only `s00` and `s01`:
    the login connections of `s02`–`s06` are the same three sequences (see "Protocol").
 3. Tier 3: scripted logins pass (see Tests). Tier 4: the nightly job replays the corpus against the pinned Python
