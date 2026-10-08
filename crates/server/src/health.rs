@@ -3,17 +3,16 @@
 //!
 //! - `GET /health/live`: 200 when the server's runtime answers. The container healthcheck; failing
 //!   it justifies a restart.
-//! - `GET /health/ready`: 200 when Postgres and Valkey answer too, 503 (with the reason) otherwise.
-//!   A dependency outage doesn't make the server unhealthy: players already in town or on a quest
-//!   don't need either, a restart would drop them, and both clients reconnect by themselves. It
-//!   only means "don't send new players here".
+//! - `GET /health/ready`: 200 when PostgreSQL answers too, 503 (with the reason) otherwise.
+//!   A database outage doesn't make the server unhealthy: players already in town or on a quest
+//!   don't need it, a restart would drop them, and the pool reconnects by itself. It only means
+//!   "don't send new players here".
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream as StdTcpStream};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use redis::aio::ConnectionManager;
 use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -25,7 +24,6 @@ const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Clone)]
 pub struct Deps {
     pub db: PgPool,
-    pub valkey: ConnectionManager,
 }
 
 pub async fn serve(listener: TcpListener, deps: Deps, shutdown: CancellationToken) {
@@ -69,23 +67,11 @@ async fn answer(mut stream: TcpStream, deps: &Deps) -> Result<()> {
 
 /// `None` when every dependency answers, otherwise one line per failure.
 async fn not_ready(deps: &Deps) -> Option<String> {
-    let db = tokio::time::timeout(CHECK_TIMEOUT, sqlx::query("SELECT 1").execute(&deps.db));
-    let mut valkey = deps.valkey.clone();
-    let ping = redis::cmd("PING");
-    let valkey = tokio::time::timeout(CHECK_TIMEOUT, ping.query_async::<String>(&mut valkey));
-    let (db, valkey) = tokio::join!(db, valkey);
-    let mut reasons = String::new();
-    match db {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => reasons += &format!("postgres: {e}\n"),
-        Err(_) => reasons += "postgres: timed out\n",
+    match tokio::time::timeout(CHECK_TIMEOUT, sqlx::query("SELECT 1").execute(&deps.db)).await {
+        Ok(Ok(_)) => None,
+        Ok(Err(e)) => Some(format!("postgres: {e}\n")),
+        Err(_) => Some("postgres: timed out\n".to_owned()),
     }
-    match valkey {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => reasons += &format!("valkey: {e}\n"),
-        Err(_) => reasons += "valkey: timed out\n",
-    }
-    (!reasons.is_empty()).then_some(reasons)
 }
 
 /// `mh3sp healthcheck`: asks a running server whether it is live. Blocking, no runtime needed.

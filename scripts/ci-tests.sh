@@ -8,12 +8,11 @@ cd "$(dirname "$0")/.."
 
 if [ "${1:-}" = "--docker" ]; then
   image=$(sed -n 's/^ *image: *\(rust:.*\)/\1/p' .woodpecker/push.yml | head -1)
-  # Tests reach the dev Postgres/Valkey (scripts/dev.sh) through the host.
+  # Tests reach the dev Postgres (scripts/dev.sh) through the host.
   exec docker run --rm -v "$PWD":/src -w /src -v mh3sp-rs-ci-target:/target \
     --add-host host.docker.internal:host-gateway \
     -e CARGO_TARGET_DIR=/target \
     -e DATABASE_URL=postgres://mh3sp:mh3sp@host.docker.internal:55432/mh3sp \
-    -e VALKEY_URL=redis://host.docker.internal:56379 \
     "$image" scripts/ci-tests.sh
 fi
 

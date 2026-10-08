@@ -15,7 +15,6 @@ anyhow = "1.0.104"
 bytes = "1.12.1"
 futures-util = "0.3.34"
 openssl = "0.10.81"
-redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "signal"] }

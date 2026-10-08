@@ -1,6 +1,5 @@
 # Dev dependencies. The server itself runs with `cargo run`.
 # DATABASE_URL=postgres://mh3sp:mh3sp@localhost:55432/mh3sp
-# VALKEY_URL=redis://localhost:56379
 #
 # Not here on purpose: AltWFC / NAT negotiation. Behind Docker's port mapping it
 # sees rewritten client addresses and P2P fails (error 11688). Run it natively.
@@ -17,14 +16,5 @@ services:
       - ./data/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mh3sp"]
-      interval: 2s
-      retries: 15
-
-  valkey:
-    image: valkey/valkey:8
-    ports:
-      - "56379:6379"
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
       interval: 2s
       retries: 15

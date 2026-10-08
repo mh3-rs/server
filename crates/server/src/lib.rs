@@ -35,7 +35,7 @@ impl Running {
     }
 }
 
-/// Connects to Postgres and Valkey (failing if either is unreachable), runs migrations, binds
+/// Connects to PostgreSQL (failing if it is unreachable), runs migrations, binds
 /// every configured listener and starts serving.
 pub async fn start(config: &Config) -> Result<Running> {
     let db = sqlx::PgPool::connect(&config.database.url)
@@ -45,14 +45,6 @@ pub async fn start(config: &Config) -> Result<Running> {
         .run(&db)
         .await
         .context("run migrations")?;
-    let valkey = redis::Client::open(config.valkey.url.as_str()).context("Valkey URL")?;
-    let mut valkey = redis::aio::ConnectionManager::new(valkey)
-        .await
-        .context("connect to Valkey")?;
-    redis::cmd("PING")
-        .query_async::<String>(&mut valkey)
-        .await
-        .context("Valkey PING")?;
 
     let shutdown = CancellationToken::new();
     let mut tasks = JoinSet::new();
@@ -83,7 +75,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         .with_context(|| format!("bind health on {}", config.listen.health))?;
     net::announce("health", &listener)?;
     let health = listener.local_addr()?;
-    let deps = health::Deps { db, valkey };
+    let deps = health::Deps { db };
     tasks.spawn(health::serve(listener, deps, shutdown.clone()));
 
     info!("server ready");

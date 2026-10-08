@@ -1,4 +1,4 @@
-//! Server configuration: one TOML file, with `DATABASE_URL` and `VALKEY_URL` overriding it
+//! Server configuration: one TOML file, with `DATABASE_URL` overriding the database URL
 //! (handy for containers). See `config.example.toml`.
 
 use std::net::SocketAddr;
@@ -13,10 +13,9 @@ pub struct Config {
     pub listen: Listen,
     pub tls: Tls,
     pub database: Url,
-    pub valkey: Url,
 }
 
-/// Where each role listens. A role without an address is disabled (fleet nodes can specialise).
+/// Where each role listens. A role without an address is disabled.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Listen {
@@ -48,9 +47,6 @@ impl Config {
             toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
         if let Ok(url) = std::env::var("DATABASE_URL") {
             config.database.url = url;
-        }
-        if let Ok(url) = std::env::var("VALKEY_URL") {
-            config.valkey.url = url;
         }
         Ok(config)
     }

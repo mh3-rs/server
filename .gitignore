@@ -5,5 +5,3 @@ target/
 data/
 .env
 config.toml
-# Valkey snapshot written by the Woodpecker local runner (its service runs in the mounted tree)
-dump.rdb

@@ -1,5 +1,5 @@
 # mh3sp server image. Configuration: /opt/mh3sp/config.toml (a copy of config.example.toml;
-# mount your own to change it), DATABASE_URL and VALKEY_URL override its URLs.
+# mount your own to change it), DATABASE_URL overrides its URL.
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /src
 COPY . .
@@ -17,6 +17,6 @@ COPY certs/dev certs/dev
 USER mh3sp
 # OPN (TLS), LMP, FMP, health.
 EXPOSE 8200 8201 8202 8280
-# Liveness only: a Postgres/Valkey outage shows on /health/ready, not here (see crates/server/src/health.rs).
+# Liveness only: a Postgres outage shows on /health/ready, not here (see crates/server/src/health.rs).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD ["mh3sp", "healthcheck"]
 ENTRYPOINT ["mh3sp"]

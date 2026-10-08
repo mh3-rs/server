@@ -1,8 +1,8 @@
 #!/bin/sh
-# Start the dev environment (Postgres + Valkey), make sure .env has every key the server and
+# Start the dev environment (PostgreSQL), make sure .env has every key the server and
 # sqlx need, and create config.toml from config.example.toml. Idempotent: rerun it any time;
 # existing .env values and an existing config.toml are kept.
-#   scripts/dev.sh --reset   also wipes the Postgres and Valkey data first (needed after a schema change: before
+#   scripts/dev.sh --reset   also wipes the Postgres data first (needed after a schema change: before
 #                            1.0.0 the schema file is rewritten in place, which sqlx refuses on an existing database)
 set -eu
 cd "$(dirname "$0")/.."
@@ -15,7 +15,6 @@ fi
 
 # key=default; only keys missing from .env are appended.
 DEFAULTS='DATABASE_URL=postgres://mh3sp:mh3sp@localhost:55432/mh3sp
-VALKEY_URL=redis://localhost:56379
 RUST_LOG=info,sqlx=warn'
 
 touch .env
@@ -29,5 +28,5 @@ done
 # Created up front: Docker on macOS creates a missing bind-mount folder too late for Postgres 18's entrypoint.
 mkdir -p data/postgres
 docker compose up -d --wait
-echo "dev env ready: Postgres localhost:55432, Valkey localhost:56379 (stop: docker compose down)"
+echo "dev env ready: Postgres localhost:55432 (stop: docker compose down)"
 echo "run the server: cargo run -p server"

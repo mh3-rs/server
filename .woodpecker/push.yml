@@ -8,8 +8,6 @@ services:
       POSTGRES_USER: mh3sp
       POSTGRES_PASSWORD: mh3sp
       POSTGRES_DB: mh3sp
-  - name: valkey
-    image: valkey/valkey:8
 
 steps:
   - name: check
@@ -18,6 +16,5 @@ steps:
       # Separate from the developer's target/ when the local runner mounts the working tree.
       CARGO_TARGET_DIR: target/ci
       DATABASE_URL: postgres://mh3sp:mh3sp@postgres:5432/mh3sp
-      VALKEY_URL: redis://valkey:6379
     commands:
       - scripts/ci-tests.sh

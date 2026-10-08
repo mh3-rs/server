@@ -5,7 +5,7 @@ the server at startup and checked against PostgreSQL 18 (constraints exercised b
 range, HMAC length, disc ids, terms versions starting at 2, internal ids refused from outside). Rewritten in place
 until 1.0.0 (`scripts/dev.sh --reset` after a change). This document keeps the reasoning; the file is the truth.
 
-Inputs: decisions D1–D7, V1–V4, support code storage, identity (`M1 login funnel.md`).
+Inputs: decisions D1–D7, support code storage, identity (`M1 login funnel.md`).
 
 ## Principles
 
@@ -20,8 +20,8 @@ Inputs: decisions D1–D7, V1–V4, support code storage, identity (`M1 login fu
 - **Defaults live in the code, the database only holds overrides**: every text key (an enum) and the default terms
   have an English default in the code, so a missing text is a compile error. Nothing is inserted at startup or
   seeded. Lookup: database (key, console language) → database (key, `en`) → code default.
-- **Only permanent data.** Sessions, tickets, pairing codes, presence, populations, ownership leases and the fleet
-  registry are in the cache (V1). Live worlds (gates, cities, quests in progress) are in node memory.
+- **Only permanent data.** Sessions, tickets, pairing codes, presence, populations and live worlds (gates, cities,
+  quests in progress) are in the server's memory.
 - **No secrets in clear**: support codes are stored as HMAC-SHA256(pepper, code), 32 bytes; the pepper comes from
   the environment and never changes.
 - **Game bytes stay bytes**: hunter names are `bytea` (the game may use Shift-JIS); identifiers the game formats
@@ -43,8 +43,8 @@ The SQL is in `migrations/0001_schema.sql`. Per table, what it holds and why:
 
 Not in the database: **world servers** (the 12 of MH3SP: names, types, capacity), **server types** (HR limits) and
 the **world layout** (40 gates × 100 players, 40 cities × 4 per gate). They are game constants in the code,
-optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only (every node of a fleet
-gets the same config). A world server is identified by its name (`Valor1`) in logs, leases and presence.
+optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only. A world server is
+identified by its name (`Valor1`) in logs and presence.
 
 ## Later tables, sketched to check the M1 tables hold
 
@@ -52,7 +52,7 @@ Not part of M1: shown only to see whether M1's tables would need reshaping later
 later table points at `consoles` or `hunters` by id.
 
 ```sql
--- M5/M7: website accounts and the whitelist.
+-- M8: website accounts and access (pairing).
 accounts        (id, public_id, email unique, password_hash /* argon2: human passwords */, created_at, …)
 consoles        + account_id bigint NULL REFERENCES accounts ON DELETE SET NULL  -- linked by pairing
                 + approval text CHECK (approval IN ('pending', 'approved', 'denied'))  -- per the 'access' setting:

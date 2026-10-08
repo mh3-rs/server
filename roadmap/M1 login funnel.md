@@ -69,8 +69,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - **D2 World servers**: game constants in the code (MH3SP's 12: Valor1–4 Open, Beginners1–2 Rookie, Veterans1–2
   Expert, Greed1–4 Recruiting; server types with their HR limits; the world layout of 40 gates × 40 cities),
   optionally overridden by a `[[world_servers]]` list in `config.toml`, read at startup only and validated (unique
-  names, length, known types). Every node of a fleet gets the same config. Identified by name in logs, leases and
-  presence. Not in the database, not editable from the website (YAGNI).
+  names, length, known types). Identified by name in logs and presence. Not in the database, not editable from the website (YAGNI).
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
   future step (it needs the EC/shop patch). **No public services: players use our patch, which points every
   hostname of the game (Nintendo login, GameSpy, NAT negotiation, Capcom) at our domain.** A patch is needed anyway
@@ -81,9 +80,9 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   characters). Services to run, as observed in the captures: the Nintendo login (HTTP), GameSpy's availability
   check (UDP 27900), NAT negotiation (UDP 27901): AltWFC until our own.
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
-  `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M5), not
-  whitelisted (M5); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
-  `mh3sp maintenance "<message>"`: no database, no Valkey (it only reads `config.toml` for ports and the TLS
+  `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M6), not
+  not allowed (`access`, M8); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
+  `mh3sp maintenance "<message>"`: no database (it only reads `config.toml` for ports and the TLS
   certificate); it listens on OPN (Wii TLS), refuses everyone with that message, and serves `/health/live`. With
   compose: add `command: ["maintenance", "…"]` and `docker compose up -d`; remove it and `up -d` again to come back.
 - **D5 The pause before `ReqConnection`**: probably needed (the same issue was met in an earlier attempt), likely
@@ -93,39 +92,24 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   fallback; the console sends its language in `AnsConnection`.
 - **D7 Generated ids**: the game's formats: support codes 11 characters, PAT tickets 11, Capcom IDs 6, alphabet
   `0-9A-Z` (what MH3SP uses and the game accepts). Drawn from a cryptographic random source; unique (database for
-  support codes and Capcom IDs, Valkey for tickets).
+  support codes and Capcom IDs, in memory for tickets).
 
 ### Open
 
 - [ ] **Schema**: [`migrations/0001_schema.sql`](../migrations/0001_schema.sql), reasoning in [`M1 schema.md`](M1%20schema.md); under review.
-- [x] **V1 Cache**: Valkey is optional. A `Cache` trait with two implementations, chosen at startup: Valkey when
-      configured, in-memory otherwise (single node only; the `[valkey]` config section and the compose service are
-      optional). Covers JSON values with an expiry, delete, set-if-absent (ownership leases), publish/subscribe.
-      Never a source of truth, no persistence; not needed to be live.
-- [x] **V1 runtime**: the cache is chosen once at startup and never switched; with Valkey configured and unreachable,
-      it's an error and the server is live but not ready (no new players) until Valkey answers again. The handle is
-      passed to the code that needs it (not a global: tests run several servers in one process).
-- [x] **Dependency outages** (changes decision 9 of the global roadmap):
+- [x] **Temporary data in memory**: sessions and PAT tickets, pairing codes, presence, populations live in the
+      server's memory (no Valkey, no cache abstraction). A session (Capcom ID, slot, language, region, NAT hostname,
+      stage) expires after about 2 minutes and is refreshed while its console is connected. A restart loses them,
+      which only affects people connected at that moment.
+- [x] **Database outages**:
       - at startup: the server starts anyway, logs the error and retries in a loop; it is **unhealthy**
-        (`/health/live` fails) until Postgres and Valkey (when configured) are both up, the migrations have run and
-        it has become ready once (nobody can be connected yet, so a restart loses nothing);
-      - after that: Postgres or Valkey down makes it **not ready** (no new players; `/health/ready` names the
-        dependency), never unhealthy: with an orchestrator, unhealthy means a restart, which would disconnect every
-        player in town or on a quest and fix nothing;
-      - both outages are logged at `error`: either way players can't join, so a human should look.
-      - in practice: players already in a gate, a city or a quest keep playing (all of that lives in node memory;
-        hunts are console-to-console); players trying to join get the "not ready" text in the game. Actions that
-        need a dependency mid-game fail cleanly (an in-game message, the player stays connected): with Postgres
-        down, anything writing permanent data (friends M3, bans M5, flags M6); with Valkey down, cross-node actions
-        (messages to another world server, presence) and switching world server (a new FMP connection finds its
-        session through Valkey). Every later milestone handles this for its own features.
-- [ ] **Valkey at all?** A fleet is not expected (see the global roadmap). With a single server, Valkey's only
-      benefit is that temporary data (tickets ~2 min, pairing codes ~10 min) survives a server restart. Proposed:
-      in-memory only, no Valkey and no `Cache` trait (YAGNI); a future fleet would bring Valkey back. To decide.
-- [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
-- [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
-      short time (about 2 minutes) and is refreshed while its console is connected.
-- [x] **V4 Value format**: one JSON value per key, with an expiry.
+        (`/health/live` fails) until the database is up, the migrations have run and it has become ready once
+        (nobody can be connected yet, so a restart loses nothing);
+      - after that: the database down makes it **not ready** (no new players; `/health/ready` says why), never
+        unhealthy (a restart would disconnect every player and fix nothing), logged at `error`;
+      - players already in a gate, a city or a quest keep playing (all of that lives in memory; hunts are
+        console-to-console); players trying to join get the "not ready" text in the game; actions that need the
+        database mid-game (friends M3, bans M6) fail cleanly: an in-game message, the player stays connected.
 - [x] **Support code storage**: never in clear; looked up by HMAC-SHA256(pepper, support code), the pepper a server
       secret outside the database (environment), never changed. Support codes are random (~57 bits), so a slow
       password hash (Argon2) brings nothing and can't be looked up; the keyed hash can, and a leaked database alone
@@ -158,16 +142,16 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 
 ### Maintenance mode
 - [ ] Standalone (D4): OPN with Wii TLS, every console refused with the message given as an argument,
-      `/health/live`; no database, Valkey or file.
+      `/health/live`; no database.
 
 ### LMP
 - [ ] Support codes: read from `AnsConnection`, or issued in `AnsLoginInfo` for a first-time console.
-- [ ] PAT tickets in Valkey with a TTL (`AnsTicket`); the next connection finds its session by ticket.
+- [ ] PAT tickets in memory with an expiry (`AnsTicket`); the next connection finds its session by ticket.
 - [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
 - [ ] Server time.
 - [ ] World servers from the built-in list or the `config.toml` override (D2), validated at startup.
 - [ ] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
-      external address (single server: no ownership leases).
+      external address.
 
 ### Config
 - [ ] `external_address`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
@@ -175,7 +159,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ### Database
 - [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
       since `sqlx::migrate!` embeds migrations at compile time).
-- [x] `scripts/dev.sh --reset`: drops the dev database and Valkey data, for schema changes.
+- [x] `scripts/dev.sh --reset`: drops the dev database, for schema changes.
 - [ ] Tests use a fresh database each run (`#[sqlx::test]`), so a rewritten schema file never trips them.
 
 ### Checks with a real console (Dolphin)

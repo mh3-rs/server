@@ -1,5 +1,5 @@
 //! The Rust server, started in-process on random ports, against the scripted console and the corpus.
-//! Needs Postgres and Valkey: `DATABASE_URL` / `VALKEY_URL` (scripts/dev.sh locally, services in CI).
+//! Needs PostgreSQL: `DATABASE_URL` (scripts/dev.sh locally, a service in CI).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -35,9 +35,6 @@ fn config() -> Config {
         },
         database: Url {
             url: env("DATABASE_URL"),
-        },
-        valkey: Url {
-            url: env("VALKEY_URL"),
         },
     }
 }
