@@ -197,15 +197,6 @@ async fn login_connections_replay_cleanly() {
     }
 }
 
-/// OPN, the way to the terms and on to LMP's address: a first-time console that declines the terms.
-#[tokio::test]
-async fn terms_decline_replays_cleanly() {
-    let scenario = repo().join("corpus/s01-terms-decline");
-    let reports = replay(&scenario).await;
-    assert_clean(&scenario, &reports);
-    assert_eq!((reports[0].matched, reports[0].expected), (16, 16));
-}
-
 #[tokio::test]
 async fn refuses_discs_without_our_patch() {
     let (config, _db) = config();

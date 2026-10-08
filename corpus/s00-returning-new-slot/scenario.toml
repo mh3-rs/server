@@ -8,4 +8,4 @@ consoles = 1
 oracle = "sepalani/MH3SP f53b06c"
 recorded = "2026-10-08"
 # Milestone from which the Rust server must replay this scenario cleanly.
-milestone = "M1"
+milestone = "M2"

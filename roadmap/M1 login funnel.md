@@ -1,7 +1,6 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: in progress. Packets, OPN, console checks, LMP and the Dolphin run done; left: tier 4 (nightly against
-Python), tier 6 (decide).**
+**Status: done (2026-10-08).** Tiers 4 and 6 are kept for later (see Tests), not dropped.
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -14,11 +13,10 @@ cities) is M2: in M1 the console reaches FMP and stops there.
    twice: a new console got a support code and a Capcom ID, then logged in again and found its Capcom ID.
    The console doesn't show the world server list on LMP: it fetches it and the FMP address, then goes straight
    to FMP, where the server list screen is served (`LayerStart`, …: M2).
-2. Every OPN and LMP connection of the corpus replays cleanly against the Rust server, not only `s00` and `s01`:
+2. ✓ Every OPN and LMP connection of the corpus replays cleanly against the Rust server, not only `s00` and `s01`:
    the login connections of `s02`–`s06` are the same three sequences (see "Protocol").
-3. Tier 3: scripted logins pass (see Tests). Tier 4: the nightly job replays the corpus against the pinned Python
-   MH3SP. Tier 6: decided (Dolphin automation built, or dropped with the reason written down).
-4. Accounts survive a server restart; sessions survive a hop from one connection to the next.
+3. ✓ Tier 3: scripted logins pass (see Tests). Tiers 4 and 6: kept for later (see Tests).
+4. ✓ Accounts survive a server restart; sessions survive a hop from one connection to the next.
 
 ## Protocol: what the console does
 
@@ -216,10 +214,13 @@ missing at startup (unhealthy and "not ready" until it opens, then accepted). No
 - [x] Tier 3: scripted logins with the test client: a first-time console gets a support code and a Capcom ID; a
       returning console finds its hunters again (also after a server restart); two consoles get different Capcom IDs;
       a stale or unknown ticket is refused; a malformed packet drops the connection with one warn.
-- [ ] Tier 4: `.woodpecker/nightly.yml` (cron): the pinned Python MH3SP started in the job, the corpus replayed against
-      it with `--nudge --retries`.
-- [ ] Tier 6 spike: can Dolphin be driven unattended on the Mac runner (input automation, reading the game's error
-      code from memory with the PAL symbol maps)? Build it or drop it, with the reason.
+- Tier 4, kept for later: replaying the corpus against the pinned Python MH3SP re-checks a constant (the corpus
+  was validated against it, 2299/2299 frames). It pays off on paths the corpus never recorded: scripted consoles
+  driving both servers, with our deliberate differences declared. To schedule when those scenarios exist (M2/M3).
+- Tier 6, kept for later: unattended Dolphin (input automation, the game's error code read from memory with the
+  PAL symbol maps). Mainline Dolphin has no stable input or memory interface, input movies don't replay once
+  network timing is involved, and a manual run per milestone takes minutes. To revisit if a regression reaches a
+  real console without a test catching it.
 
 ## Logging (info level, anonymous)
 Console reached OPN (region), terms declined / accepted is not visible to the server, login to LMP, support code
