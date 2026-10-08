@@ -38,6 +38,91 @@ pub enum Text {
     UnsupportedDisc,
     Unpatched,
     NotAllowed,
+    // The server type list (content binary 0x01): MH3SP's labels.
+    ServerTypeName(usize),
+    ServerTypeDescription(usize),
+    /// What a city is looking for (32 slots; the last ones unnamed).
+    CitySeeking(usize),
+    /// A city's HR limit (8 slots).
+    CityHrLimit(usize),
+    /// A city's goal (64 slots; the last ones unnamed).
+    CityGoal(usize),
+}
+
+const SERVER_TYPE_NAMES: [&str; 4] = ["Open", "Rookie", "Expert", "Recruiting"];
+const SERVER_TYPE_DESCRIPTIONS: [&str; 4] = [
+    "Hunters of all Ranks\ncan gather here.",
+    "Only hunters HR 30\nor lower may enter.",
+    "Only hunters HR 31\nor higher may enter.",
+    "Hunters in search of\nhunting companions\ncan gather here.",
+];
+const CITY_SEEKINGS: [&str; 18] = [
+    "Everyone welcome!",
+    "Casual play",
+    "Huntin' and chattin'",
+    "Beginners welcome!",
+    "Skilled players only",
+    "Let's Quest together",
+    "Event Quest ho!",
+    "Arena battles!",
+    "Earning money",
+    "HR grinding",
+    "Gathering materials",
+    "Rare material search",
+    "Just a Quest or two",
+    "In for the long haul",
+    "Playing with friends",
+    "Solo play",
+    // MH3SP's own.
+    "Stream Lobby",
+    "Turns",
+];
+const CITY_HR_LIMITS: [&str; 3] = ["None", "Low", "High"];
+const CITY_GOALS: [&str; 36] = [
+    "None",
+    "HR1~",
+    "HR9~",
+    "HR18~",
+    "HR31~",
+    "HR40~",
+    "HR51~",
+    "1* Urgent Quest",
+    "2* Urgent Quest",
+    "3* Urgent Quest",
+    "4* Urgent Quest",
+    "5* Urgent Quest",
+    "Great Jaggi",
+    "Qurupecco",
+    "Royal Ludroth",
+    "Barroth",
+    "Gobul",
+    "Rathian",
+    "Great Baggi",
+    "Gigginox",
+    "Lagiacrus",
+    "Barioth",
+    "Rathalos",
+    "Diablos",
+    "Uragaan",
+    "Agnaktor",
+    "Jhen Mohran",
+    "Deviljho",
+    "Alatreon",
+    "Mining Ore",
+    "Catching Bugs",
+    "Fishing",
+    "Small Monsters",
+    "Gathering",
+    "Transporting",
+    "The Arena",
+];
+
+/// `list[i]`, or a numbered placeholder past its end (`Goal40`).
+fn indexed(list: &[&'static str], i: usize, placeholder: &str) -> Cow<'static, str> {
+    list.get(i).map_or_else(
+        || Cow::Owned(format!("{placeholder}{i}")),
+        |s| Cow::Borrowed(*s),
+    )
 }
 
 /// A refusal screen: the title, a line, and a highlighted line.
@@ -56,6 +141,11 @@ macro_rules! refusal {
 
 pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
     Cow::Borrowed(match text {
+        Text::ServerTypeName(i) => return indexed(&SERVER_TYPE_NAMES, i, "Type"),
+        Text::ServerTypeDescription(i) => return indexed(&SERVER_TYPE_DESCRIPTIONS, i, "Type"),
+        Text::CitySeeking(i) => return indexed(&CITY_SEEKINGS, i, "Seeking"),
+        Text::CityHrLimit(i) => return indexed(&CITY_HR_LIMITS, i, "Limit"),
+        Text::CityGoal(i) => return indexed(&CITY_GOALS, i, "Goal"),
         // MH3SP's texts, kept while the replay harness compares against it.
         Text::Announce => concat!(
             "<BR><CENTER><BODY><SIZE=6>Monster Hunter 3 (Tri) Server Project<BR><BODY>",

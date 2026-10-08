@@ -183,17 +183,30 @@ async fn reached_scenarios_replay_cleanly() {
     }
 }
 
-/// The replay gate of M1: the login connections (OPN and LMP) of every scenario, whatever its milestone.
+/// The replay gate so far: the login connections (OPN, LMP) and FMP's server selection (the connection that picks a
+/// world server, `ReqFmpInfo2`) of every scenario, whatever its milestone.
 #[tokio::test]
-async fn login_connections_replay_cleanly() {
+async fn reached_connections_replay_cleanly() {
     for scenario in scenarios() {
-        let reports = replay(&scenario).await;
-        let login: Vec<_> = reports
-            .into_iter()
-            .filter(|r| r.name.ends_with("-opn") || r.name.ends_with("-lmp"))
+        let selection: Vec<String> = corpus::load(&scenario)
+            .unwrap()
+            .iter()
+            .flat_map(|rec| {
+                rec.connections
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.frames.iter().any(|f| f.name == "ReqFmpInfo2"))
+                    .map(|(n, c)| format!("{}-{:02}-{}", rec.console, n + 1, c.role))
+            })
             .collect();
-        assert!(!login.is_empty());
-        assert_clean(&scenario, &login);
+        let reports = replay(&scenario).await;
+        let reached: Vec<_> = reports
+            .into_iter()
+            .filter(|r| {
+                r.name.ends_with("-opn") || r.name.ends_with("-lmp") || selection.contains(&r.name)
+            })
+            .collect();
+        assert_clean(&scenario, &reached);
     }
 }
 
@@ -480,4 +493,31 @@ async fn malformed_packets_drop_the_connection() {
         Received::Closed
     ));
     running.stop().await;
+}
+
+/// Not a gate yet: prints how each FMP connection of the corpus replays, while M2 is built.
+#[tokio::test]
+#[ignore]
+async fn fmp_progress() {
+    for scenario in scenarios() {
+        for r in replay(&scenario)
+            .await
+            .iter()
+            .filter(|r| r.name.ends_with("-fmp"))
+        {
+            let first = r
+                .mismatches
+                .first()
+                .map(|m| format!("{} {:?}", m.expected.name, m.got))
+                .unwrap_or_default();
+            println!(
+                "{} {}: {}/{} {}",
+                scenario.file_name().unwrap().to_string_lossy(),
+                r.name,
+                r.matched,
+                r.expected,
+                &first[..first.len().min(160)]
+            );
+        }
+    }
 }

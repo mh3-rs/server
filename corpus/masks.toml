@@ -46,16 +46,17 @@ packet = "AnsServerTime"
 offset = 0
 len = 8
 
-# The time-driven content blob (day/night and event times).
+# The server types binary (0x01, 5068 bytes in one chunk) holds the server's start time (u32 at 772, after the
+# 14-byte header): the reference of the day/night cycle.
 [[mask]]
 packet = "AnsBinaryData"
 payload_len = 5082
-offset = 788
-len = 2
+offset = 786
+len = 4
 
 # The ports consoles are handed are the ones the server listens on (LMP_PORT, FMP_PORT): the corpus was recorded
 # with 8201 (0x2009) and 8202 (0x200a), test servers listen on random ports. After LMP's address in
-# AnsLmpConnect; as field 0x03 (a word) of the FMP records in AnsFmpListData and AnsFmpInfo.
+# AnsLmpConnect; as field 0x03 (a word) of the FMP records in AnsFmpListData(2) and AnsFmpInfo(2).
 [[mask]]
 packet = "AnsLmpConnect"
 pattern = "2009"
@@ -70,6 +71,18 @@ len = 2
 
 [[mask]]
 packet = "AnsFmpInfo"
+pattern = "0302200a"
+offset = 2
+len = 2
+
+[[mask]]
+packet = "AnsFmpListData2"
+pattern = "0302200a"
+offset = 2
+len = 2
+
+[[mask]]
+packet = "AnsFmpInfo2"
 pattern = "0302200a"
 offset = 2
 len = 2

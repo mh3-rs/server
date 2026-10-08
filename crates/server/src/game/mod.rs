@@ -5,6 +5,7 @@ pub mod fmp;
 pub mod lmp;
 pub mod opn;
 pub mod players;
+pub mod world;
 
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -91,6 +92,24 @@ impl Handler {
 pub struct Session {
     pub console: Console,
     pub capcom_id: Option<String>,
+    /// The world server picked (1-based, `FmpInfo2`).
+    pub world_server: Option<u32>,
+    /// The hunter's public profile block, written by the console (`UserBinarySet`).
+    pub profile: Box<[u8; PROFILE_SIZE]>,
+}
+
+/// The size of the hunter profile block.
+pub const PROFILE_SIZE: usize = 0x100;
+
+impl Session {
+    pub fn new(console: Console) -> Self {
+        Session {
+            console,
+            capcom_id: None,
+            world_server: None,
+            profile: Box::new([0; PROFILE_SIZE]),
+        }
+    }
 }
 
 /// Why a connection is dropped.

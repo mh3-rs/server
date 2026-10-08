@@ -1,10 +1,39 @@
 # Where the Rust server differs from the recordings on purpose. Same format as masks.toml (the bytes are ignored
 # when comparing), plus a required `reason`. Each entry goes away when its reason does.
 
-# M1 has no world servers yet: every population is 0. The recordings have dev1 on Valor1 (the first entry's
-# population, field 0x08) when dev2 lists the servers.
+# World server populations (field 0x08, a long, of each record in the LMP and FMP lists). The Rust server has no
+# populations before the world (M2). MH3SP also counts ghosts: its LMP handler joins the servers the console only
+# asks the address of (`ReqFmpInfo` for 11 and 12), leaving one player on Greed4 in every recording; and dev1 on
+# Valor1 in s04 is real. To narrow to the ghosts once populations exist.
 [[mask]]
 packet = "AnsFmpListData"
-offset = 50
+pattern = "0803"
+offset = 2
 len = 4
-reason = "populations come with the world servers (M2)"
+reason = "world server populations (M2 world; MH3SP's ghost on Greed4)"
+
+[[mask]]
+packet = "AnsFmpListData2"
+pattern = "0803"
+offset = 2
+len = 4
+reason = "world server populations (M2 world; MH3SP's ghost on Greed4)"
+
+# Content binaries: their version is derived from their bytes (M2 D2), MH3SP numbers them (1, the event slot, …).
+[[mask]]
+packet = "AnsBinaryVersion"
+offset = 1
+len = 4
+reason = "content versions derive from the bytes (M2 D2)"
+
+[[mask]]
+packet = "AnsBinaryHead"
+offset = 0
+len = 4
+reason = "content versions derive from the bytes (M2 D2)"
+
+[[mask]]
+packet = "AnsBinaryData"
+offset = 0
+len = 4
+reason = "content versions derive from the bytes (M2 D2)"

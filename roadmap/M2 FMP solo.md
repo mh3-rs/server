@@ -83,7 +83,12 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       (`Players`, a `DashMap` by Capcom ID) with a mailbox per connection; a second login of the same Capcom ID
       kicks the first; a disconnect unregisters only its own entry. The mailbox's frame channel comes with the
       first notification sent to someone else. Scripted test: `fmp_sessions_hop_and_kick`.
-- [ ] FMP connection 1: content downloads, world server list (populations from the world), pick.
+- [x] FMP connection 1 (server selection): content downloads (one snapshot per download, versions from the
+      bytes; binaries `0x01` server types, `0x05` MH3SP's placeholder: its purpose is unknown, the game fetches it
+      as file 5), `LayerStart`, search info (two numbers derived from the Capcom ID), the profile block (in the
+      session), the world server list and the pick. Every server selection connection of the corpus replays
+      cleanly (17, `s00` whole), now in the replay gate. Divergences: content versions; populations (0 until the
+      world; MH3SP's ghost on Greed4: its LMP joins the servers the console only asks the address of).
 - [ ] FMP connection 2: gates, entering a gate, city list and creation, layer user lists.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
 - [ ] Content binaries (D1); the content folder with MH3SP's event files (D2); time (D6).

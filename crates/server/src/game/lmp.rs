@@ -13,7 +13,7 @@ use tracing::{Span, info};
 use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
-use super::{Fault, Handled, Session, reply, server_time, unexpected};
+use super::{Fault, Handled, Session, reply, server_time, unexpected, world};
 use crate::Shared;
 use crate::accounts::{self, SUPPORT_CODE_LEN, random_id};
 
@@ -24,24 +24,6 @@ const SECOND_VISIT: u8 = 2;
 /// What a slot without a Capcom ID shows.
 const EMPTY_SLOT: &[u8] = b"******";
 const SLOTS: u32 = 6;
-
-/// The world servers (MH3SP's): name and type (1 open, 2 rookie, 3 expert, 4 recruiting).
-const WORLD_SERVERS: [(&str, u64); 12] = [
-    ("Valor1", 1),
-    ("Valor2", 1),
-    ("Valor3", 1),
-    ("Valor4", 1),
-    ("Beginners1", 2),
-    ("Beginners2", 2),
-    ("Veterans1", 3),
-    ("Veterans2", 3),
-    ("Greed1", 4),
-    ("Greed2", 4),
-    ("Greed3", 4),
-    ("Greed4", 4),
-];
-const WORLD_SERVER_CAPACITY: u32 = 2000;
-const FMP_LIST_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
@@ -135,10 +117,7 @@ impl Lmp {
                 };
                 Span::current().record("console", tracing::field::display(console.public_id));
                 info!(region, "logged in");
-                self.session = Some(Session {
-                    console,
-                    capcom_id: None,
-                });
+                self.session = Some(Session::new(console));
                 reply(
                     seq,
                     &AnsLoginInfo {
@@ -244,7 +223,7 @@ impl Lmp {
                 reply(
                     seq,
                     &AnsFmpListVersion {
-                        version: FMP_LIST_VERSION,
+                        version: world::LIST_VERSION,
                     },
                 )
             }
@@ -254,33 +233,13 @@ impl Lmp {
                     seq,
                     &AnsFmpListHead {
                         unk: 0,
-                        count: WORLD_SERVERS.len() as u32,
+                        count: world::SERVERS.len() as u32,
                     },
                 )
             }
             (Stage::SecondVisit, ReqFmpListData::ID) => {
                 let r = ReqFmpListData::decode(p)?;
-                let address = external_address(shared)?;
-                let servers = WORLD_SERVERS
-                    .iter()
-                    .zip(1u32..)
-                    .skip(r.first.saturating_sub(1) as usize)
-                    .take(r.count as usize)
-                    .map(|(&(name, kind), index)| {
-                        PatData::new()
-                            .with(0x01, Item::Long(index))
-                            .with(0x02, Item::String(address.clone()))
-                            .with(0x03, Item::Word(shared.fmp_port))
-                            .with(0x07, Item::LongLong(kind))
-                            // Populations come with the world servers (M2).
-                            .with(0x08, Item::Long(0))
-                            .with(0x09, Item::Long(WORLD_SERVER_CAPACITY))
-                            .with(0x0a, Item::String(Bytes::from_static(name.as_bytes())))
-                            // Unknown; MH3SP's values.
-                            .with(0x0b, Item::String(Bytes::from_static(b"X")))
-                            .with(0x0c, Item::Long(0x1234_5678))
-                    })
-                    .collect();
+                let servers = world::list(shared, r.first, r.count)?;
                 reply(seq, &AnsFmpListData { unk: 0, servers })
             }
             (Stage::SecondVisit, ReqFmpListFoot::ID) => {
@@ -289,22 +248,7 @@ impl Lmp {
             }
             (Stage::SecondVisit, ReqFmpInfo::ID) => {
                 let r = ReqFmpInfo::decode(p)?;
-                if !(1..=WORLD_SERVERS.len() as u32).contains(&r.index) {
-                    return Err(Fault::Client(anyhow!("no world server {}", r.index)));
-                }
-                let address = external_address(shared)?;
-                let mut data = PatData::new();
-                for field in r.fields {
-                    data = match field {
-                        0x02 => data.with(field, Item::String(address.clone())),
-                        0x03 => data.with(field, Item::Word(shared.fmp_port)),
-                        _ => {
-                            return Err(Fault::Client(anyhow!(
-                                "FMP info field {field:#x} unknown"
-                            )));
-                        }
-                    };
-                }
+                let data = world::fmp_info(shared, r.index, &r.fields)?;
                 reply(seq, &AnsFmpInfo { data })
             }
             (_, id) => Err(unexpected(id)),
@@ -348,15 +292,6 @@ fn db(shared: &Shared) -> Result<&sqlx::SqlitePool, Fault> {
         .db
         .pool()
         .ok_or_else(|| server("database not opened"))
-}
-
-fn external_address(shared: &Shared) -> Result<Bytes, Fault> {
-    let address = shared
-        .config
-        .external_address
-        .as_ref()
-        .ok_or_else(|| server("EXTERNAL_ADDRESS unset"))?;
-    Ok(Bytes::copy_from_slice(address.as_bytes()))
 }
 
 fn server(message: &'static str) -> Fault {

@@ -2,6 +2,7 @@
 
 mod accounts;
 pub mod config;
+mod content;
 mod database;
 mod game;
 pub mod health;
@@ -11,7 +12,7 @@ mod tls;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use tokio::net::TcpListener;
@@ -38,6 +39,8 @@ struct Shared {
     tickets: moka::sync::Cache<String, Session>,
     /// Players logged in on FMP, by Capcom ID.
     players: Players,
+    /// When the server started (the reference of the game's day/night cycle).
+    started: SystemTime,
 }
 
 impl Shared {
@@ -122,6 +125,7 @@ pub async fn start(config: &Config) -> Result<Running> {
             .time_to_live(HANDOFF_TTL)
             .build(),
         players: Players::default(),
+        started: SystemTime::now(),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!(
