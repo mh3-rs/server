@@ -194,7 +194,8 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
       (e.g. the ticket the server just issued); in later `c2s` frames, replace the recorded value with the live one
       before sending. Values must keep their length; anything else fails loudly.
 - [ ] **Comparison**: each received `s2c` frame against the expected one: same id, then same payload outside masked
-      ranges. Ignored: `ReqLineCheck`/`AnsLineCheck` (time-driven). Report: scenario, connection, packet name,
+      ranges. Declared divergences (`corpus/divergences.toml`, see Reference policy) are accepted;
+      empty in M0, since nothing is implemented yet. Ignored: `ReqLineCheck`/`AnsLineCheck` (time-driven). Report: scenario, connection, packet name,
       first differing offset, side-by-side hexdump.
 - [ ] **Targets**: any address. `corpus replay <scenario> --opn host:port --lmp … --fmp …` for manual runs; tests
       start the Rust server in-process on random ports.
