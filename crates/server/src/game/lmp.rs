@@ -18,7 +18,6 @@ use wire::{Frame, Item, PatData};
 use super::{Fault, Handled, Session, reply, unexpected};
 use crate::Shared;
 use crate::accounts::{self, SUPPORT_CODE_LEN, random_id};
-use crate::config::FMP_PORT;
 
 /// `NtcLogin` statuses on LMP.
 const FIRST_VISIT: u8 = 1;
@@ -282,7 +281,7 @@ impl Lmp {
                         PatData::new()
                             .with(0x01, Item::Long(index))
                             .with(0x02, Item::String(address.clone()))
-                            .with(0x03, Item::Word(FMP_PORT))
+                            .with(0x03, Item::Word(shared.fmp_port))
                             .with(0x07, Item::LongLong(kind))
                             // Populations come with the world servers (M2).
                             .with(0x08, Item::Long(0))
@@ -309,7 +308,7 @@ impl Lmp {
                 for field in r.fields {
                     data = match field {
                         0x02 => data.with(field, Item::String(address.clone())),
-                        0x03 => data.with(field, Item::Word(FMP_PORT)),
+                        0x03 => data.with(field, Item::Word(shared.fmp_port)),
                         _ => {
                             return Err(Fault::Client(anyhow!(
                                 "FMP info field {field:#x} unknown"

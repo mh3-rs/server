@@ -11,7 +11,6 @@ use wire::{Frame, Item, PatData};
 
 use super::{Fault, Handled, allowed, frame, reply, unexpected};
 use crate::Shared;
-use crate::config::LMP_PORT;
 use crate::text::{Language, Terms, TermsKind, Text, terms, text};
 
 /// Where every disc keeps its game id (`RMHP08`, …).
@@ -262,7 +261,7 @@ impl Opn {
                     seq,
                     &AnsLmpConnect {
                         address: Bytes::copy_from_slice(address.as_bytes()),
-                        port: LMP_PORT,
+                        port: shared.lmp_port,
                     },
                 )
             }

@@ -199,10 +199,11 @@ missing at startup (unhealthy and "not ready" until it opens, then accepted). No
 ### Corpus and harness
 - [x] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
       scenario's milestone (FMP connections join in M2).
-- [x] Values that depend on the environment: the server hands out the fixed public ports (8201, 8202), not the
-      ones it bound, and the tests run with the recorded `EXTERNAL_ADDRESS` (`192.168.110.150`), so addresses
-      and ports match the recordings as they are (`AnsFmpListData` has 12 of them mid-payload: no mask could
-      cover them). Replaying against another environment (tier 4) will need its address set the same way.
+- [x] Values that depend on the environment. Addresses: the tests run with the recorded `EXTERNAL_ADDRESS`
+      (`192.168.110.150`), so they match as recorded (`AnsFmpListData` has 12 of them mid-payload, of variable
+      length: no mask could cover them); replaying against another environment (tier 4) needs its address set
+      the same way. Ports (fixed width): masks learn a `pattern`, applied at each occurrence, which covers the
+      LMP and FMP ports wherever they appear.
 - [x] `corpus/divergences.toml`: masks with a required `reason`, loaded with `masks.toml`. First entry: world
       server populations (0 until M2; the recordings have a player on Valor1). Our own texts will add theirs.
 

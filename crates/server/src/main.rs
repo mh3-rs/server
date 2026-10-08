@@ -3,7 +3,7 @@
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
-//! Configuration: fixed ports, environment variables for the rest, see `server::config`.
+//! Configuration: environment variables, see `server::config`.
 
 use anyhow::Result;
 use server::Config;
@@ -16,8 +16,7 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let maintenance = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => None,
-        // Fixed port: no configuration to read.
-        ["healthcheck"] => return server::health::check(Config::HEALTH),
+        ["healthcheck"] => return server::health::check(server::config::health()?),
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!("usage: mh3sp [healthcheck | maintenance \"<message>\"]"),
     };

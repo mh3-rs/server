@@ -6,7 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// Where a volatile value first appears in a server frame. See `corpus/masks.toml`.
+/// Where a volatile value first appears in a server frame, or with `pattern`, wherever that pattern appears (the
+/// offset then counts from each occurrence). See `corpus/masks.toml`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mask {
@@ -15,6 +16,8 @@ pub struct Mask {
     pub len: usize,
     pub var: Option<String>,
     pub payload_len: Option<usize>,
+    /// Hex bytes.
+    pub pattern: Option<String>,
     /// Why the Rust server differs there on purpose: required in `divergences.toml`.
     pub reason: Option<String>,
 }
@@ -49,6 +52,12 @@ impl Masks {
                 );
             }
             masks.extend(more);
+        }
+        for m in &masks {
+            if let Some(pattern) = &m.pattern {
+                crate::corpus::unhex(pattern)
+                    .with_context(|| format!("mask on {}: pattern", m.packet))?;
+            }
         }
         Ok(Self(masks))
     }
@@ -119,8 +128,22 @@ pub fn matches(
         return false;
     }
     let mut learned = Vec::new();
+    let mut ranges = Vec::new();
     for m in masks.of(packet, recorded.len()) {
-        let range = m.offset..m.offset + m.len;
+        match &m.pattern {
+            None => ranges.push((m, m.offset)),
+            Some(pattern) => {
+                let pattern = crate::corpus::unhex(pattern).expect("checked at load");
+                let at = expected.windows(pattern.len()).enumerate();
+                ranges.extend(
+                    at.filter(|(_, w)| *w == pattern)
+                        .map(|(i, _)| (m, i + m.offset)),
+                );
+            }
+        }
+    }
+    for (m, start) in ranges {
+        let range = start..start + m.len;
         if range.end > live.len() {
             continue;
         }
@@ -150,6 +173,7 @@ mod tests {
                 len: 3,
                 var: Some("pat_ticket".into()),
                 payload_len: None,
+                pattern: None,
                 reason: None,
             },
             Mask {
@@ -158,9 +182,39 @@ mod tests {
                 len: 2,
                 var: None,
                 payload_len: None,
+                pattern: None,
+                reason: None,
+            },
+            Mask {
+                packet: "AnsFmpInfo".into(),
+                offset: 2,
+                len: 2,
+                var: None,
+                payload_len: None,
+                pattern: Some("0302200a".into()),
                 reason: None,
             },
         ])
+    }
+
+    #[test]
+    fn a_pattern_masks_every_occurrence() {
+        let (masks, mut bindings) = (masks(), Bindings::default());
+        let recorded = b"\x03\x02\x20\x0a..\x03\x02\x20\x0a";
+        assert!(matches(
+            &masks,
+            &mut bindings,
+            "AnsFmpInfo",
+            recorded,
+            b"\x03\x02\x99\x99..\x03\x02\x98\x98"
+        ));
+        assert!(!matches(
+            &masks,
+            &mut bindings,
+            "AnsFmpInfo",
+            recorded,
+            b"\x03\x02\x99\x99.!\x03\x02\x98\x98"
+        ));
     }
 
     #[test]

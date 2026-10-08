@@ -1,9 +1,10 @@
-//! Server configuration. Ports and binding are fixed (`0.0.0.0`, OPN 8200, LMP 8201, FMP 8202, health 8280):
-//! consoles are handed the LMP and FMP ports, so a container must publish them unchanged. The rest comes from
-//! environment variables; a `.env` file is loaded first when present (dev).
+//! Server configuration, from environment variables; a `.env` file is loaded first when present (dev). The server
+//! listens on `0.0.0.0`, and hands consoles the LMP and FMP ports it listens on: a container must publish them
+//! unchanged (set the ports here, not in the port mapping).
 //!
 //! | Variable | Default |
 //! |---|---|
+//! | `OPN_PORT`, `LMP_PORT`, `FMP_PORT`, `HEALTH_PORT` | 8200, 8201, 8202, 8280 |
 //! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
 //! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
 //! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
@@ -22,13 +23,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use tracing::warn;
 
-/// The ports consoles are handed (`AnsLmpConnect`, `AnsFmpInfo`).
-pub const LMP_PORT: u16 = 8201;
-pub const FMP_PORT: u16 = 8202;
-
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Fixed in production (see the module doc); tests set their own to run servers side by side.
+    /// `0.0.0.0` and the configured ports; tests bind port 0 to run servers side by side.
     pub opn: SocketAddr,
     pub lmp: SocketAddr,
     pub fmp: SocketAddr,
@@ -55,18 +52,15 @@ impl fmt::Debug for Secret {
 }
 
 impl Config {
-    pub const HEALTH: SocketAddr =
-        SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 8280);
-
     pub fn from_env() -> Result<Self> {
         let get =
             |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_owned());
         let optional = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
         Ok(Self {
-            opn: SocketAddr::from(([0, 0, 0, 0], 8200)),
-            lmp: SocketAddr::from(([0, 0, 0, 0], LMP_PORT)),
-            fmp: SocketAddr::from(([0, 0, 0, 0], FMP_PORT)),
-            health: Self::HEALTH,
+            opn: listen("OPN_PORT", 8200)?,
+            lmp: listen("LMP_PORT", 8201)?,
+            fmp: listen("FMP_PORT", 8202)?,
+            health: health()?,
             tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
             tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
             database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),
@@ -76,6 +70,23 @@ impl Config {
             maintenance: None,
         })
     }
+}
+
+/// Where the health endpoint listens (`mh3sp healthcheck` asks it, reading no other setting).
+pub fn health() -> Result<SocketAddr> {
+    listen("HEALTH_PORT", 8280)
+}
+
+fn listen(key: &str, default: u16) -> Result<SocketAddr> {
+    let port = match std::env::var(key).ok().filter(|v| !v.is_empty()) {
+        None => default,
+        Some(v) => v
+            .parse::<u16>()
+            .ok()
+            .filter(|&p| p != 0)
+            .with_context(|| format!("{key}: {v:?} is not a port (1–65535)"))?,
+    };
+    Ok(SocketAddr::from(([0, 0, 0, 0], port)))
 }
 
 /// `SECRET__FILE` wins over `SECRET` (Docker secrets are files); the file's trailing newline isn't part of it.

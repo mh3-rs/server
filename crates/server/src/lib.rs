@@ -30,6 +30,9 @@ const HANDOFF_TTL: Duration = Duration::from_secs(120);
 struct Shared {
     config: Config,
     db: Arc<Database>,
+    /// The LMP and FMP ports consoles are handed: the ones listened on.
+    lmp_port: u16,
+    fmp_port: u16,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
 }
@@ -110,6 +113,8 @@ pub async fn start(config: &Config) -> Result<Running> {
     let shared = Arc::new(Shared {
         config: config.clone(),
         db,
+        lmp_port: lmp.map_or(0, |a| a.port()),
+        fmp_port: fmp.map_or(0, |a| a.port()),
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
