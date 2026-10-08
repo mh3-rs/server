@@ -213,8 +213,8 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
 
 ## 5. Replay harness (`crates/testkit`)
 
-- [ ] **Console client**: connects like the game (TLS on OPN with the same legacy settings, plain TCP otherwise),
-      sends and receives `wire` frames.
+- [x] **Console client** (`testkit/src/client.rs`): connects like the Wii (TLS ≤ 1.0 with `AES128-SHA`/`AES256-SHA`
+      on OPN, plain TCP otherwise), sends and receives `wire` frames.
 - [ ] **Replay**: for each console of a scenario, open its connections in recorded order. Before sending a recorded
       `c2s` frame, wait (with a timeout) until the `s2c` frames recorded before it have arrived; across consoles,
       `c2s` frames go out in recorded `t` order, so "dev2 joins after dev1 created the city" holds.
@@ -225,12 +225,24 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
       ranges. Declared divergences (`corpus/divergences.toml`, see Reference policy) are accepted;
       empty in M0, since nothing is implemented yet. Ignored: `ReqLineCheck`/`AnsLineCheck` (time-driven). Report: scenario, connection, packet name,
       first differing offset, side-by-side hexdump.
-- [ ] **Targets**: any address. `corpus replay <scenario> --opn host:port --lmp … --fmp …` for manual runs; tests
-      start the Rust server in-process on random ports.
+- [x] **Targets**: `corpus replay <scenario>... [--host <ip>] [--before <command>]` (standard ports on one host);
+      `--before tools/oracle.sh` gives each scenario a fresh Python MH3SP, as when it was recorded. Tests will
+      start the Rust server in-process on random ports (step 7).
 - [ ] **Outcome per scenario**: `scenario.toml`'s `milestone` decides whether a failure breaks CI (milestone reached)
       or is only reported (not yet). During M0 nothing is reached, so the Rust run reports without failing.
 - [ ] Validation against Python MH3SP: replay every scenario against the pinned Python server started from the lab;
       zero unexplained diffs is exit criterion 4. This run is manual in M0; it becomes the nightly tier 4 job in M1.
+
+### Step 4 result: first replay against Python MH3SP
+
+`s01-terms-decline` replays clean (16/16, Wii-style TLS included). The other scenarios differ only where step 5
+is expected to act:
+- volatile values: `AnsServerTime`, `AnsTicket`, Capcom IDs (`AnsUserObject`, `AnsUserListData`), the support code
+  (`AnsLoginInfo`), byte 788 of the time-driven `AnsBinaryData`;
+- the recorded PAT ticket sent back to a server that never issued it: the session isn't found
+  (`AnsUserSearchInfoMine` empty, then `NtcShut` on FMP);
+- to confirm after substitution: `AnsFmpListData(2)` byte 870, most likely a world server's population.
+Server state matters: replays without a fresh server showed slots already taken and populations growing.
 
 ## Order of work
 

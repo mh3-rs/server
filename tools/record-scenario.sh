@@ -31,18 +31,7 @@ for i in $CONSOLES; do
   dolphin_running $i && { echo "dev$i's Dolphin is already running: close it first"; exit 1; }
 done
 
-# Python MH3SP on a fresh database, so every recording starts from the same server state.
-pkill -f 'master_server.py -- --log-to-window' || true
-while pgrep -f 'master_server.py -- --log-to-window' >/dev/null; do sleep 1; done
-rm -f "$MH3SP/mh3sp.db"
-# Python MH3SP doesn't set SO_REUSEADDR: right after a restart its ports can still be held
-# by the OS, and it exits with "Address already in use". Retry until it binds.
-until lsof -nP -iTCP:8202 -sTCP:LISTEN >/dev/null; do
-  pgrep -f 'master_server.py -- --log-to-window' >/dev/null ||
-    nohup "$LAB/server.sh" > "$LAB/server-$SCENARIO.log" 2>&1 &
-  sleep 2
-done
-echo "MH3SP $(git -C "$MH3SP" rev-parse --short HEAD) running on a fresh database"
+LOG="$LAB/server-$SCENARIO.log" tools/oracle.sh
 
 marker=$(mktemp)
 for i in $CONSOLES; do
