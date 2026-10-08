@@ -61,7 +61,7 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
      node's memory, so town/party broadcasts never leave the process. `AnsFmpInfo` hands the console the owning
      node's address: that is the only "redirect", and the game already does it natively.
    - **Cross-node traffic is rare** (tells and friend requests to a player on another world server, user search,
-     population counts, admin announcements): it goes through the database (Postgres `LISTEN/NOTIFY`), no extra broker.
+     population counts, admin announcements): it goes through Valkey pub/sub (fleet phase only).
    - **Gameplay never touches the fleet** in `p2p` mode; in `relay` mode it goes through the relay of the node that
      ran the NAT negotiation, which needs a public IP without address rewriting.
 2. **Three layers, strict direction:**
@@ -71,14 +71,20 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
    - `net`: tokio listeners, per-connection task, executes `Effect`s.
 3. **Opaque bytes stay opaque.** Unknown fields (`unk_*`, magic constants) are kept as raw values in the
    structs and written back byte for byte. No "cleanups" before the replay harness proves equivalence.
-4. **What lives where.**
-   - Database: accounts (support code + slot → Capcom ID + name), friend lists, blacklists, bans, sessions and
-     PAT tickets (so a login can continue on another node, and a restart doesn't drop the login state), the
-     world-server → node ownership table, cross-node notifications.
-   - Node memory: live world state of the world servers it owns (gates, cities, circles, players' positions).
-     Never in the database: it changes many times per second and only one node uses it.
-5. **Database: PostgreSQL through `sqlx`.** Chosen over SQLite (can't be shared by a fleet) and MariaDB (no
-   `LISTEN/NOTIFY`, which covers cross-node messages without adding Redis). One engine everywhere: dev, CI, prod.
+4. **What lives where.** Live state is never shared; summaries are.
+   - **Node memory (authoritative):** the live world of the world servers the node owns: gates, cities, circles,
+     players, positions. Cities are temporary: if a node dies its consoles' TCP connections die too, so persisting
+     them would save nothing. Sharing them would turn every town update into store write + pub/sub + race-prone
+     leadership changes.
+   - **PostgreSQL (permanent):** accounts (support code + slot → Capcom ID + name), friend lists, blacklists, bans.
+   - **Valkey (temporary, shared; fleet phase):** sessions + PAT tickets (TTL), presence (who is online where, TTL),
+     population per world server/gate (written by the owning node, read by any node's LMP), cross-node messages
+     (pub/sub), world server → node ownership as a lease with TTL (a dead node's world servers get taken over and
+     players reconnect there).
+   - Single-node phase (M0–M5): Valkey's role is played by in-process implementations of the same traits
+     (`SessionStore`, `PresenceStore`, `Bus`, `OwnershipStore`). Adding Valkey changes no game logic.
+5. **Database: PostgreSQL through `sqlx`.** Chosen over SQLite (can't be shared by a fleet) and MariaDB (no real
+   advantage here). One engine everywhere: dev, CI, prod.
    Migrations with `sqlx migrate` (`migrations/`); compile-time checked queries with the offline cache
    (`cargo sqlx prepare`, `.sqlx/` committed) so CI can build without a live database, while tests use a real one.
 6. **TLS:** `openssl` crate (`tokio-openssl`) with `@SECLEVEL=0`, legacy protocol versions and
@@ -94,7 +100,7 @@ Captured with two Dolphin instances against MH3SP `dev` + native AltWFC.
 - The server runs with `cargo run`; migrations with `sqlx migrate run`.
 - Game side: the lab in `../mh3sp/lab` (Dolphin profiles, hosts toggle, native AltWFC, Python MH3SP as oracle).
 - Deliberately not in compose: AltWFC / NAT negotiation (Docker port mapping rewrites client addresses → P2P fails).
-  Python MH3SP may join compose later for tier 4 (TCP only, no such problem).
+  Python MH3SP may join compose later for tier 4 (TCP only, no such problem). Valkey joins compose with the fleet work.
 
 ## Testing strategy
 
@@ -250,6 +256,13 @@ The realistic goal is to stop casual cheats (Gecko codes, edited saves) and give
 - The external IP handed out in `AnsLmpConnect` / `AnsFmpInfo` must be reachable by clients (config, not `0.0.0.0` guessing).
 - NAT negotiation must see real client addresses: never behind Docker port mapping or a NAT-rewriting load balancer.
 - The game never retries P2P by itself: every fallback costs the player one failed attempt.
+
+## After M5: fleet
+
+- [ ] Valkey in compose, CI service and prod.
+- [ ] Valkey implementations of `SessionStore`, `PresenceStore`, `Bus`, `OwnershipStore`.
+- [ ] Ownership leases + takeover; `AnsFmpInfo` returns the owning node's external address.
+- [ ] Tier 3 scenarios across 2–3 nodes (login on one node, play on another, tell across nodes, node kill + takeover).
 
 ## Open questions
 
