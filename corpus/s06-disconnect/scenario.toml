@@ -1,0 +1,12 @@
+description = "Abrupt disconnect: dev2 joins dev1's city, then dev2's Dolphin is closed without leaving. Python only notices on its next line check (~30 s later, connection reset) and then sends NtcLayerOut to dev1."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev2: Dolphin closed abruptly",
+  "dev1: waits in the city until dev2 disappears, returns to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
