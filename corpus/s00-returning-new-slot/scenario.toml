@@ -1,0 +1,11 @@
+description = "Returning console (terms already accepted): logs in twice, the second time picking an empty Capcom ID slot."
+steps = [
+  "dev1 (save with terms already accepted): Online; the terms are downloaded but not shown",
+  "server list, back out to the Capcom ID selection",
+  "pick an empty slot (new Capcom ID), go online again",
+]
+consoles = 1
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-08"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M1"
