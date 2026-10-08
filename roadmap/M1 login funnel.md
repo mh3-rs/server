@@ -102,10 +102,14 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [x] **V1 runtime**: the cache is chosen once at startup and never switched; with Valkey configured and unreachable,
       it's an error and the server is live but not ready (no new players) until Valkey answers again. The handle is
       passed to the code that needs it (not a global: tests run several servers in one process).
-- [x] **Startup with a dependency down** (changes decision 9 of the global roadmap): the server starts anyway, logs
-      the error, and retries in a loop; it is **unhealthy** (`/health/live` fails) until it has connected, run the
-      migrations and become ready once (no player can be connected yet, so a restart loses nothing). After that, an
-      outage only makes it not ready, as before.
+- [x] **Dependency outages** (changes decision 9 of the global roadmap):
+      - at startup: the server starts anyway, logs the error and retries in a loop; it is **unhealthy**
+        (`/health/live` fails) until Postgres and Valkey (when configured) are both up, the migrations have run and
+        it has become ready once (nobody can be connected yet, so a restart loses nothing);
+      - after that: Postgres or Valkey down makes it **not ready** (no new players; `/health/ready` names the
+        dependency), never unhealthy: with an orchestrator, unhealthy means a restart, which would disconnect every
+        player in town or on a quest and fix nothing;
+      - both outages are logged at `error`: either way players can't join, so a human should look.
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
