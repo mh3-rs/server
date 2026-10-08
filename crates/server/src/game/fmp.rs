@@ -59,7 +59,23 @@ impl Fmp {
                 );
                 span.record("capcom_id", capcom_id.as_str());
                 shared.players.register(&capcom_id, self.mailbox.clone());
-                info!("joined FMP");
+                // Back from the server selection with a pick: the player enters that world server.
+                if let Some(server) = session.world_server {
+                    let mut world = shared.world.lock().unwrap();
+                    world.enter(
+                        &capcom_id,
+                        self.mailbox.conn,
+                        server,
+                        session.name.clone(),
+                        session.profile.clone(),
+                    );
+                    info!(
+                        world_server = world::SERVERS[server as usize - 1].0,
+                        "entered world server"
+                    );
+                } else {
+                    info!("joined FMP");
+                }
                 self.login = Some((session, ticket));
                 reply(seq, &NtcLogin { status: LOGGED_IN })
             }
@@ -131,20 +147,139 @@ impl Fmp {
             }
             ReqLayerStart::ID => {
                 ReqLayerStart::decode(p)?;
-                // MH3SP's placeholder layer: the console only needs the fields to exist.
-                let layer = PatData::new()
-                    .with(0x05, Item::Word(1))
-                    .with(0x03, Item::String(Bytes::from_static(b"LayerStart")))
-                    .with(0x06, Item::Long(0))
-                    .with(0x09, Item::Long(4))
-                    .with(0x10, Item::Byte(1))
-                    .with(0x11, Item::Long(500))
-                    .with(0x12, Item::Byte(1));
-                reply(seq, &AnsLayerStart { layer })
+                reply(
+                    seq,
+                    &AnsLayerStart {
+                        layer: placeholder_layer(),
+                    },
+                )
             }
             ReqLayerEnd::ID => {
+                // Back to the title, or to the server selection.
                 ReqLayerEnd::decode(p)?;
+                shared
+                    .world
+                    .lock()
+                    .unwrap()
+                    .leave(capcom_id(session), self.mailbox.conn);
                 reply(seq, &AnsLayerEnd {})
+            }
+            ReqLayerUserList::ID => {
+                ReqLayerUserList::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let users = world
+                    .neighbours(capcom_id(session))
+                    .into_iter()
+                    .map(|(id, place)| {
+                        PatData::new()
+                            .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
+                            .with(0x02, Item::String(place.name.clone()))
+                            .with(
+                                0x07,
+                                Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
+                            )
+                    })
+                    .collect();
+                reply(seq, &AnsLayerUserList { users })
+            }
+            ReqFriendList::ID => {
+                // Friends come with M3.
+                ReqFriendList::decode(p)?;
+                reply(
+                    seq,
+                    &AnsFriendList {
+                        unk: 0,
+                        friends: vec![],
+                    },
+                )
+            }
+            ReqBlackList::ID => {
+                // The black list comes with M3. MH3SP answers one blank entry rather than none: kept, the console
+                // is known to accept it.
+                ReqBlackList::decode(p)?;
+                let blank = PatData::new()
+                    .with(0x01, Item::Long(0))
+                    .with(0x02, Item::String(Bytes::new()))
+                    .with(0x03, Item::String(Bytes::new()));
+                reply(
+                    seq,
+                    &AnsBlackList {
+                        unk: 0,
+                        users: vec![blank],
+                    },
+                )
+            }
+            ReqUserStatusSet::ID => {
+                // What the player is doing (searchable, M3).
+                ReqUserStatusSet::decode(p)?;
+                reply(seq, &AnsUserStatusSet {})
+            }
+            ReqUserBinaryNotice::ID => {
+                // Tells the layer the profile changed (to the others: M3).
+                ReqUserBinaryNotice::decode(p)?;
+                reply(seq, &AnsUserBinaryNotice {})
+            }
+            ReqLayerChildListHead::ID => {
+                ReqLayerChildListHead::decode(p)?;
+                reply(
+                    seq,
+                    &AnsLayerChildListHead {
+                        unk: 0,
+                        count: u32::from(world::GATES),
+                    },
+                )
+            }
+            ReqLayerChildListData::ID => {
+                let r = ReqLayerChildListData::decode(p)?;
+                let server = world_server(session)?;
+                let children =
+                    world::gates(&shared.world.lock().unwrap(), server, r.first, r.count);
+                reply(
+                    seq,
+                    &AnsLayerChildListData {
+                        first: r.first,
+                        children,
+                    },
+                )
+            }
+            ReqLayerChildListFoot::ID => {
+                ReqLayerChildListFoot::decode(p)?;
+                reply(seq, &AnsLayerChildListFoot {})
+            }
+            ReqLayerChildInfo::ID => {
+                // MH3SP answers its placeholder layer whatever is asked; the console accepts it.
+                ReqLayerChildInfo::decode(p)?;
+                reply(
+                    seq,
+                    &AnsLayerChildInfo {
+                        unk: 1,
+                        layer: placeholder_layer(),
+                        unk2: 0,
+                    },
+                )
+            }
+            ReqLayerDown::ID => {
+                let r = ReqLayerDown::decode(p)?;
+                let mut world = shared.world.lock().unwrap();
+                let place = world
+                    .place(capcom_id(session))
+                    .ok_or_else(|| Fault::Client(anyhow!("layer down outside a world server")))?;
+                match place.gate {
+                    None if (1..=world::GATES).contains(&r.layer) => {
+                        place.gate = Some(r.layer);
+                        info!(gate = r.layer, "entered gate");
+                    }
+                    None => return Err(Fault::Client(anyhow!("no gate {}", r.layer))),
+                    Some(_) => return Err(unexpected(req.id)),
+                }
+                reply(seq, &AnsLayerDown { layer: r.layer })
+            }
+            ReqLayerUp::ID => {
+                ReqLayerUp::decode(p)?;
+                if let Some(place) = shared.world.lock().unwrap().place(capcom_id(session)) {
+                    place.gate = None;
+                }
+                reply(seq, &AnsLayerUp {})
             }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;
@@ -165,6 +300,9 @@ impl Fmp {
                     )));
                 }
                 session.profile[start..end].copy_from_slice(&r.data);
+                if let Some(place) = shared.world.lock().unwrap().place(capcom_id(session)) {
+                    place.profile[start..end].copy_from_slice(&r.data);
+                }
                 reply(seq, &AnsUserBinarySet {})
             }
             ReqUserSearchSet::ID => {
@@ -232,12 +370,47 @@ impl Fmp {
     fn unregister(&self, shared: &Shared, session: &Session) {
         if let Some(capcom_id) = &session.capcom_id {
             shared.players.unregister(capcom_id, self.mailbox.conn);
+            shared
+                .world
+                .lock()
+                .unwrap()
+                .leave(capcom_id, self.mailbox.conn);
         }
     }
 }
 
+/// MH3SP's placeholder layer (`AnsLayerStart`, `AnsLayerChildInfo`): the console only needs the fields to exist.
+fn placeholder_layer() -> PatData {
+    PatData::new()
+        .with(0x05, Item::Word(1))
+        .with(0x03, Item::String(Bytes::from_static(b"LayerStart")))
+        .with(0x06, Item::Long(0))
+        .with(0x09, Item::Long(4))
+        .with(0x10, Item::Byte(1))
+        .with(0x11, Item::Long(500))
+        .with(0x12, Item::Byte(1))
+}
+
+/// Logged in on FMP means a Capcom ID (checked at login).
+fn capcom_id(session: &Session) -> &str {
+    session.capcom_id.as_deref().unwrap_or_default()
+}
+
+fn world_server(session: &Session) -> Result<u32, Fault> {
+    session
+        .world_server
+        .ok_or_else(|| Fault::Client(anyhow!("no world server picked")))
+}
+
 /// Content binary `kind`, built now.
 fn binary(shared: &Shared, kind: u8) -> Result<Binary, Fault> {
-    content::binary(kind, shared.started, Language::default())
+    let ctx = content::Context {
+        dir: &shared.config.content_dir,
+        started: shared.started,
+        now: shared.now(),
+        language: Language::default(),
+    };
+    content::binary(kind, &ctx)
+        .map_err(Fault::Server)?
         .ok_or_else(|| Fault::Client(anyhow!("content type {kind:#x} unknown")))
 }

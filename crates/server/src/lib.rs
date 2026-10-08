@@ -39,11 +39,22 @@ struct Shared {
     tickets: moka::sync::Cache<String, Session>,
     /// Players logged in on FMP, by Capcom ID.
     players: Players,
+    /// Where the players are.
+    world: std::sync::Mutex<game::world::World>,
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
 }
 
 impl Shared {
+    /// The server's clock (the system's, shifted by `clock_offset`).
+    fn now(&self) -> SystemTime {
+        let offset = Duration::from_secs(self.config.clock_offset.unsigned_abs());
+        match self.config.clock_offset >= 0 {
+            true => SystemTime::now() + offset,
+            false => SystemTime::now() - offset,
+        }
+    }
+
     fn maintenance(&self) -> Option<&str> {
         self.config.maintenance.as_deref()
     }
@@ -113,7 +124,8 @@ pub async fn start(config: &Config) -> Result<Running> {
         Some(_) => info!("maintenance mode: every console is refused"),
         None => {
             db.connect(config.database_url.clone(), shutdown.clone())
-                .await
+                .await;
+            content::check(&config.content_dir);
         }
     }
     let shared = Arc::new(Shared {
@@ -125,6 +137,7 @@ pub async fn start(config: &Config) -> Result<Running> {
             .time_to_live(HANDOFF_TTL)
             .build(),
         players: Players::default(),
+        world: Default::default(),
         started: SystemTime::now(),
     });
     if config.maintenance.is_none() && !shared.configured() {

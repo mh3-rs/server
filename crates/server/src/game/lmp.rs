@@ -207,7 +207,9 @@ impl Lmp {
                     }
                 );
                 let user = set(r.user, 0x02, Item::String(capcom_id.clone().into()));
-                self.session.as_mut().expect("checked above").capcom_id = Some(capcom_id);
+                let session = self.session.as_mut().expect("checked above");
+                session.capcom_id = Some(capcom_id);
+                session.name = name;
                 reply(
                     seq,
                     &AnsUserObject {

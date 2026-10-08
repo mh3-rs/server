@@ -89,7 +89,13 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       session), the world server list and the pick. Every server selection connection of the corpus replays
       cleanly (17, `s00` whole), now in the replay gate. Divergences: content versions; populations (0 until the
       world; MH3SP's ghost on Greed4: its LMP joins the servers the console only asks the address of).
-- [ ] FMP connection 2: gates, entering a gate, city list and creation, layer user lists.
+- [x] FMP connection 2, up to the gates: the world (`World`: placed players only, with world server, gate, name
+      and profile; populations and lists counted from them, D3), the player list, friend and black lists (MH3SP's
+      blank entry kept), user status, the 40 gates, entering a gate, leaving. Content binaries `0x02` (Jhen Mohran
+      times), `0x03` (NPC greeters: quest names from the rotation's files), `0x04` (trading post), read from
+      `CONTENT_DIR` (tests and CI: MH3SP at `f53b06c`, cloned by `scripts/ci-tests.sh` when absent). Replays run
+      at the scenario's recording date (`clock_offset`). The three `s02` scenarios replay whole (`clean_so_far`).
+- [ ] FMP connection 2: city list and creation.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
 - [ ] Content binaries (D1); the content folder with MH3SP's event files (D2); time (D6).
 - [ ] World model (D3), players registry and `Effect`s (D4).

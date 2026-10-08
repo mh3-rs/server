@@ -11,6 +11,7 @@
 //! | `EXTERNAL_ADDRESS` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
 //! | `NATNEG_HOSTNAME` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
 //! | `SECRET`, or `SECRET__FILE` naming a file that holds it | none: the pepper of the support codes' HMAC |
+//! | `CONTENT_DIR` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
 //!
 //! Without `EXTERNAL_ADDRESS` or `NATNEG_HOSTNAME` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
@@ -36,6 +37,10 @@ pub struct Config {
     pub external_address: Option<String>,
     pub natneg_hostname: Option<String>,
     pub secret: Option<Secret>,
+    pub content_dir: PathBuf,
+    /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
+    /// at their date, since content depends on it.
+    pub clock_offset: i64,
     /// Maintenance mode (`mh3sp maintenance "<message>"`, not an environment variable): OPN only, every console
     /// refused with this message, no database.
     pub maintenance: Option<String>,
@@ -67,6 +72,8 @@ impl Config {
             external_address: optional("EXTERNAL_ADDRESS"),
             natneg_hostname: optional("NATNEG_HOSTNAME"),
             secret: secret(optional("SECRET"), optional("SECRET__FILE"))?,
+            content_dir: get("CONTENT_DIR", "content").into(),
+            clock_offset: 0,
             maintenance: None,
         })
     }

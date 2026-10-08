@@ -11,6 +11,7 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
+use bytes::Bytes;
 use sqlx::SqlitePool;
 use wire::packets::{AnsServerTime, Packet, ReqConnection};
 use wire::{DecodeError, EncodeError, Frame, PacketId};
@@ -92,6 +93,8 @@ impl Handler {
 pub struct Session {
     pub console: Console,
     pub capcom_id: Option<String>,
+    /// The hunter's name, as the game sends it (bytes: it may be Shift-JIS).
+    pub name: Bytes,
     /// The world server picked (1-based, `FmpInfo2`).
     pub world_server: Option<u32>,
     /// The hunter's public profile block, written by the console (`UserBinarySet`).
@@ -106,6 +109,7 @@ impl Session {
         Session {
             console,
             capcom_id: None,
+            name: Bytes::new(),
             world_server: None,
             profile: Box::new([0; PROFILE_SIZE]),
         }

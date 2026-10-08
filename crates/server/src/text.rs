@@ -47,6 +47,20 @@ pub enum Text {
     CityHrLimit(usize),
     /// A city's goal (64 slots; the last ones unnamed).
     CityGoal(usize),
+    /// Gate `n` (1-based) of a world server.
+    GateName(u16),
+    // The town's NPCs (content binary 0x03): MH3SP's texts.
+    /// Prices, normal or halved (during Jhen Mohran).
+    ToolShop {
+        sale: bool,
+    },
+    MaterialShop {
+        sale: bool,
+    },
+    TradingPostOpen,
+    /// Heads the event quest list during Jhen Mohran.
+    JhenFestival,
+    Guildmaster,
 }
 
 const SERVER_TYPE_NAMES: [&str; 4] = ["Open", "Rookie", "Expert", "Recruiting"];
@@ -146,6 +160,21 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
         Text::CitySeeking(i) => return indexed(&CITY_SEEKINGS, i, "Seeking"),
         Text::CityHrLimit(i) => return indexed(&CITY_HR_LIMITS, i, "Limit"),
         Text::CityGoal(i) => return indexed(&CITY_GOALS, i, "Goal"),
+        Text::GateName(n) => return Cow::Owned(format!("City Gate{n}")),
+        Text::ToolShop { sale: true } | Text::MaterialShop { sale: true } => "Half-off sale!",
+        Text::ToolShop { sale: false } | Text::MaterialShop { sale: false } => "Prices are normal.",
+        Text::TradingPostOpen => "The Trading Post is open!",
+        Text::JhenFestival => "The Festival of Fear",
+        Text::Guildmaster => concat!(
+            "To all hunters:\n",
+            "Loc Lac is in \"beta,\"\n",
+            "whatever that means. Also,\n",
+            "the Arena is back in\n",
+            "operation! And now, a:\n",
+            "haiku: \"Patient warriors /\n",
+            "returning home at long last /\n",
+            "now join hands to hunt!\"",
+        ),
         // MH3SP's texts, kept while the replay harness compares against it.
         Text::Announce => concat!(
             "<BR><CENTER><BODY><SIZE=6>Monster Hunter 3 (Tri) Server Project<BR><BODY>",

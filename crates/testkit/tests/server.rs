@@ -39,6 +39,11 @@ fn config() -> (Config, tempfile::TempDir) {
         external_address: Some("192.168.110.150".into()),
         natneg_hostname: Some("natneg1.gs.nintendowifi.net".into()),
         secret: Some(server::config::Secret(b"test secret".to_vec())),
+        // MH3SP's event files (`scripts/ci-tests.sh` provides them).
+        content_dir: std::env::var_os("CONTENT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| repo().join("../mh3sp")),
+        clock_offset: 0,
         maintenance: None,
     };
     (config, dir)
@@ -141,10 +146,31 @@ async fn accepts_wii_tls_and_reports_health() {
     running.stop().await;
 }
 
+/// When the scenario was recorded, by the reference server's clock (its first `AnsServerTime`).
+fn recorded_at(scenario: &Path) -> Option<i64> {
+    let recordings = corpus::load(scenario).unwrap();
+    let frame = recordings
+        .iter()
+        .flat_map(|r| r.connections.iter().flat_map(|c| &c.frames))
+        .filter(|f| f.name == "AnsServerTime")
+        .min_by_key(|f| f.t)?;
+    let payload = corpus::unhex(&frame.payload).unwrap();
+    Some(i64::from(u32::from_be_bytes(
+        payload[..4].try_into().unwrap(),
+    )))
+}
+
 async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
     let masks = Masks::load(&repo().join("corpus")).unwrap();
-    // A fresh server per scenario, as when it was recorded.
-    let (config, _db) = config();
+    // A fresh server per scenario, as when it was recorded, and at its date (content depends on it).
+    let (mut config, _db) = config();
+    if let Some(at) = recorded_at(scenario) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        config.clock_offset = at - now;
+    }
     let running = server::start(&config).await.unwrap();
     let targets = Targets {
         opn: running.opn,
@@ -170,6 +196,22 @@ fn scenarios() -> Vec<PathBuf> {
 fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
     let dirty: Vec<_> = reports.iter().filter(|r| !r.is_clean()).collect();
     assert!(dirty.is_empty(), "{}: {dirty:#?}", scenario.display());
+}
+
+/// Whole scenarios of the milestone in progress (M2) that replay cleanly already; replaced by `REACHED` once M2 is.
+const CLEAN_SO_FAR: [&str; 4] = [
+    "s00-returning-new-slot",
+    "s02-first-login-gate",
+    "s02-login-gate",
+    "s02-login-gate-2",
+];
+
+#[tokio::test]
+async fn clean_so_far() {
+    for name in CLEAN_SO_FAR {
+        let scenario = repo().join("corpus").join(name);
+        assert_clean(&scenario, &replay(&scenario).await);
+    }
 }
 
 /// Tier 2: scenarios whose milestone is reached must replay cleanly against the Rust server.
