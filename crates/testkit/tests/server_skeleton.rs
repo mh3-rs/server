@@ -15,18 +15,13 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// A fresh database file per server, so tests never share state (or a schema version).
-fn database_url() -> String {
-    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("mh3sp-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    format!("sqlite://{}/db{n}.sqlite", dir.display())
-}
-
-fn config() -> Config {
+/// A server config on random ports, with its own database file in a temporary folder: tests never share
+/// state (or a schema version), and the folder is deleted when the returned guard is dropped. A real file, not
+/// `:memory:`, so tests run the same SQLite mode as production (WAL, several connections).
+fn config() -> (Config, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
     let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
-    Config {
+    let config = Config {
         listen: Listen {
             opn: Some(any),
             lmp: Some(any),
@@ -38,9 +33,10 @@ fn config() -> Config {
             key: repo().join("certs/dev/server.key"),
         },
         database: Url {
-            url: database_url(),
+            url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
         },
-    }
+    };
+    (config, dir)
 }
 
 async fn http_status(addr: SocketAddr, path: &str) -> String {
@@ -56,7 +52,8 @@ async fn http_status(addr: SocketAddr, path: &str) -> String {
 
 #[tokio::test]
 async fn accepts_wii_tls_and_reports_health() {
-    let running = server::start(&config()).await.unwrap();
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
 
     // OPN: the scripted console speaks TLS like a Wii (TLS 1.0, AES128-SHA).
     let mut opn = Console::connect(running.opn.unwrap(), true).await.unwrap();
@@ -104,7 +101,8 @@ async fn reached_scenarios_replay_cleanly() {
             continue;
         }
         // A fresh server per scenario, as when it was recorded.
-        let running = server::start(&config()).await.unwrap();
+        let (config, _db) = config();
+        let running = server::start(&config).await.unwrap();
         let targets = Targets {
             opn: running.opn.unwrap(),
             lmp: running.lmp.unwrap(),
@@ -126,7 +124,8 @@ async fn reached_scenarios_replay_cleanly() {
 /// over a real TLS connection, and missing (the skeleton doesn't answer yet).
 #[tokio::test]
 async fn replay_reaches_the_skeleton() {
-    let running = server::start(&config()).await.unwrap();
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
     let scenario = repo().join("corpus/s01-terms-decline");
     let recording = corpus::load(&scenario).unwrap();
     let opn = &recording[0].connections[0];

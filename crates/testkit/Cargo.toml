@@ -21,3 +21,4 @@ wire = { path = "../wire" }
 
 [dev-dependencies]
 server = { path = "../server" }
+tempfile = "3.27.0"
