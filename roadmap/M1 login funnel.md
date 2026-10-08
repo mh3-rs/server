@@ -110,6 +110,12 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
         dependency), never unhealthy: with an orchestrator, unhealthy means a restart, which would disconnect every
         player in town or on a quest and fix nothing;
       - both outages are logged at `error`: either way players can't join, so a human should look.
+      - in practice: players already in a gate, a city or a quest keep playing (all of that lives in node memory;
+        hunts are console-to-console); players trying to join get the "not ready" text in the game. Actions that
+        need a dependency mid-game fail cleanly (an in-game message, the player stays connected): with Postgres
+        down, anything writing permanent data (friends M3, bans M5, flags M6); with Valkey down, cross-node actions
+        (messages to another world server, presence) and switching world server (a new FMP connection finds its
+        session through Valkey). Every later milestone handles this for its own features.
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
