@@ -6,7 +6,7 @@
 # sees rewritten client addresses and P2P fails (error 11688). Run it natively.
 services:
   postgres:
-    image: postgres:17
+    image: postgres:18
     environment:
       POSTGRES_USER: mh3sp
       POSTGRES_PASSWORD: mh3sp
@@ -14,7 +14,7 @@ services:
     ports:
       - "55432:5432"
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mh3sp"]
       interval: 2s

@@ -171,6 +171,12 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] `scripts/dev.sh --reset`: drops the dev database and Valkey data, for schema changes.
 - [ ] Tests use a fresh database each run (`#[sqlx::test]`), so a rewritten schema file never trips them.
 
+### Checks with a real console (Dolphin)
+- [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
+- [ ] Terms version (schema, `texts`): does the game re-show the terms when the version number changes to a
+      *lower* value (1 → 2 → 1), or only when it grows?
+- [ ] Whether a menu shows the online support code.
+
 ### Corpus and harness
 - [ ] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
       scenario's milestone (FMP connections join in M2).
