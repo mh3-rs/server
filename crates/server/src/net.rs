@@ -1,5 +1,5 @@
 //! Listeners and connections: the connection lifecycle shared by every role (the pause, line checks, `ReqShut`),
-//! the rest handed to the role's [`Session`]. Each connection is one task that reads and writes, so frames are
+//! the rest handed to the role's [`Handler`]. Each connection is one task that reads and writes, so frames are
 //! always written whole and in order.
 
 use std::fmt;
@@ -22,7 +22,7 @@ use wire::packets::{AnsLineCheck, AnsShut, Packet, ReqLineCheck, ReqShut};
 use wire::{Frame, FrameCodec};
 
 use crate::Shared;
-use crate::game::{Fault, Handled, Role, Session, frame, reply};
+use crate::game::{Fault, Handled, Handler, Role, frame, reply};
 
 /// A console that hasn't finished its TLS handshake by then is dropped.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -62,7 +62,13 @@ pub async fn serve(
             },
         };
         let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
-        let span = tracing::info_span!("conn", conn, %role, capcom_id = tracing::field::Empty);
+        let span = tracing::info_span!(
+            "conn",
+            conn,
+            %role,
+            console = tracing::field::Empty,
+            capcom_id = tracing::field::Empty
+        );
         let tls = tls.clone();
         let shared = shared.clone();
         let shutdown = shutdown.clone();
@@ -109,7 +115,7 @@ async fn connection(
         _ = shutdown.cancelled() => return Ok(()),
         _ = tokio::time::sleep(PAUSE) => {}
     }
-    let (mut session, first) = Session::start(role);
+    let (mut handler, first) = Handler::start(role);
     if !send(&mut framed, first?).await {
         return Ok(());
     }
@@ -144,8 +150,11 @@ async fn connection(
                         answered = true;
                         continue;
                     }
-                    ReqShut::ID => shut(&req)?,
-                    _ => session.handle(shared, &req).await?,
+                    ReqShut::ID => {
+                        handler.leave(shared);
+                        shut(&req)?
+                    }
+                    _ => handler.handle(shared, &req).await?,
                 }
             }
         };

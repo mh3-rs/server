@@ -1,5 +1,6 @@
 //! The mh3sp server. [`start`] brings every role up; the binary and the tests both use it.
 
+mod accounts;
 pub mod config;
 mod database;
 mod game;
@@ -10,8 +11,9 @@ mod tls;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -19,14 +21,17 @@ use tracing::{error, info};
 
 pub use config::Config;
 use database::Database;
-use game::Role;
+use game::{Role, Session};
+
+/// How long a session waits for the console's next connection (decision 4).
+const HANDOFF_TTL: Duration = Duration::from_secs(120);
 
 /// What every connection shares.
 struct Shared {
     config: Config,
     db: Arc<Database>,
-    /// LMP's bound port, handed out in `AnsLmpConnect` (tests bind port 0).
-    lmp_port: u16,
+    /// Sessions between two connections, by PAT ticket.
+    tickets: moka::sync::Cache<String, Session>,
 }
 
 impl Shared {
@@ -61,6 +66,9 @@ impl Running {
 /// Binds every listener and starts serving. A database that doesn't open is retried in the background (the
 /// server is unhealthy until it does); a listener that can't bind fails the start.
 pub async fn start(config: &Config) -> Result<Running> {
+    if config.maintenance.is_none() && config.secret.is_none() {
+        bail!("SECRET or SECRET__FILE must be set (the support codes' pepper)");
+    }
     let shutdown = CancellationToken::new();
     let roles: &[(Role, SocketAddr)] = match config.maintenance {
         Some(_) => &[(Role::Opn, config.opn)],
@@ -102,7 +110,9 @@ pub async fn start(config: &Config) -> Result<Running> {
     let shared = Arc::new(Shared {
         config: config.clone(),
         db,
-        lmp_port: lmp.map_or(0, |a| a.port()),
+        tickets: moka::sync::Cache::builder()
+            .time_to_live(HANDOFF_TTL)
+            .build(),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!(

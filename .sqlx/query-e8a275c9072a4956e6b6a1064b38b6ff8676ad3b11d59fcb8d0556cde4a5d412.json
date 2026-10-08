@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO consoles (public_id, support_code_hmac, region) VALUES (?1, ?2, ?3)\n               ON CONFLICT DO NOTHING RETURNING id AS \"id!\", public_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "consoles",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "public_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "consoles",
+            "name": "public_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e8a275c9072a4956e6b6a1064b38b6ff8676ad3b11d59fcb8d0556cde4a5d412"
+}

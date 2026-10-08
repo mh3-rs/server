@@ -1,0 +1,10 @@
+# Where the Rust server differs from the recordings on purpose. Same format as masks.toml (the bytes are ignored
+# when comparing), plus a required `reason`. Each entry goes away when its reason does.
+
+# M1 has no world servers yet: every population is 0. The recordings have dev1 on Valor1 (the first entry's
+# population, field 0x08) when dev2 lists the servers.
+[[mask]]
+packet = "AnsFmpListData"
+offset = 50
+len = 4
+reason = "populations come with the world servers (M2)"

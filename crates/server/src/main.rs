@@ -13,15 +13,14 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     // Dev convenience: `.env` fills in variables that aren't already set.
     let _ = dotenvy::dotenv();
-    let mut config = Config::from_env();
-
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        [] => {}
-        ["healthcheck"] => return server::health::check(config.health),
-        ["maintenance", message] => config.maintenance = Some(message.to_owned()),
+    let maintenance = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => None,
+        // Fixed port: no configuration to read.
+        ["healthcheck"] => return server::health::check(Config::HEALTH),
+        ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!("usage: mh3sp [healthcheck | maintenance \"<message>\"]"),
-    }
+    };
 
     tracing_subscriber::fmt()
         // Colours on a terminal only: not in `docker logs` or log collectors.
@@ -30,6 +29,8 @@ async fn main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
         )
         .init();
+    let mut config = Config::from_env()?;
+    config.maintenance = maintenance;
     let running = server::start(&config).await?;
     shutdown_signal().await;
     tracing::info!("shutting down");

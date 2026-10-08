@@ -52,9 +52,3 @@ packet = "AnsBinaryData"
 payload_len = 5082
 offset = 788
 len = 2
-
-# Where the console goes next: the server's external address (lp2 string) and the role's port, which depend on
-# where the server runs.
-[[mask]]
-packet = "AnsLmpConnect"
-offset = 0

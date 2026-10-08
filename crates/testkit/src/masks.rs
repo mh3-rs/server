@@ -1,4 +1,5 @@
-//! Volatile bytes (`corpus/masks.toml`) and the recorded → live values learned from them.
+//! Volatile bytes (`corpus/masks.toml`), declared divergences (`corpus/divergences.toml`), and the recorded → live
+//! values learned from them.
 
 use std::path::Path;
 
@@ -11,10 +12,11 @@ use serde::Deserialize;
 pub struct Mask {
     pub packet: String,
     pub offset: usize,
-    /// Absent: to the end of the payload, whose length may then differ (an address and a port, say).
-    pub len: Option<usize>,
+    pub len: usize,
     pub var: Option<String>,
     pub payload_len: Option<usize>,
+    /// Why the Rust server differs there on purpose: required in `divergences.toml`.
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -26,23 +28,29 @@ struct MaskFile {
     mask: Vec<Mask>,
 }
 
+fn read(path: &Path) -> Result<Vec<Mask>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
+    let file: MaskFile = toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
+    Ok(file.mask)
+}
+
 impl Masks {
-    pub fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
-        let file: MaskFile =
-            toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
-        if let Some(m) = file
-            .mask
-            .iter()
-            .find(|m| m.var.is_some() && m.len.is_none())
-        {
-            anyhow::bail!(
-                "{}: mask on {}: a var needs a len",
-                path.display(),
-                m.packet
-            );
+    /// The masks of a corpus folder: `masks.toml` and, when present, `divergences.toml`.
+    pub fn load(corpus: &Path) -> Result<Self> {
+        let mut masks = read(&corpus.join("masks.toml"))?;
+        let divergences = corpus.join("divergences.toml");
+        if divergences.exists() {
+            let more = read(&divergences)?;
+            if let Some(m) = more.iter().find(|m| m.reason.is_none()) {
+                anyhow::bail!(
+                    "{}: divergence on {} without a reason",
+                    divergences.display(),
+                    m.packet
+                );
+            }
+            masks.extend(more);
         }
-        Ok(Self(file.mask))
+        Ok(Self(masks))
     }
 
     fn of<'a>(&'a self, packet: &'a str, len: usize) -> impl Iterator<Item = &'a Mask> + 'a {
@@ -107,21 +115,12 @@ pub fn matches(
 ) -> bool {
     let mut expected = recorded.to_vec();
     bindings.apply(&mut expected);
-    let mut live = live;
-    // Masks to the end: only what comes before is compared.
-    for m in masks.of(packet, recorded.len()).filter(|m| m.len.is_none()) {
-        if m.offset <= expected.len() && m.offset <= live.len() {
-            expected.truncate(m.offset);
-            live = &live[..m.offset];
-        }
-    }
     if expected.len() != live.len() {
         return false;
     }
     let mut learned = Vec::new();
     for m in masks.of(packet, recorded.len()) {
-        let Some(len) = m.len else { continue };
-        let range = m.offset..m.offset + len;
+        let range = m.offset..m.offset + m.len;
         if range.end > live.len() {
             continue;
         }
@@ -148,16 +147,18 @@ mod tests {
             Mask {
                 packet: "AnsTicket".into(),
                 offset: 2,
-                len: Some(3),
+                len: 3,
                 var: Some("pat_ticket".into()),
                 payload_len: None,
+                reason: None,
             },
             Mask {
                 packet: "AnsServerTime".into(),
                 offset: 0,
-                len: Some(2),
+                len: 2,
                 var: None,
                 payload_len: None,
+                reason: None,
             },
         ])
     }
@@ -216,34 +217,8 @@ mod tests {
     }
 
     #[test]
-    fn a_mask_to_the_end_ignores_length() {
-        let masks = Masks(vec![Mask {
-            packet: "AnsLmpConnect".into(),
-            offset: 1,
-            len: None,
-            var: None,
-            payload_len: None,
-        }]);
-        let mut bindings = Bindings::default();
-        assert!(matches(
-            &masks,
-            &mut bindings,
-            "AnsLmpConnect",
-            b"\x00\x0f192.168",
-            b"\x00\x09127"
-        ));
-        assert!(!matches(
-            &masks,
-            &mut bindings,
-            "AnsLmpConnect",
-            b"\x00\x0f192",
-            b"\x01\x09127"
-        ));
-    }
-
-    #[test]
     fn corpus_masks_parse() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/masks.toml");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus");
         assert!(!Masks::load(&path).unwrap().0.is_empty());
     }
 }

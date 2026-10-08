@@ -1,6 +1,7 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: in progress. Packets, OPN and the console checks done (steps 1–3); next: LMP.**
+**Status: in progress. Packets, OPN, console checks and LMP done (steps 1–4); left: the Dolphin run to the server
+list, tier 4 (nightly against Python), tier 6 (decide).**
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -153,19 +154,19 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       `/health/live`; no database.
 
 ### LMP
-- [ ] Support codes: read from `AnsConnection`, or issued in `AnsLoginInfo` for a first-time console.
-- [ ] PAT tickets (`AnsTicket`): the session is handed off through the ticket cache (decision 4); the next
+- [x] Support codes: read from `AnsConnection`, or issued in `AnsLoginInfo` for a first-time console.
+- [x] PAT tickets (`AnsTicket`): the session is handed off through the ticket cache (decision 4); the next
       connection takes it out by ticket.
-- [ ] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
-- [ ] Server time.
-- [ ] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
+- [x] The 6 Capcom ID slots (`UserList*`), `AnsUserObject` (existing Capcom ID, or a new one for an empty slot).
+- [x] Server time.
+- [x] World server list (`FmpList*`) with populations (0 until M2), and `AnsFmpInfo` with the server's own
       external address.
 
 ### Config
 - [x] `EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
 - [x] `NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
       clear `error` at startup ("server not configured").
-- [ ] `SECRET` (with LMP, its first use): the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
+- [x] `SECRET` (with LMP, its first use): the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
       never logged, never changed once accounts exist (every console would become unrecognisable).
       `SECRET__FILE` (Docker secrets: compose `secrets:` mounts them under `/run/secrets/`) takes precedence: the
       file's content is the secret, its trailing newline stripped. Unreadable or empty file, or neither variable
@@ -196,19 +197,19 @@ missing at startup (unhealthy and "not ready" until it opens, then accepted). No
       (stored as HMAC only, never logged, never asked by the website's pairing).
 
 ### Corpus and harness
-- [ ] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
+- [x] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
       scenario's milestone (FMP connections join in M2).
-- [x] Masks for values that depend on the environment, not only on the run: the LMP and FMP addresses in
-      `AnsLmpConnect` / `AnsFmpInfo` are length-prefixed strings whose length can change, so masks learn a
-      variable-length kind: a mask without `len` runs to the end of the payload (address and port come last in
-      both), and the lengths may differ.
-- [ ] `corpus/divergences.toml` starts here (our own texts, patch policy, generated ids), with the harness accepting
-      declared divergences only.
+- [x] Values that depend on the environment: the server hands out the fixed public ports (8201, 8202), not the
+      ones it bound, and the tests run with the recorded `EXTERNAL_ADDRESS` (`192.168.110.150`), so addresses
+      and ports match the recordings as they are (`AnsFmpListData` has 12 of them mid-payload: no mask could
+      cover them). Replaying against another environment (tier 4) will need its address set the same way.
+- [x] `corpus/divergences.toml`: masks with a required `reason`, loaded with `masks.toml`. First entry: world
+      server populations (0 until M2; the recordings have a player on Valor1). Our own texts will add theirs.
 
 ## Tests
 - [x] Tier 1: typed packet round-trips on every corpus payload of each type (OPN and LMP).
-- [ ] Tier 2: the replay gate above, in CI, against the in-process server.
-- [ ] Tier 3: scripted logins with the test client: a first-time console gets a support code and a Capcom ID; a
+- [x] Tier 2: the replay gate above, in CI, against the in-process server.
+- [x] Tier 3: scripted logins with the test client: a first-time console gets a support code and a Capcom ID; a
       returning console finds its hunters again (also after a server restart); two consoles get different Capcom IDs;
       a stale or unknown ticket is refused; a malformed packet drops the connection with one warn.
 - [ ] Tier 4: `.woodpecker/nightly.yml` (cron): the pinned Python MH3SP started in the job, the corpus replayed against

@@ -5,13 +5,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bytes::Bytes;
 use server::Config;
 use testkit::client::{Console, Received};
 use testkit::corpus;
 use testkit::masks::Masks;
 use testkit::replay::{self, ConnectionReport, Targets};
 use wire::packets::*;
-use wire::{Frame, PatData};
+use wire::{Frame, Item, PatData};
 
 /// What the recorded consoles' discs hold (the lab's hosts file points it at AltWFC).
 const NATNEG_HOSTNAMES: &[u8] = b"natneg1.gs.nintendowifi.net\0natneg2.gs.nintendowifi.net\0";
@@ -34,8 +35,10 @@ fn config() -> (Config, tempfile::TempDir) {
         tls_cert: repo().join("certs/dev/server.crt"),
         tls_key: repo().join("certs/dev/server.key"),
         database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
-        external_address: Some("127.0.0.1".into()),
+        // Where the recordings were made: the addresses handed out match theirs.
+        external_address: Some("192.168.110.150".into()),
         natneg_hostname: Some("natneg1.gs.nintendowifi.net".into()),
+        secret: Some(server::config::Secret(b"test secret".to_vec())),
         maintenance: None,
     };
     (config, dir)
@@ -139,7 +142,7 @@ async fn accepts_wii_tls_and_reports_health() {
 }
 
 async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
-    let masks = Masks::load(&repo().join("corpus/masks.toml")).unwrap();
+    let masks = Masks::load(&repo().join("corpus")).unwrap();
     // A fresh server per scenario, as when it was recorded.
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
@@ -154,6 +157,16 @@ async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
     reports
 }
 
+fn scenarios() -> Vec<PathBuf> {
+    let mut scenarios: Vec<_> = std::fs::read_dir(repo().join("corpus"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join("raw").is_dir())
+        .collect();
+    scenarios.sort();
+    scenarios
+}
+
 fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
     let dirty: Vec<_> = reports.iter().filter(|r| !r.is_clean()).collect();
     assert!(dirty.is_empty(), "{}: {dirty:#?}", scenario.display());
@@ -162,17 +175,25 @@ fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
 /// Tier 2: scenarios whose milestone is reached must replay cleanly against the Rust server.
 #[tokio::test]
 async fn reached_scenarios_replay_cleanly() {
-    let mut scenarios: Vec<_> = std::fs::read_dir(repo().join("corpus"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.join("raw").is_dir())
-        .collect();
-    scenarios.sort();
-    for scenario in scenarios {
+    for scenario in scenarios() {
         if corpus::milestone(&scenario).unwrap().as_str() > corpus::REACHED {
             continue;
         }
         assert_clean(&scenario, &replay(&scenario).await);
+    }
+}
+
+/// The replay gate of M1: the login connections (OPN and LMP) of every scenario, whatever its milestone.
+#[tokio::test]
+async fn login_connections_replay_cleanly() {
+    for scenario in scenarios() {
+        let reports = replay(&scenario).await;
+        let login: Vec<_> = reports
+            .into_iter()
+            .filter(|r| r.name.ends_with("-opn") || r.name.ends_with("-lmp"))
+            .collect();
+        assert!(!login.is_empty());
+        assert_clean(&scenario, &login);
     }
 }
 
@@ -261,5 +282,144 @@ async fn waits_for_the_database_at_startup() {
         opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await,
         (5, None)
     );
+    running.stop().await;
+}
+
+/// A PAL console's connection data: its support code and its ticket, when it has them.
+fn connection_data(support_code: Option<&str>, ticket: Option<&str>) -> PatData {
+    let mut data = PatData::new().with(0x07, Item::String(Bytes::from_static(b"1002121503")));
+    if let Some(code) = support_code {
+        data = data.with(0x01, Item::String(code.to_owned().into()));
+    }
+    if let Some(ticket) = ticket {
+        data = data.with(0x02, Item::Binary(ticket.to_owned().into()));
+    }
+    data
+}
+
+fn string(item: Option<&Item>) -> String {
+    match item {
+        Some(Item::String(s) | Item::Binary(s)) => String::from_utf8(s.to_vec()).unwrap(),
+        other => panic!("not a string: {other:?}"),
+    }
+}
+
+/// LMP's first visit: the support code (issued when `None`), the ticket, and the 6 slots' Capcom IDs.
+async fn first_visit(lmp: SocketAddr, support_code: Option<&str>) -> (String, String, Vec<String>) {
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(support_code, None),
+        },
+    )
+    .await;
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
+    send(
+        &mut console,
+        1,
+        ReqLoginInfo {
+            data: PatData::new(),
+        },
+    )
+    .await;
+    let code = string(expect::<AnsLoginInfo>(&mut console).await.data.get(0x07));
+    send(&mut console, 2, ReqTicket {}).await;
+    let ticket =
+        String::from_utf8(expect::<AnsTicket>(&mut console).await.ticket.to_vec()).unwrap();
+    send(&mut console, 3, ReqUserListData { first: 1, count: 6 }).await;
+    let slots = expect::<AnsUserListData>(&mut console).await.users;
+    send(&mut console, 4, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut console).await;
+    (
+        code,
+        ticket,
+        slots.iter().map(|u| string(u.get(0x02))).collect(),
+    )
+}
+
+/// LMP's second visit: plays `slot` as `name`, returns its Capcom ID.
+async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: &str) -> String {
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(None, Some(ticket)),
+        },
+    )
+    .await;
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 2);
+    let user = PatData::new().with(0x03, Item::String(name.to_owned().into()));
+    send(&mut console, 1, ReqUserObject { unk: 1, slot, user }).await;
+    string(expect::<AnsUserObject>(&mut console).await.user.get(0x02))
+}
+
+/// Tier 3: accounts through LMP, and across a restart.
+#[tokio::test]
+async fn consoles_keep_their_hunters() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+
+    // A first-time console gets a support code and empty slots; its first hunter gets a Capcom ID.
+    let (code, ticket, slots) = first_visit(lmp, None).await;
+    assert_eq!(code.len(), 11);
+    assert_eq!(slots, vec!["******"; 6]);
+    let capcom_id = second_visit(lmp, &ticket, 2, "Aiko").await;
+    assert_eq!(capcom_id.len(), 6);
+
+    // A redeemed ticket doesn't work twice: the connection is dropped.
+    let mut reused = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut reused).await;
+    send(
+        &mut reused,
+        0,
+        AnsConnection {
+            data: connection_data(None, Some(&ticket)),
+        },
+    )
+    .await;
+    assert!(matches!(
+        reused.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+
+    // Another console gets another Capcom ID.
+    let (other, ticket, _) = first_visit(lmp, None).await;
+    assert_ne!(other, code);
+    assert_ne!(second_visit(lmp, &ticket, 2, "Aiko").await, capcom_id);
+    running.stop().await;
+
+    // After a restart, the console finds its hunter in the same slot, with the same Capcom ID.
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let (again, ticket, slots) = first_visit(lmp, Some(&code)).await;
+    assert_eq!(again, code);
+    assert_eq!(slots[1], capcom_id);
+    assert_eq!(second_visit(lmp, &ticket, 2, "Aiko").await, capcom_id);
+    running.stop().await;
+}
+
+/// A malformed packet drops the connection.
+#[tokio::test]
+async fn malformed_packets_drop_the_connection() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    let garbage = Frame {
+        seq: 0,
+        id: AnsConnection::ID,
+        payload: Bytes::from_static(b"\x05\x01"),
+    };
+    console.send(garbage).await.unwrap();
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
     running.stop().await;
 }

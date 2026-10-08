@@ -17,7 +17,8 @@ DEFAULTS='DATABASE_URL=sqlite://data/mh3sp.db
 RUST_LOG=info,sqlx=warn
 SQLX_OFFLINE=true
 EXTERNAL_ADDRESS=127.0.0.1
-NATNEG_HOSTNAME=natneg1.gs.nintendowifi.net'
+NATNEG_HOSTNAME=natneg1.gs.nintendowifi.net
+SECRET='"$(openssl rand -hex 32)"
 
 touch .env
 echo "$DEFAULTS" | while IFS= read -r line; do

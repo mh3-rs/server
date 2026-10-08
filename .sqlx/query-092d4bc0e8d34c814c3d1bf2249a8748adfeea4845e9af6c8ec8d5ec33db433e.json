@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hunters (public_id, console_id, slot, capcom_id, name) VALUES (?1, ?2, ?3, ?4, ?5)\n               ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "092d4bc0e8d34c814c3d1bf2249a8748adfeea4845e9af6c8ec8d5ec33db433e"
+}

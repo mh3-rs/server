@@ -89,14 +89,13 @@ async fn replay_all(args: &[String]) -> Result<bool> {
         nudge,
         ..Targets::host(host)
     };
-    // Masks live next to the scenarios: corpus/masks.toml.
-    let masks_path = scenarios
+    // Masks live next to the scenarios: corpus/masks.toml, corpus/divergences.toml.
+    let corpus = scenarios
         .first()
         .and_then(|s| s.parent())
-        .unwrap_or(Path::new("."))
-        .join("masks.toml");
-    let masks = if masks_path.exists() {
-        Masks::load(&masks_path)?
+        .unwrap_or(Path::new("."));
+    let masks = if corpus.join("masks.toml").exists() {
+        Masks::load(corpus)?
     } else {
         Masks::default()
     };

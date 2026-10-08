@@ -1,6 +1,7 @@
 //! Game logic: what the server answers. No sockets: handlers get a frame and return the frames to send back;
 //! `net` does the I/O.
 
+pub mod lmp;
 pub mod opn;
 
 use std::fmt;
@@ -11,6 +12,8 @@ use wire::packets::{Packet, ReqConnection};
 use wire::{DecodeError, EncodeError, Frame, PacketId};
 
 use crate::Shared;
+use crate::accounts::Console;
+use lmp::Lmp;
 use opn::Opn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,30 +34,47 @@ impl fmt::Display for Role {
 }
 
 /// A connection's state, by role.
-pub enum Session {
+pub enum Handler {
     Opn(Opn),
-    /// LMP (M1) and FMP (M2) only open the connection so far.
+    Lmp(Lmp),
+    /// FMP (M2) only opens the connection so far.
     Unhandled,
 }
 
-impl Session {
-    /// The session, and what the server sends first.
+impl Handler {
+    /// The handler, and what the server sends first.
     pub fn start(role: Role) -> (Self, Handled) {
         match role {
             Role::Opn => {
                 let (opn, frames) = Opn::start();
-                (Session::Opn(opn), frames)
+                (Handler::Opn(opn), frames)
             }
-            Role::Lmp | Role::Fmp => (Session::Unhandled, req_connection().map(|f| vec![f])),
+            Role::Lmp => (Handler::Lmp(Lmp::new()), req_connection().map(|f| vec![f])),
+            Role::Fmp => (Handler::Unhandled, req_connection().map(|f| vec![f])),
         }
     }
 
     pub async fn handle(&mut self, shared: &Shared, req: &Frame) -> Handled {
         match self {
-            Session::Opn(opn) => opn.handle(shared, req).await,
-            Session::Unhandled => Err(unexpected(req.id)),
+            Handler::Opn(opn) => opn.handle(shared, req).await,
+            Handler::Lmp(lmp) => lmp.handle(shared, req).await,
+            Handler::Unhandled => Err(unexpected(req.id)),
         }
     }
+
+    /// The console announced it leaves (`ReqShut`).
+    pub fn leave(&mut self, shared: &Shared) {
+        if let Handler::Lmp(lmp) = self {
+            lmp.leave(shared);
+        }
+    }
+}
+
+/// A logged-in console, owned by its connection; handed off to the next one by PAT ticket.
+#[derive(Clone, Debug)]
+pub struct Session {
+    pub console: Console,
+    pub capcom_id: Option<String>,
 }
 
 /// Why a connection is dropped.
