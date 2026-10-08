@@ -1,0 +1,54 @@
+# Volatile bytes in server frames: values that differ on every run and must not count as diffs.
+#
+# A mask marks where a volatile value FIRST appears, as [offset, offset + len) of the payload of
+# `packet`. With `var`, the replay harness binds recorded value -> live value, then replaces the
+# recorded value wherever it appears later: in console frames before sending them (e.g. the ticket
+# echoed on the next connection) and in expected server frames before comparing them (e.g. the
+# Capcom ID repeated in later packets). Without `var`, the bytes are just ignored.
+# `payload_len` restricts a mask to payloads of that length (packets carrying different blobs).
+#
+# Found with `corpus diff corpus/s02-login-gate corpus/s02-login-gate-2`.
+
+[[mask]]
+packet = "AnsTicket"
+offset = 2
+len = 11
+var = "pat_ticket"
+
+[[mask]]
+packet = "AnsUserObject"
+offset = 58
+len = 6
+var = "capcom_id"
+
+[[mask]]
+packet = "AnsLoginInfo"
+offset = 18
+len = 11
+var = "support_code"
+
+# Two u32 the game uses to tell players apart in relayed town packets; Python derives them from
+# the Capcom ID with its per-process salted hash().
+[[mask]]
+packet = "AnsUserSearchInfoMine"
+offset = 3
+len = 4
+var = "search_id_a"
+
+[[mask]]
+packet = "AnsUserSearchInfoMine"
+offset = 9
+len = 4
+var = "search_id_b"
+
+[[mask]]
+packet = "AnsServerTime"
+offset = 0
+len = 8
+
+# The time-driven content blob (day/night and event times).
+[[mask]]
+packet = "AnsBinaryData"
+payload_len = 5082
+offset = 788
+len = 2

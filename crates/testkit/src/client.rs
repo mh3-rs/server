@@ -42,6 +42,7 @@ impl Console {
         let tcp = TcpStream::connect(addr)
             .await
             .with_context(|| format!("connect {addr}"))?;
+        tcp.set_nodelay(true)?;
         let io: Box<dyn Io> = if tls {
             let ssl = wii_tls()?.configure()?.into_ssl("mh.capcom.co.jp")?;
             let mut stream = SslStream::new(ssl, tcp)?;

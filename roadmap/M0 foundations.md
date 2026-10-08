@@ -178,12 +178,14 @@ Importer (`corpus import`):
 ### Volatile fields
 
 Some bytes differ on every run: PAT tickets, online support codes, Capcom IDs, server time, random IDs.
-- [ ] `corpus diff <a> <b>`: compares two recordings of the same scenario frame by frame and prints the byte ranges
+- [x] `corpus diff <a> <b>`: compares two recordings of the same scenario frame by frame and prints the byte ranges
       that differ, per packet name.
-- [ ] `corpus/masks.toml`: one entry per packet name and volatile range, each with a **variable name**
+- [x] `corpus/masks.toml`: one entry per packet name and volatile range, each with a **variable name**
       (`pat_ticket`, `support_code`, `capcom_id`, `server_time`, …). Ranges are expressed as PatData field ids or
       `lp2_string` positions where possible, raw byte offsets otherwise.
-- [ ] Record `s02` and `s04` twice to discover them; extend the masks whenever a diff turns out to be volatile.
+- [x] Record `s02` twice to discover them (`s04` twice at step 8); extend the masks whenever a diff turns out to be
+      volatile. Seven masks cover the single-console corpus: PAT ticket, Capcom ID, support code, the two
+      `AnsUserSearchInfoMine` ids, server time, one time byte of a content blob.
 
 ### Scenarios for M0
 
@@ -215,13 +217,13 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
 
 - [x] **Console client** (`testkit/src/client.rs`): connects like the Wii (TLS ≤ 1.0 with `AES128-SHA`/`AES256-SHA`
       on OPN, plain TCP otherwise), sends and receives `wire` frames.
-- [ ] **Replay**: for each console of a scenario, open its connections in recorded order. Before sending a recorded
+- [x] **Replay**: for each console of a scenario, open its connections in recorded order. Before sending a recorded
       `c2s` frame, wait (with a timeout) until the `s2c` frames recorded before it have arrived; across consoles,
       `c2s` frames go out in recorded `t` order, so "dev2 joins after dev1 created the city" holds.
-- [ ] **Variables**: when a masked range is first seen in an `s2c` frame, bind recorded value → live value
+- [x] **Variables**: when a masked range is first seen in an `s2c` frame, bind recorded value → live value
       (e.g. the ticket the server just issued); in later `c2s` frames, replace the recorded value with the live one
       before sending. Values must keep their length; anything else fails loudly.
-- [ ] **Comparison**: each received `s2c` frame against the expected one: same id, then same payload outside masked
+- [x] **Comparison**: each received `s2c` frame against the expected one: same id, then same payload outside masked
       ranges. Declared divergences (`corpus/divergences.toml`, see Reference policy) are accepted;
       empty in M0, since nothing is implemented yet. Ignored: `ReqLineCheck`/`AnsLineCheck` (time-driven). Report: scenario, connection, packet name,
       first differing offset, side-by-side hexdump.
@@ -230,8 +232,12 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
       start the Rust server in-process on random ports (step 7).
 - [ ] **Outcome per scenario**: `scenario.toml`'s `milestone` decides whether a failure breaks CI (milestone reached)
       or is only reported (not yet). During M0 nothing is reached, so the Rust run reports without failing.
-- [ ] Validation against Python MH3SP: replay every scenario against the pinned Python server started from the lab;
-      zero unexplained diffs is exit criterion 4. This run is manual in M0; it becomes the nightly tier 4 job in M1.
+- [x] Validation against Python MH3SP: `corpus replay corpus/s* --before tools/oracle.sh --nudge` replays every
+      single-console scenario clean (637/637 server frames, twice in a row): exit criterion 4 for `s00`–`s03`.
+      Manual in M0; it becomes the nightly tier 4 job in M1. Multi-console scenarios follow at step 8.
+- [x] `--nudge` (Python only): Python MH3SP stalls when frames arrive together (see the global roadmap's list of
+      Python issues); after 500 ms without an answer the harness sends a harmless `AnsLineCheck` to wake it.
+      The Rust server is replayed without it.
 
 ### Step 4 result: first replay against Python MH3SP
 

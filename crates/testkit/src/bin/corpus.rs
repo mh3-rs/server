@@ -4,24 +4,32 @@
 //!   Stores filtered copies of the captures in `raw/` and regenerates `tcp/` and `udp/` from `raw/`.
 //!   Without captures, only regenerates.
 //!
-//! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>]`
+//! `corpus diff <scenario-a> <scenario-b>`
+//!   Compares two recordings of the same scenario and prints, per packet, the byte ranges that
+//!   differ: the candidates for `corpus/masks.toml`.
+//!
+//! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge]`
 //!   Replays the scenarios against a server (default 127.0.0.1, ports 8200-8202) and reports
 //!   every server frame that differs from the recording. Exits 1 if any does. `--before` runs a
-//!   command before each scenario, to give it a fresh server (e.g. `tools/oracle.sh`).
+//!   command before each scenario, to give it a fresh server (e.g. `tools/oracle.sh`). `--nudge`
+//!   works around Python MH3SP's stalled reads (see `Targets::nudge`); use it only against Python.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use testkit::masks::Masks;
 use testkit::replay::{self, ConnectionReport, Got, Targets};
 
 const USAGE: &str = "usage: corpus import <scenario-dir> [<console>=<capture.pcap> ...]
-       corpus replay <scenario-dir>... [--host <ip>] [--before <command>]";
+       corpus diff <scenario-a> <scenario-b>
+       corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge]";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("import") if args.len() >= 2 => import(&args[1], &args[2..]),
+        Some("diff") if args.len() == 3 => diff(&args[1], &args[2]),
         Some("replay") if args.len() >= 2 => {
             if !replay_all(&args[1..]).await? {
                 std::process::exit(1);
@@ -61,16 +69,32 @@ fn import(scenario: &str, captures: &[String]) -> Result<()> {
 async fn replay_all(args: &[String]) -> Result<bool> {
     let mut host = "127.0.0.1".parse()?;
     let mut before = None;
+    let mut nudge = false;
     let mut scenarios = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--host" => host = it.next().context("--host needs an ip")?.parse()?,
+            "--nudge" => nudge = true,
             "--before" => before = Some(it.next().context("--before needs a command")?.clone()),
             _ => scenarios.push(PathBuf::from(arg)),
         }
     }
-    let targets = Targets::host(host);
+    let targets = Targets {
+        nudge,
+        ..Targets::host(host)
+    };
+    // Masks live next to the scenarios: corpus/masks.toml.
+    let masks_path = scenarios
+        .first()
+        .and_then(|s| s.parent())
+        .unwrap_or(Path::new("."))
+        .join("masks.toml");
+    let masks = if masks_path.exists() {
+        Masks::load(&masks_path)?
+    } else {
+        Masks::default()
+    };
     let mut clean = true;
     for scenario in &scenarios {
         if let Some(cmd) = &before {
@@ -79,7 +103,7 @@ async fn replay_all(args: &[String]) -> Result<bool> {
                 .status()?;
             anyhow::ensure!(status.success(), "`{cmd}` failed");
         }
-        let reports = replay::replay(scenario, &targets).await?;
+        let reports = replay::replay(scenario, &targets, &masks).await?;
         clean &= print_report(scenario, &reports);
     }
     Ok(clean)
@@ -139,4 +163,43 @@ fn payload_diff(expected_hex: &str, got: &[u8]) -> String {
         window(&expected),
         window(got)
     )
+}
+
+fn diff(a: &str, b: &str) -> Result<()> {
+    let ascii = |b: &[u8]| -> String {
+        b.iter()
+            .map(|&c| if c.is_ascii_graphic() { c as char } else { '.' })
+            .collect()
+    };
+    for d in testkit::diff::diff(a.as_ref(), b.as_ref())? {
+        if d.ranges.is_empty() {
+            println!(
+                "{} #{} {:?} packet sequence differs: {}",
+                d.connection, d.index, d.dir, d.name
+            );
+            continue;
+        }
+        let lens = if d.a.len() == d.b.len() {
+            format!("{} bytes", d.a.len())
+        } else {
+            format!("{} vs {} bytes", d.a.len(), d.b.len())
+        };
+        println!(
+            "{} #{} {:?} {} ({lens})",
+            d.connection, d.index, d.dir, d.name
+        );
+        for &(start, end) in &d.ranges {
+            let (x, y) = (
+                &d.a[start.min(d.a.len())..end.min(d.a.len())],
+                &d.b[start.min(d.b.len())..end.min(d.b.len())],
+            );
+            let (hx, hy) = (testkit::corpus::hex(x), testkit::corpus::hex(y));
+            println!(
+                "    [{start}..{end}) {hx} \"{}\" | {hy} \"{}\"",
+                ascii(x),
+                ascii(y)
+            );
+        }
+    }
+    Ok(())
 }
