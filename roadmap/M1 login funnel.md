@@ -102,9 +102,10 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [x] **V1 runtime**: the cache is chosen once at startup and never switched; with Valkey configured and unreachable,
       it's an error and the server is live but not ready (no new players) until Valkey answers again. The handle is
       passed to the code that needs it (not a global: tests run several servers in one process).
-- [ ] **Startup with a dependency down** (changes decision 9 of the global roadmap): proposed for both Postgres and
-      Valkey: start anyway, log the error, retry in the background, run migrations once Postgres answers, then
-      become ready; instead of exiting at startup.
+- [x] **Startup with a dependency down** (changes decision 9 of the global roadmap): the server starts anyway, logs
+      the error, and retries in a loop; it is **unhealthy** (`/health/live` fails) until it has connected, run the
+      migrations and become ready once (no player can be connected yet, so a restart loses nothing). After that, an
+      outage only makes it not ready, as before.
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
