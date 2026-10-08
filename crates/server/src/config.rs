@@ -7,6 +7,10 @@
 //! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
 //! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
 //! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
+//! | `EXTERNAL_ADDRESS` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
+//! | `NATNEG_HOSTNAME` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
+//!
+//! Without `EXTERNAL_ADDRESS` or `NATNEG_HOSTNAME` the server runs but refuses every console ("not configured").
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -21,12 +25,18 @@ pub struct Config {
     pub tls_cert: PathBuf,
     pub tls_key: PathBuf,
     pub database_url: String,
+    pub external_address: Option<String>,
+    pub natneg_hostname: Option<String>,
+    /// Maintenance mode (`mh3sp maintenance "<message>"`, not an environment variable): OPN only, every console
+    /// refused with this message, no database.
+    pub maintenance: Option<String>,
 }
 
 impl Config {
     pub fn from_env() -> Self {
         let get =
             |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_owned());
+        let optional = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
         Self {
             opn: SocketAddr::from(([0, 0, 0, 0], 8200)),
             lmp: SocketAddr::from(([0, 0, 0, 0], 8201)),
@@ -35,6 +45,9 @@ impl Config {
             tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
             tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
             database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),
+            external_address: optional("EXTERNAL_ADDRESS"),
+            natneg_hostname: optional("NATNEG_HOSTNAME"),
+            maintenance: None,
         }
     }
 }

@@ -1,9 +1,10 @@
 //! Health endpoints over minimal HTTP/1.0, so containers, load balancers and monitors can use them
 //! without anything installed:
 //!
-//! - `GET /health/live`: 200 when the server's runtime answers. The container healthcheck; failing
-//!   it justifies a restart.
-//! - `GET /health/ready`: 200 when the database answers too, 503 (with the reason) otherwise.
+//! - `GET /health/live`: 200 when the server's runtime answers and the database has opened once (at startup the
+//!   server retries until it does). The container healthcheck; failing it justifies a restart.
+//! - `GET /health/ready`: 200 when the database answers too and the server is configured, 503 (with the reasons)
+//!   otherwise. Never ready in maintenance mode, always live.
 //!   A database outage doesn't make the server unhealthy: players already in town or on a quest
 //!   don't need it, a restart would drop them, and the pool reconnects by itself. It only means
 //!   "don't send new players here".
@@ -13,20 +14,18 @@ use std::net::{SocketAddr, TcpStream as StdTcpStream};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use sqlx::SqlitePool;
+use std::sync::Arc;
+
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+use crate::Shared;
+
 const CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Clone)]
-pub struct Deps {
-    pub db: SqlitePool,
-}
-
-pub async fn serve(listener: TcpListener, deps: Deps, shutdown: CancellationToken) {
+pub(crate) async fn serve(listener: TcpListener, shared: Arc<Shared>, shutdown: CancellationToken) {
     loop {
         let stream = tokio::select! {
             _ = shutdown.cancelled() => return,
@@ -35,23 +34,29 @@ pub async fn serve(listener: TcpListener, deps: Deps, shutdown: CancellationToke
                 Err(_) => continue,
             },
         };
-        let deps = deps.clone();
+        let shared = shared.clone();
         tokio::spawn(async move {
-            if let Err(e) = answer(stream, &deps).await {
+            if let Err(e) = answer(stream, &shared).await {
                 debug!(error = %e, "health request failed");
             }
         });
     }
 }
 
-async fn answer(mut stream: TcpStream, deps: &Deps) -> Result<()> {
+async fn answer(mut stream: TcpStream, shared: &Shared) -> Result<()> {
     let mut buf = [0u8; 512];
     let n = tokio::time::timeout(CHECK_TIMEOUT, stream.read(&mut buf)).await??;
     let request = std::str::from_utf8(&buf[..n]).unwrap_or_default();
     let path = request.split_whitespace().nth(1).unwrap_or_default();
     let (status, body) = match path {
-        "/health/live" => ("200 OK", "live\n".to_owned()),
-        "/health/ready" => match not_ready(deps).await {
+        "/health/live" => match shared.maintenance().is_some() || shared.db.pool().is_some() {
+            true => ("200 OK", "live\n".to_owned()),
+            false => (
+                "503 Service Unavailable",
+                "database: not opened yet\n".to_owned(),
+            ),
+        },
+        "/health/ready" => match not_ready(shared).await {
             None => ("200 OK", "ready\n".to_owned()),
             Some(reasons) => ("503 Service Unavailable", reasons),
         },
@@ -65,13 +70,20 @@ async fn answer(mut stream: TcpStream, deps: &Deps) -> Result<()> {
     Ok(())
 }
 
-/// `None` when every dependency answers, otherwise one line per failure.
-async fn not_ready(deps: &Deps) -> Option<String> {
-    match tokio::time::timeout(CHECK_TIMEOUT, sqlx::query("SELECT 1").execute(&deps.db)).await {
-        Ok(Ok(_)) => None,
-        Ok(Err(e)) => Some(format!("database: {e}\n")),
-        Err(_) => Some("database: timed out\n".to_owned()),
+/// `None` when ready, otherwise one line per reason.
+async fn not_ready(shared: &Shared) -> Option<String> {
+    if shared.maintenance().is_some() {
+        return Some("maintenance\n".to_owned());
     }
+    let mut reasons = String::new();
+    if !shared.configured() {
+        reasons += "not configured: EXTERNAL_ADDRESS and NATNEG_HOSTNAME must be set\n";
+    }
+    if let Some(reason) = shared.db.not_ready().await {
+        reasons += &reason;
+        reasons += "\n";
+    }
+    (!reasons.is_empty()).then_some(reasons)
 }
 
 /// `mh3sp healthcheck`: asks a running server whether it is live. Blocking, no runtime needed.

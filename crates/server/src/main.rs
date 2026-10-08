@@ -1,5 +1,7 @@
 //! `mh3sp`              run the server
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
+//! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
+//!                      no database
 //!
 //! Configuration: fixed ports, environment variables for the rest, see `server::config`.
 
@@ -11,10 +13,14 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> Result<()> {
     // Dev convenience: `.env` fills in variables that aren't already set.
     let _ = dotenvy::dotenv();
-    let config = Config::from_env();
+    let mut config = Config::from_env();
 
-    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
-        return server::health::check(config.health);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => {}
+        ["healthcheck"] => return server::health::check(config.health),
+        ["maintenance", message] => config.maintenance = Some(message.to_owned()),
+        _ => anyhow::bail!("usage: mh3sp [healthcheck | maintenance \"<message>\"]"),
     }
 
     tracing_subscriber::fmt()

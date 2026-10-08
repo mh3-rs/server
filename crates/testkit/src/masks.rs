@@ -11,7 +11,8 @@ use serde::Deserialize;
 pub struct Mask {
     pub packet: String,
     pub offset: usize,
-    pub len: usize,
+    /// Absent: to the end of the payload, whose length may then differ (an address and a port, say).
+    pub len: Option<usize>,
     pub var: Option<String>,
     pub payload_len: Option<usize>,
 }
@@ -30,6 +31,17 @@ impl Masks {
         let text = std::fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
         let file: MaskFile =
             toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
+        if let Some(m) = file
+            .mask
+            .iter()
+            .find(|m| m.var.is_some() && m.len.is_none())
+        {
+            anyhow::bail!(
+                "{}: mask on {}: a var needs a len",
+                path.display(),
+                m.packet
+            );
+        }
         Ok(Self(file.mask))
     }
 
@@ -95,12 +107,21 @@ pub fn matches(
 ) -> bool {
     let mut expected = recorded.to_vec();
     bindings.apply(&mut expected);
+    let mut live = live;
+    // Masks to the end: only what comes before is compared.
+    for m in masks.of(packet, recorded.len()).filter(|m| m.len.is_none()) {
+        if m.offset <= expected.len() && m.offset <= live.len() {
+            expected.truncate(m.offset);
+            live = &live[..m.offset];
+        }
+    }
     if expected.len() != live.len() {
         return false;
     }
     let mut learned = Vec::new();
     for m in masks.of(packet, recorded.len()) {
-        let range = m.offset..m.offset + m.len;
+        let Some(len) = m.len else { continue };
+        let range = m.offset..m.offset + len;
         if range.end > live.len() {
             continue;
         }
@@ -127,14 +148,14 @@ mod tests {
             Mask {
                 packet: "AnsTicket".into(),
                 offset: 2,
-                len: 3,
+                len: Some(3),
                 var: Some("pat_ticket".into()),
                 payload_len: None,
             },
             Mask {
                 packet: "AnsServerTime".into(),
                 offset: 0,
-                len: 2,
+                len: Some(2),
                 var: None,
                 payload_len: None,
             },
@@ -191,6 +212,32 @@ mod tests {
             "AnsServerTime",
             b"\x01\x02",
             b"\x01\x02\x03"
+        ));
+    }
+
+    #[test]
+    fn a_mask_to_the_end_ignores_length() {
+        let masks = Masks(vec![Mask {
+            packet: "AnsLmpConnect".into(),
+            offset: 1,
+            len: None,
+            var: None,
+            payload_len: None,
+        }]);
+        let mut bindings = Bindings::default();
+        assert!(matches(
+            &masks,
+            &mut bindings,
+            "AnsLmpConnect",
+            b"\x00\x0f192.168",
+            b"\x00\x09127"
+        ));
+        assert!(!matches(
+            &masks,
+            &mut bindings,
+            "AnsLmpConnect",
+            b"\x00\x0f192",
+            b"\x01\x09127"
         ));
     }
 

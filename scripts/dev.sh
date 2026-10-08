@@ -11,9 +11,13 @@ if [ "${1:-}" = "--reset" ]; then
   echo "dev database deleted"
 fi
 
-# key=default; only keys missing from .env are appended.
+# key=default; only keys missing from .env are appended. The addresses suit the lab: Dolphin on this machine, an
+# unpatched disc whose NAT negotiation goes to AltWFC through the hosts file.
 DEFAULTS='DATABASE_URL=sqlite://data/mh3sp.db
-RUST_LOG=info,sqlx=warn'
+RUST_LOG=info,sqlx=warn
+SQLX_OFFLINE=true
+EXTERNAL_ADDRESS=127.0.0.1
+NATNEG_HOSTNAME=natneg1.gs.nintendowifi.net'
 
 touch .env
 echo "$DEFAULTS" | while IFS= read -r line; do

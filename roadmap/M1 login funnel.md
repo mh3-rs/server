@@ -1,6 +1,6 @@
 # M1 — Login funnel (OPN + LMP)
 
-**Status: decisions settled (2026-10-08), ready to start.**
+**Status: in progress. Packets and OPN done (steps 1–2); next: the console checks, then LMP.**
 
 From the title screen to the server list, on the Rust server: the console logs in, picks a Capcom ID slot,
 receives the world server list and the address of the FMP server for the one it picks. The FMP side (gates,
@@ -83,7 +83,7 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   check (UDP 27900), NAT negotiation (UDP 27901): AltWFC until our own.
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
   `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M6), not
-  not allowed (`access`, M8); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
+  not allowed (`access`, M8); texts from the code dictionary (D1). **Planned maintenance** is a standalone mode of the same binary,
   `mh3sp maintenance "<message>"`: no database (it only reads the environment for ports and the TLS
   certificate); it listens on OPN (Wii TLS), refuses everyone with that message, and serves `/health/live`. With
   compose: add `command: ["maintenance", "…"]` and `docker compose up -d`; remove it and `up -d` again to come back.
@@ -134,20 +134,20 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       are ASCII; hunter names are bytes.
 
 ### Connection lifecycle (all roles)
-- [ ] Send `ReqConnection` first (after the pause, if one turns out to be needed), `NtcLogin` with the stage's
+- [x] Send `ReqConnection` first (after the pause, if one turns out to be needed), `NtcLogin` with the stage's
       status after `AnsConnection`.
-- [ ] Line check every 30 s; no answer → disconnect. A closed socket is noticed at once (unlike Python).
-- [ ] Unknown or unexpected packet for the stage → one `warn`, connection dropped (logging policy).
-- [ ] One writer per connection, whole frames only (Python's interleaved writes must not exist here).
+- [x] Line check every 30 s; no answer → disconnect. A closed socket is noticed at once (unlike Python).
+- [x] Unknown or unexpected packet for the stage → one `warn`, connection dropped (logging policy).
+- [x] One writer per connection, whole frames only (Python's interleaved writes must not exist here).
 
 ### OPN
-- [ ] Memory checks and the patch policy (D3); connection data; auth token accepted (the Nintendo login is AltWFC's or
+- [x] Memory checks and the patch policy (D3); connection data; auth token accepted (the Nintendo login is AltWFC's or
       Wiimmfi's job); terms and sub-terms with chunking; announce; no-charge; vulgarity; the common-key skip;
       `AnsLmpConnect` with the configured external address.
-- [ ] Refusal path (D4): not ready, unsupported disc, NAT hostname not accepted; texts from the code dictionary (D1).
+- [x] Refusal path (D4): not ready, unsupported disc, NAT hostname not accepted; texts from the code dictionary (D1).
 
 ### Maintenance mode
-- [ ] Standalone (D4): OPN with Wii TLS, every console refused with the message given as an argument,
+- [x] Standalone (D4): OPN with Wii TLS, every console refused with the message given as an argument,
       `/health/live`; no database.
 
 ### LMP
@@ -159,24 +159,28 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
       external address.
 
 ### Config
-- [ ] `EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
-- [ ] `NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
+- [x] `EXTERNAL_ADDRESS`: the address handed to consoles in `AnsLmpConnect` / `AnsFmpInfo` (never guessed).
+- [x] `NATNEG_HOSTNAME`: the only accepted NAT negotiation hostname (D3); unset = every disc refused, with a
       clear `error` at startup ("server not configured").
-- [ ] `SECRET`: the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
+- [ ] `SECRET` (with LMP, its first use): the pepper of the support-code HMAC. Required (no default: the server refuses to start without it),
       never logged, never changed once accounts exist (every console would become unrecognisable).
       `SECRET__FILE` (Docker secrets: compose `secrets:` mounts them under `/run/secrets/`) takes precedence: the
       file's content is the secret, its trailing newline stripped. Unreadable or empty file, or neither variable
       set: refuse to start, naming the variable. Both set: the file wins, `warn` that `SECRET` was ignored.
 
 ### Texts and access
-- [ ] `enum Text` + `text(Text, Language) -> Cow<'static, str>` (D1), English `match` for now.
-- [ ] `allowed(console) -> bool`, `true` until M8's access modes.
+- [x] `enum Text` + `text(Text, Language) -> Cow<'static, str>` (D1), English `match` for now.
+- [x] `allowed(console) -> bool`, `true` until M8's access modes.
 
 ### Database
 - [x] `migrations/0001_schema.sql` (see Schema policy; `crates/server/build.rs` rebuilds the server when it changes,
       since `sqlx::migrate!` embeds migrations at compile time).
 - [x] `scripts/dev.sh --reset`: drops the dev database, for schema changes.
 - [x] Tests use a fresh database file per server, so a rewritten schema file never trips them.
+
+Tests so far (`crates/testkit/tests/server.rs`): `s01-terms-decline` replays cleanly (all 16 server frames);
+scripted OPN logins: accepted, unpatched disc, unsupported disc, not configured, maintenance mode, and a database
+missing at startup (unhealthy and "not ready" until it opens, then accepted). Not tested: the 30 s line check.
 
 ### Checks with a real console (Dolphin)
 - [ ] The pause before `ReqConnection` (D5): bisection 1.5 s → 0 → 750 ms → …
@@ -186,14 +190,15 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 ### Corpus and harness
 - [ ] Replay gate per role: from M1, the OPN and LMP connections of every scenario must replay cleanly, whatever the
       scenario's milestone (FMP connections join in M2).
-- [ ] Masks for values that depend on the environment, not only on the run: the LMP and FMP addresses in
+- [x] Masks for values that depend on the environment, not only on the run: the LMP and FMP addresses in
       `AnsLmpConnect` / `AnsFmpInfo` are length-prefixed strings whose length can change, so masks learn a
-      variable-length kind (`lp2_string` at an offset).
+      variable-length kind: a mask without `len` runs to the end of the payload (address and port come last in
+      both), and the lengths may differ.
 - [ ] `corpus/divergences.toml` starts here (our own texts, patch policy, generated ids), with the harness accepting
       declared divergences only.
 
 ## Tests
-- [ ] Tier 1: typed packet round-trips on every corpus payload of each type.
+- [ ] Tier 1: typed packet round-trips on every corpus payload of each type (OPN done; LMP with its packets).
 - [ ] Tier 2: the replay gate above, in CI, against the in-process server.
 - [ ] Tier 3: scripted logins with the test client: a first-time console gets a support code and a Capcom ID; a
       returning console finds its hunters again (also after a server restart); two consoles get different Capcom IDs;
