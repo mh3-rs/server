@@ -70,12 +70,17 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
   PostgreSQL, seeded with MH3SP's 12 servers. Every node of a fleet reads the same list.
 - **D3 Patch check**: PAL (`RMHP08`) and US (`RMHE08`) accepted; anything else refused with a message. JP is a
   future step (it needs the EC/shop patch). The second memory check returns the NAT negotiation hostname compiled
-  into the disc: the server the console will use to set up P2P. Players can only play together if their consoles
-  reach the same NAT negotiation service, and our relay (M4) only works through ours. So: a list of accepted
-  hostnames **in the database**, seeded with Nintendo's original `natneg1.gs.nintendowifi.net` (what MH3SP's public
-  patcher keeps, with DNS/hosts redirection: the community default), editable by admins (website, M7); every
-  listed name must lead to our NAT negotiation service. Any other disc is refused straight away with a message
-  naming the patch to use. The hostname is kept in the session.
+  into the disc: players can only play together if their consoles reach the same NAT negotiation service. We accept
+  **one** hostname, a `settings` row in the database; any other disc is refused straight away with a clear
+  message. It is mostly the player's concern (their patch decides it); ours is to detect a mismatch and say so.
+  Default: **the patch is the player's only step** (a tool and a guide), no DNS change (impractical for most
+  players, Dolphin users included). Consequences:
+  - our own patch (Riivolution XML + ISO patcher) rewrites **every** hostname the game uses (Nintendo login, GameSpy
+    services, NAT negotiation, `mh.capcom.co.jp`) to our domain, in place: each replacement must fit the original
+    string's length (`nintendowifi.net` is 16 characters), so the domain must be short;
+  - whoever owns those names runs the services behind them: the Nintendo login (AltWFC until our own NAS) and NAT
+    negotiation (AltWFC until M4), next to the server.
+  Our NAT negotiation hands consoles each other's address by default (direct P2P); relaying is a fallback strategy.
 - **D4 Refusals**: one path in the server, the game's own: OPN answers `NtcLogin` status 2, the console asks
   `ReqMaintenance`, the server sends a text. Reasons: not ready, unsupported disc, NAT hostname, banned (M5), not
   whitelisted (M5); texts from the database. **Planned maintenance** is a standalone mode of the same binary,
@@ -96,20 +101,32 @@ Reference: MH3SP `mh/pat.py`, `opn_server.py`, `lmp_server.py`; MHTrIDA `server/
 - [ ] **Schema** (last, shaped by the decisions above), and whether to design for the website now: hashed support
       codes, 6 slots per console, what to keep per hunter, website accounts linking consoles (see the whitelist idea
       in M5/M7).
-- [ ] **V1 Valkey's role**: a cache, never a source of truth, no persistence; not needed to be live (`/health/live`
-      stays 200, players in town or on a quest are unaffected). Proposed, to confirm: Valkey down = not ready, so
-      new logins are refused with the "not ready" text, because a login hands its session from one connection to
-      the next through Valkey (PAT ticket) and a memory fallback would be stand-in code that breaks in a fleet.
+- [x] **V1 Cache**: Valkey is optional. A `Cache` trait with two implementations, chosen at startup: Valkey when
+      configured, in-memory otherwise (single node only; the `[valkey]` config section and the compose service are
+      optional). Covers JSON values with an expiry, delete, set-if-absent (ownership leases), publish/subscribe.
+      Never a source of truth, no persistence; not needed to be live.
+- [ ] **V1 details to confirm**:
+      - no switch at runtime: with Valkey configured and down, the server is not ready (new logins refused, players
+        in game unaffected) rather than falling back to memory, because sessions and leases written in memory would
+        be invisible to other nodes and disagree with Valkey when it returns;
+      - a shared handle (`Arc<dyn Cache>`) passed to the code that needs it, not a global: a global lock would
+        serialise every connection (against the relay latency target) and tests run several servers in one
+        process; the in-memory version is concurrent inside (e.g. `moka` for expiries, an in-process channel for
+        publish/subscribe).
 - [x] **V2 Key naming**: `mh3sp:<kind>:<id>` (`ticket`, `presence`, `world:<id>:owner`, `node`, `pairing`, …).
 - [x] **V3 Sessions**: a ticket's session (Capcom ID, slot, language, region, NAT hostname, stage) expires after a
       short time (about 2 minutes) and is refreshed while its console is connected.
 - [x] **V4 Value format**: one JSON value per key, with an expiry.
-- [ ] **Support code storage** (input for the schema): proposed: never stored in clear; looked up by
-      HMAC-SHA256(pepper, support code), the pepper a server secret outside the database (environment), never
-      changed. Support codes are random (~57 bits), so a slow password hash (Argon2) brings nothing and can't be
-      looked up; the keyed hash can, and a leaked database alone reveals nothing.
-- [ ] **Log identity** (input for the schema): every console gets a `console` UUID (database key) from LMP on, and an
-      `account` UUID once linked to a website account; both recorded in the connection span.
+- [x] **Support code storage**: never in clear; looked up by HMAC-SHA256(pepper, support code), the pepper a server
+      secret outside the database (environment), never changed. Support codes are random (~57 bits), so a slow
+      password hash (Argon2) brings nothing and can't be looked up; the keyed hash can, and a leaked database alone
+      reveals nothing.
+- [x] **Pairing** (whitelist, M5/M7): starts from a console connection, never shows a secret; a 6-digit one-time code,
+      expiring after ~10 minutes; the website limits attempts per account.
+- [x] **Identity**: every entity has a UUID (v7: time-ordered, indexes well); connection spans carry the `console`
+      UUID from LMP on, and the `account` UUID once linked.
+- [ ] **`settings` table** (key → value): proposed `varchar(32)` keys rather than `char(32)` (Postgres pads `char(n)`
+      with spaces).
 
 ## Work
 
