@@ -49,7 +49,9 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
   slot, trading post, quest slots; the quest layout from `quest_utils.py`), checked against the recorded downloads.
 - **D2 Event content** (event quests, rotation, trading post): **files, as MH3SP has them** (`event/*.json`,
   `quest_rotation.json`, `trading_post.json`, same format), in a content folder (`CONTENT_DIR`, default
-  `content/`, in the repository and the image). Nothing hard-coded, no database. **Read on demand**: a binary is
+  `content/`). Nothing hard-coded, no database. **Content never goes in the code repository or the image**: a
+  deployment mounts its folder (a volume); dev, tests and CI point `CONTENT_DIR` at an MH3SP checkout at the
+  pinned commit (`f53b06c`, the one the corpus was recorded with). **Read on demand**: a binary is
   built from the files when a console asks for it (`ReqBinaryHead`) and kept for that download, so its chunks
   and foot come from one snapshot. Its version (`AnsBinaryVersion`) is derived from its bytes: an edited file,
   or the rotation moving on, changes it, and connected consoles fetch the new content at their next poll. No
