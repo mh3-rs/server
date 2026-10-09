@@ -6,6 +6,7 @@
 mod catalogue;
 mod frame;
 mod id;
+pub mod natneg;
 pub mod packets;
 mod pat;
 

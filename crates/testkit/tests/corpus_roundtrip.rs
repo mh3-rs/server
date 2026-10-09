@@ -189,3 +189,35 @@ fn typed_packets_reencode() {
         assert!(missing.is_empty(), "never seen in the corpus: {missing:?}");
     }
 }
+
+/// Every recorded NatNeg datagram (to and from the server, and between consoles) decodes and re-encodes byte for
+/// byte; every QR exchange is an availability check.
+#[test]
+fn natneg_records_reencode() {
+    let (mut records, mut checks) = (0, 0);
+    for scenario in scenarios() {
+        for rec in corpus::load(&scenario).unwrap() {
+            for d in &rec.datagrams {
+                let payload = hex::decode(&d.payload).unwrap();
+                if payload.starts_with(&wire::natneg::MAGIC) {
+                    let record = wire::natneg::Record::decode(&payload)
+                        .unwrap_or_else(|e| panic!("{}: {e}: {}", scenario.display(), d.payload));
+                    assert_eq!(record.encode()[..], payload[..], "{}", d.payload);
+                    records += 1;
+                } else if d.remote.ends_with(":27900") {
+                    let answer = &wire::natneg::AVAILABLE[..];
+                    assert!(
+                        wire::natneg::availability_request(&payload).is_some() || payload == answer
+                    );
+                    checks += 1;
+                }
+            }
+        }
+    }
+    if !scenarios().is_empty() {
+        assert!(
+            records > 0 && checks > 0,
+            "{records} NatNeg records, {checks} QR datagrams"
+        );
+    }
+}
