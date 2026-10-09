@@ -117,8 +117,11 @@ Settled with the user on 2026-10-09.
 ## Work (once the decisions are settled)
 
 - [x] Research (D6, D7): done, see "The game's NatNeg client".
-- [ ] Lab: forced failure (pings dropped between the consoles): 11688 at ~6 s, no automatic retry, a new cookie
-      when the player rejoins; a second `CONNECT` ignored.
+- [x] Lab, forced failure (run 9, 2026-10-09; `lab/p2p.sh block` drops console-to-console UDP, NatNeg through):
+      the joining console pings 9 times 0.7 s apart, sends `REPORT` with failure at +6.5 s and shows 11688; the city
+      host sees "entered" then "left"; no new `INIT` by itself. Rejoining: a new negotiation, a new cookie, the same
+      failure. Unblocked: pings answered in 50 ms, `REPORT` success. AltWFC sends one `CONNECT` per `INIT`: the extra
+      ones, arriving while pinging, are acked and ignored (the second-`CONNECT` rule, seen live).
 - [ ] Wire: NatNeg records (magic, version, type, session id, port type, client index, then per type) typed and
       round-tripped on every recorded datagram; the QR availability packet (D1).
 - [ ] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
