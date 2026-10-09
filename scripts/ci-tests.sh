@@ -26,6 +26,8 @@ if [ -z "${CONTENT_DIR:-}" ] && [ ! -d ../mh3sp/event ]; then
     git clone --quiet https://github.com/sepalani/MH3SP "$CONTENT_DIR"
     git -C "$CONTENT_DIR" checkout --quiet "$MH3SP_COMMIT"
   fi
+  # Absolute: cargo runs each test from its crate's folder.
+  CONTENT_DIR=$(cd "$CONTENT_DIR" && pwd)
   export CONTENT_DIR
 fi
 
