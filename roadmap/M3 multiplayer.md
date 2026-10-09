@@ -44,14 +44,15 @@ player kicked for not being ready, a party broken by its leader before departure
   received request to answer later?), `s09-blacklist`, `s10-party` (the leader kicks a member, then lifts the kick
   list; a password-protected quest joined with the wrong then the right password; start with a player not ready; a
   leader leaving before departure). Also look for a city kick in the game's menus.
-- **D2 Friends and black list storage. Settled:** lists are permanent: SQLite tables `friends` and `blacklist` (pairs of
-  hunters, as sketched in `M1 schema.md`). A friend request reaches the recipient as a message (`NtcFriendAccept`,
-  built like a tell), answered with `ReqFriendAccept`; the protocol has no "pending requests" list. Whatever the
-  console does with it, the server must remember a request until it's answered (else a console could accept a
-  request never sent): *recommended:* pending requests in SQLite (`friend_requests`), which also allows delivering
-  one to an offline player at their next login (MH3SP loses them). What the game shows decides the rest, to watch
-  while recording (D1): if it keeps received requests to answer later, the server just stores and checks; if not,
-  the server could tell players about pending requests itself, e.g. a private message from "system".
+- **D2 Friends and black list storage. Settled:** lists are permanent: SQLite tables `friends` and `blacklist`
+  (pairs of hunters, as sketched in `M1 schema.md`). Seen on consoles (`s08-friends`): a friend request is an
+  option of a message (`ReqFriendAdd` with a text); the recipient gets it as a message (`NtcFriendAccept`) kept in
+  the game's **message inbox**, answered from there any time later (`ReqFriendAccept`); both get `NtcFriendAdd`
+  and their lists update at once. So the server stores pending requests (SQLite `friend_requests`) until answered,
+  and refuses an answer to a request never sent; a request to an offline player waits for their next login. The
+  friend list is only asked for when entering a world server, and the protocol has no notification of a deletion:
+  the other player's list updates at its next login. **Open:** a deletion one way (MH3SP: only the deleter's list)
+  or both ways (a friendship is mutual); and whether to tell the other player with a message from "system".
 - **D3 The hunter profile block. Settled:** stored in the database (`hunter_profiles`), as the raw block *and* the
   known fields, parsed and validated (HR u16 @0, weapon type u8 @5 so far; an invalid update is refused: the previous
   block kept, one `warn`). The block other consoles receive is rebuilt: the raw bytes with the known fields written

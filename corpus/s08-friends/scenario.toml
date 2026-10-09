@@ -1,0 +1,14 @@
+description = "Friends: dev1 creates a city, dev2 joins; dev1 sends dev2 a message with a friend request ('friends?'); dev2 leaves it in the game's message inbox, accepts it from there about a minute later; both see the other in their friend list; dev1 deletes dev2. A friend request travels as a message (NtcFriendAccept) kept in the recipient's inbox; the friend list is only asked for when entering a world server, and the protocol has no notification of a deletion, so dev2's list keeps dev1 until its next login."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev1: message to dev2 with a friend request ('friends?')",
+  "dev2: leave it in the inbox, accept it from the inbox a minute later",
+  "both: friend list shows the other; dev1 deletes dev2",
+  "both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
