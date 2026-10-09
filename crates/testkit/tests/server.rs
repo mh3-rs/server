@@ -1012,8 +1012,8 @@ async fn announcements_reach_everyone() {
     running.stop().await;
 }
 
-/// Tier 3: `mh3sp stop` warns players, refuses new logins and new quests, reminds them, can be cancelled, and stops
-/// the server at its end.
+/// Tier 3: `mh3sp stop` warns players, refuses nothing meanwhile, reminds them, can be cancelled, and stops the server
+/// at its end.
 #[tokio::test]
 async fn stopping_warns_and_can_be_cancelled() {
     let (config, _db) = config();
@@ -1030,22 +1030,12 @@ async fn stopping_warns_and_can_be_cancelled() {
         said(expect::<NtcLayerChat>(&mut c).await),
         "Server stopping in 6 seconds."
     );
-    // Maintenance: no new login, no new quest.
+    // Nothing refused meanwhile: a new login goes through.
     assert_eq!(
         opn_login(running.opn, b"RMHE08", NATNEG_HOSTNAMES).await.0,
-        2
+        5
     );
-    let create = ReqCircleCreate {
-        info: PatData::new(),
-        extra: Default::default(),
-    };
-    send(&mut c, 30, create).await;
-    assert!(
-        expect_alert(&mut c, AnsCircleCreate::ID)
-            .await
-            .contains("about to stop")
-    );
-    // The 5 s reminder, then cancelled: logins again.
+    // The 5 s reminder, then cancelled.
     let reminder = tokio::time::timeout(Duration::from_secs(3), expect::<NtcLayerChat>(&mut c))
         .await
         .unwrap();
@@ -1054,10 +1044,6 @@ async fn stopping_warns_and_can_be_cancelled() {
     assert_eq!(
         said(expect::<NtcLayerChat>(&mut c).await),
         "Server stop cancelled."
-    );
-    assert_eq!(
-        opn_login(running.opn, b"RMHE08", NATNEG_HOSTNAMES).await.0,
-        5
     );
     assert!(stop("cancel").await.unwrap().is_err(), "nothing to cancel");
     assert!(stop("soon").await.unwrap().is_err(), "not a delay");

@@ -50,11 +50,12 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
   which talks to the running server through its health port (a `POST /announce`, internal like `/health`). The
   website (M8) uses the same endpoint. The same path serves "system" messages later (e.g. the friend-removed idea).
 - **D4 Stopping. Settled (2026-10-09).** `mh3sp stop 5min` (a human-readable delay: `1h`, `30s`…) asks the
-  running server, through its internal health port, to stop: at once a broadcast ("Stopping in 5 minutes") and
-  **maintenance at runtime** (no new logins, no new quests; everything else works as usual); reminders at fixed steps
-  (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay); then the connections closed and the
-  process exits. `mh3sp stop cancel` lifts it and the maintenance. SIGTERM (`docker stop`: 10 s by default) runs the
-  same sequence from the step that fits. Quests in progress are P2P and go on.
+  running server, through its internal health port, to stop: at once a broadcast ("Server stopping in 5 minutes."),
+  reminders at fixed steps (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay), then the
+  connections closed and the process exits. **Nothing is refused meanwhile** (the user, after first planning a runtime
+  maintenance): play goes on as usual until the end. Maintenance is only a way to start (`mh3sp maintenance`: a
+  placeholder refusing everyone). `mh3sp stop cancel` lifts a stop. SIGTERM (`docker stop`: 10 s by default) runs the
+  same sequence with a 5 s warning; a second one stops at once. Quests in progress are P2P and go on.
 - **D5 Metrics. Settled:** `/metrics` on the health port, a JSON of the metrics (always); `/metrics/prometheus`
   behind a `prometheus` cargo feature. Two images: `1` (without) and `1-prometheus` (with; also `1.0-prometheus`,
   `1.0.0-prometheus`). Players online (per world server), cities, quests, NatNeg negotiations (direct, relayed,
@@ -80,8 +81,8 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - [ ] Content (D2): the generator's rework, the live branch's quests byte-identical.
 - [x] Announcements (D3): `POST /announce` on the health port, `mh3sp announce "<text>"`; every logged-in player,
       from "[MH3SP]", 30-character lines (tests: the cutting; two consoles at different places). To see on a console.
-- [x] Stopping (D4): `stop.rs`; maintenance switchable at runtime (OPN refuses logins, quest creation refused);
-      `POST /stop`, `mh3sp stop <delay|cancel>`; a signal warns 5 s, a second stops now (test: the whole sequence).
+- [x] Stopping (D4): `stop.rs`, `POST /stop`, `mh3sp stop <delay|cancel>`; nothing refused meanwhile; a signal warns
+      5 s, a second stops now (test: the whole sequence).
 - [ ] Metrics (D5).
 - [ ] Lab: the town interval (D7); a quest ending without the server (M3 D4); the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).

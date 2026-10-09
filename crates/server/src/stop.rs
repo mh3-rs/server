@@ -1,6 +1,7 @@
-//! Stopping the server with warning (M5 D4): `mh3sp stop 5min` announces it, turns maintenance on at once (no new
-//! logins, no new quests; everything else works on), reminds players at fixed steps, then stops the server.
-//! `mh3sp stop cancel` lifts it. SIGTERM runs it too, shortened (`docker stop` waits 10 s).
+//! Stopping the server with warning (M5 D4): `mh3sp stop 5min` announces it, reminds players at fixed steps, then
+//! stops the server; nothing is refused meanwhile (play goes on as usual until the end). `mh3sp stop cancel` lifts it.
+//! SIGTERM runs it too, shortened (`docker stop` waits 10 s). Maintenance is only a way to start (`mh3sp
+//! maintenance`: a placeholder refusing everyone).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +15,6 @@ use crate::game::announcement;
 
 /// Reminders, when this long is left (those shorter than the delay asked).
 const STEPS: [u64; 8] = [3600, 1800, 900, 300, 60, 30, 10, 5];
-/// The maintenance message while stopping (OPN shows it to consoles logging in).
-const MAINTENANCE: &str = "The server is restarting. Please come back in a few minutes.";
 
 /// Starts stopping the server in `delay` (a stop already under way is replaced, quietly).
 pub fn begin(shared: &Arc<Shared>, delay: Duration) {
@@ -25,7 +24,6 @@ pub fn begin(shared: &Arc<Shared>, delay: Duration) {
     }
     info!(seconds = delay.as_secs(), "stopping");
     announce(shared, &format!("Server stopping in {}.", human(delay)));
-    shared.set_maintenance(Some(MAINTENANCE.to_owned()));
     let shared = shared.clone();
     tokio::spawn(async move {
         let end = Instant::now() + delay;
@@ -54,7 +52,6 @@ pub fn cancel(shared: &Shared) -> bool {
         return false;
     };
     stop.cancel();
-    shared.set_maintenance(shared.config.maintenance.clone());
     info!("stop cancelled");
     announce(shared, "Server stop cancelled.");
     true

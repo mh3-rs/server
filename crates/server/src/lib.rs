@@ -66,8 +66,6 @@ struct Shared {
     world: std::sync::Mutex<game::world::World>,
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
-    /// Maintenance: from the start (`mh3sp maintenance`), or while stopping (`mh3sp stop`): its message.
-    maintenance: std::sync::RwLock<Option<String>>,
     /// A stop under way (`stop.rs`): cancelling it lifts it.
     stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
@@ -84,12 +82,8 @@ impl Shared {
         }
     }
 
-    fn maintenance(&self) -> Option<String> {
-        self.maintenance.read().unwrap().clone()
-    }
-
-    fn set_maintenance(&self, message: Option<String>) {
-        *self.maintenance.write().unwrap() = message;
+    fn maintenance(&self) -> Option<&str> {
+        self.config.maintenance.as_deref()
     }
 
     fn configured(&self) -> bool {
@@ -186,7 +180,6 @@ pub async fn start(config: &Config) -> Result<Running> {
         players: Players::default(),
         world: Default::default(),
         started: SystemTime::now(),
-        maintenance: std::sync::RwLock::new(config.maintenance.clone()),
         stop: Default::default(),
         shutdown: shutdown.clone(),
     });
