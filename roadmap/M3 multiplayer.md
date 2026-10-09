@@ -1,6 +1,7 @@
 # M3 — Multiplayer
 
-**Status: draft (2026-10-09), decisions to settle.**
+**Status: decisions mostly settled (2026-10-09); open until tested on consoles: D4 (disconnects), D7 (kicks and
+leaders), D9's password behaviour.**
 
 Players see each other: in a gate and a city (arrivals, departures, positions, the game data consoles exchange
 through the server), in a quest party (join, ready, depart, leave, leader changes), and socially (chat, tells,
@@ -38,11 +39,11 @@ player kicked for not being ready, a party broken by its leader before departure
 
 ### Open (recommendation first)
 
-- **D1 New recordings.** Chat, tells, friends and the black list are in no recording.
-  *Recommended:* record them with two Dolphins at the start of M3, in the lab, against MH3SP (the oracle):
-  `s07-chat` (layer chat, a tell), `s08-friends` (request, accept, list, delete), `s09-blacklist`, `s10-party`
-  (the leader kicks a member, then lifts the kick list; a password-protected quest joined with the wrong then the
-  right password; start with a player not ready; a leader leaving before departure).
+- **D1 New recordings. Settled:** record with two Dolphins at the start of M3, in the lab, against MH3SP (the
+  oracle): `s07-chat` (layer chat, a tell), `s08-friends` (request, accept, list, delete; does the console keep a
+  received request to answer later?), `s09-blacklist`, `s10-party` (the leader kicks a member, then lifts the kick
+  list; a password-protected quest joined with the wrong then the right password; start with a player not ready; a
+  leader leaving before departure). Also look for a city kick in the game's menus.
 - **D2 Friends and black list storage.** Lists are permanent: SQLite tables `friends` and `blacklist` (pairs of
   hunters, as sketched in `M1 schema.md`). A friend request reaches the recipient as a message (`NtcFriendAccept`,
   built like a tell), answered with `ReqFriendAccept`; the protocol has no "pending requests" list. Whatever the
@@ -51,26 +52,32 @@ player kicked for not being ready, a party broken by its leader before departure
   one to an offline player at their next login (MH3SP loses them). What the game shows decides the rest, to watch
   while recording (D1): if it keeps received requests to answer later, the server just stores and checks; if not,
   the server could tell players about pending requests itself, e.g. a private message from "system".
-- **D3 The hunter profile block.** Stage 1 of the global plan: parse and validate the known fields (HR u16 @0,
-  weapon type u8 @5) on every `UserBinarySet`; an invalid update is refused (the previous block kept and
-  forwarded, one `warn`). *Recommended:* validation now (other consoles draw the hunter from it), the
-  `hunter_profiles` table later, with its first reader (the website, M7, or anti-cheat, M6).
-- **D4 Disconnects.** The Rust server sees a closed socket at once: others get `NtcLayerOut` immediately, not ~30 s
-  later as with MH3SP (a vanished console that sends nothing is still dropped by the line check: 30 s, then one
-  unanswered). *Recommended:* keep it; `s06`'s timing is a declared divergence.
+- **D3 The hunter profile block. Settled:** stored in the database (`hunter_profiles`), as the raw block *and* the
+  known fields, parsed and validated (HR u16 @0, weapon type u8 @5 so far; an invalid update is refused: the previous
+  block kept, one `warn`). The block other consoles receive is rebuilt: the raw bytes with the known fields written
+  over them. As fields get mapped they move from raw to parsed; once all are, the raw column goes (global roadmap,
+  M3).
+- **D4 Disconnects. Open, a lab test first.** The Rust server sees a closed socket at once (MH3SP ~30 s later, at
+  its next line check). A grace period (keeping a vanished player's place for a few seconds) only helps if the game
+  can come back: in the lab a broken connection so far ends on an error screen and back to the title, a new login;
+  but hunts are P2P, and telling the others "left" mid-quest might drop a player whose server connection only
+  hiccuped. The protocol has an `NtcRecconect` (sic) message: the game may support some reconnection. Test: cut one
+  Dolphin's network for 5, 15, 30 s, in town and mid-quest, watch both consoles; then decide.
 - **D5 Locking. Settled:** one lock for the whole `World` (relays look up the layer's players under it and push to
   their mailboxes without waiting); written down where it's declared (`Shared::world`). Revisited the day the
   relay-latency test or production shows contention: per world server first (nothing crosses that boundary but
   population counts), finer locks (gate, city, quest) only with a lock ordering for every move between levels.
-- **D6 A slow player.** A full mailbox (256 frames) drops its connection today. Positions alone are ~0.23 kB/s per
-  player. *Recommended:* keep (a console that far behind is gone); revisit with the stress test.
-- **D7 Leaders and parties**, MH3SP's rules. A city's "leader" is the **host of its P2P session**: a console joining
-  asks `LayerHost` who it is and connects to that console directly; the protocol has no kick from a city (to check
-  in the game's menus while recording). A **quest's leader can kick** a member: `ReqCircleKick` (→ `NtcCircleKick`
-  to the kicked player), and a kick list keeps them out of that quest (`ReqCircleDeleteKickList` lifts it). The host
-  leaving hands the session to the earliest player (`NtcLayerHost`), and the others reconnect to them; a quest's leader leaving before departure breaks the party (`NtcCircleBreak`), after departure
-  hands it over (`NtcCircleHost`); at departure, players not ready are kicked from the party (`NtcCircleKick`).
-  *Recommended:* the same.
+- **D6 A slow player. Settled:** a full mailbox (256 frames) disconnects its player. Others aren't slowed (senders
+  never wait: a frame for a full mailbox is just not queued); the slow player's game has then missed frames and is
+  out of sync, hence the disconnect.
+- **D7 Leaders and parties. Open until tested on a console (D1).** MH3SP's rules. A city's "leader" is the
+  **host of its P2P session**: a console joining asks `LayerHost` who it is and connects to that console directly;
+  the protocol has no kick from a city (to check in the game's menus). A **quest's leader can kick** a member:
+  `ReqCircleKick` (→ `NtcCircleKick` to the kicked player), and a kick list keeps them out of that quest
+  (`ReqCircleDeleteKickList` lifts it). The host leaving hands the city's session to the earliest player
+  (`NtcLayerHost`), and the others reconnect to them; a quest's leader leaving before departure breaks the party
+  (`NtcCircleBreak`), after departure hands it over (`NtcCircleHost`); at departure, players not ready are kicked
+  from the party (`NtcCircleKick`).
 - **D9 Quest capacity and password. Settled:** both are set at creation and enforced at `CircleJoin` ("quest is
   full", "wrong password" alerts). **The server checks the password**: a joining console sends the one typed in
   `ReqCircleJoin`. It's **never kept in clear**: hashed with argon2 at creation (off the async threads: tens of
@@ -80,9 +87,7 @@ player kicked for not being ready, a party broken by its leader before departure
   copied in M2. **The password never leaves the server**: the record has a "has password" flag; to test while
   recording that the console only needs the flag; if it needs field `0x04` present too, the server sends a fixed
   placeholder instead of the password.
-- **D8 Tier 4** (live differential, kept for later in M1). M3 is where it pays off: scripted multi-console scenarios
-  the corpus doesn't have, run against MH3SP and Rust. *Recommended:* decide after D1's recordings (they may cover
-  enough).
+- **D8 Tier 4. Kept for later** (live differential against MH3SP).
 
 ## Work (once the decisions are settled)
 
@@ -92,7 +97,8 @@ player kicked for not being ready, a party broken by its leader before departure
 - [ ] Parties: join, user list, host, binaries to all / one, leave, kick, break, host transfer (D7);
       `NtcUserBinaryNotice`.
 - [ ] Chat, tells, friends, black list (D1, D2).
-- [ ] Profile block validation (D3).
+- [ ] Profile block (D3): validation, `hunter_profiles` (raw block and known fields), the block rebuilt for others.
+- [ ] Disconnect lab test and grace period decision (D4).
 - [ ] Concurrency model written down (who owns what; no socket written but by its task) (D5).
 - [ ] Replay gate: the multiplayer scenarios.
 - [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test, relay latency.
