@@ -50,17 +50,22 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
   (wherever they are: world server, gate, city; in a quest too). Triggered by the operator: `mh3sp announce "text"`,
   which talks to the running server through its health port (a `POST /announce`, internal like `/health`). The
   website (M8) uses the same endpoint. The same path serves "system" messages later (e.g. the friend-removed idea).
-- **D4 Graceful shutdown.** On SIGTERM (Docker's stop): an announcement ("server restarting in 1 minute"), then a
-  minute later maintenance mode (new logins refused with the maintenance text), then the connections closed. The
-  delay configurable (`SHUTDOWN_GRACE`, default 60 s; 0 for tests). Quests in progress are P2P and go on until the
-  players return to town.
-- **D5 Metrics.** A Prometheus endpoint on the health port (`/metrics`): players online (per world server), cities,
-  quests, NatNeg negotiations (direct, relayed, failed), relay pairs and traffic, request latency. No database, no
-  history (Prometheus keeps it). Anonymous only: counts, never Capcom IDs.
-- **D6 Chat logs. Recommendation: no.** MH3SP's branch logs chat; ours never logs what players write (user content,
-  M1's logging rule). Moderation (M6–M8) will decide what to keep, where, how long.
-- **D7 Town position interval.** A lab test with 200 ms, then 100 ms (field `0x11`): smoother? Any console trouble?
-  Then pick the lowest that works (traffic: ~80 bytes per position, ~2 kB/s per full city at 100 ms).
+- **D4 Stopping. Settled (2026-10-09), additions to confirm.** `mh3sp stop 5min` (a human-readable delay: `1h`,
+  `30s`…) asks the running server, through its internal health port, to stop: at once a broadcast ("Stopping in 5
+  minutes") and **maintenance at runtime** (no new logins, no new quests; everything else works as usual); reminders
+  at fixed steps (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay); then the connections
+  closed and the process exits. Proposed: `mh3sp stop cancel` (lifts it and the maintenance), and SIGTERM (`docker
+  stop`: 10 s by default) runs the same sequence from the step that fits. Quests in progress are P2P and go on.
+- **D5 Metrics. Settled:** `/metrics` on the health port, a JSON of the metrics (always); `/metrics/prometheus`
+  behind a `prometheus` cargo feature (open: built into the Docker image?). Players online (per world server),
+  cities, quests, NatNeg negotiations (direct, relayed, failed), relay pairs and traffic, request latency. No
+  database, no history. Anonymous only: counts, never Capcom IDs.
+- **D6 Chat logs. Settled: not in M5.** Never logged now (user content, M1's logging rule); what to keep, where and
+  how long is for moderation (M6–M8).
+- **D7 Town position interval. Settled: a lab test.** The layer record's field `0x11` is the console's position
+  interval (how often it sends its own position; the decomp's `applyLoginRecord`), set by the server: 500 ms today
+  (MH3SP's). Tried at 200 ms, then 100 ms: smoother? any console trouble? The lowest that works is kept (~80 bytes a
+  position, ~2 kB/s per full city at 100 ms).
 - **D8 Tier 4 (live differential against MH3SP). Recommendation: drop it.** Kept for later twice; the corpus replays
   (tier 2) and console runs covered parity so far, and MH3SP is a moving reference. Revisit only if a divergence
   can't be found otherwise.
