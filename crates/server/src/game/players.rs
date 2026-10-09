@@ -8,7 +8,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use wire::Frame;
 
-/// Frames waiting for a connection; a player this far behind is dropped rather than slowing the others.
+/// Frames waiting for a connection's task to write them to its socket (then the system's TCP buffer absorbs a slow
+/// console). A player receives under 1 frame/s, ~30/s at the busiest in a full city, ~80 bytes each: a mailbox only
+/// fills once the console has stopped reading for about a minute. A memory guard, not a latency rule.
 const MAILBOX_SIZE: usize = 256;
 
 /// A connection's mailbox: frames to send it, and a way to drop it.

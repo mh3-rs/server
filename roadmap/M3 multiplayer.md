@@ -67,9 +67,12 @@ player kicked for not being ready, a party broken by its leader before departure
   their mailboxes without waiting); written down where it's declared (`Shared::world`). Revisited the day the
   relay-latency test or production shows contention: per world server first (nothing crosses that boundary but
   population counts), finer locks (gate, city, quest) only with a lock ordering for every move between levels.
-- **D6 A slow player. Settled:** a full mailbox (256 frames) disconnects its player. Others aren't slowed (senders
-  never wait: a frame for a full mailbox is just not queued); the slow player's game has then missed frames and is
-  out of sync, hence the disconnect.
+- **D6 A stuck player. Settled:** a full mailbox (256 frames) disconnects its player. It's a memory guard, not a
+  latency rule: a mailbox holds frames only until the connection's task writes them to its socket, into the
+  system's TCP send buffer (128 KB or more). Measured on the recordings, a player receives under 1 frame/s (9 at
+  the busiest second), ~80 bytes each; a full city, ~3/s with bursts around 30. A slow console just reads late
+  from the system buffer; the mailbox fills only after ~1,600 + 256 frames unread, about a minute of not reading at
+  a full city's busy rate (the line check usually drops it first). Others aren't slowed: senders never wait.
 - **D7 Leaders and parties. Open until tested on a console (D1).** MH3SP's rules. A city's "leader" is the
   **host of its P2P session**: a console joining asks `LayerHost` who it is and connects to that console directly;
   the protocol has no kick from a city (to check in the game's menus). A **quest's leader can kick** a member:
