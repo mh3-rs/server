@@ -36,6 +36,25 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
   - M3 D4: what a console does when its quest ends while the server is gone (seen hunting on: unchecked after);
   - M4: a mixed city on two machines (one console relayed, the others direct).
 
+## The missing packets (research, 2026-10-09)
+
+From the decomp (the network layer down to the wire is decompiled; the menus calling it aren't, so the menu names are
+MH3SP's tested docstrings or inferred) and MH3SP:
+
+| Packets | What the player does | MH3SP | Wire and console |
+|---|---|---|---|
+| `UserSearchHead/Data/Foot` | Player Search by name or Capcom ID (every server) | substring match on online players | `Data` rows: Capcom ID, name, (profile, path read but dropped), optional fields; up to 100 |
+| `LayerDetailSearchHead/Data/Foot` | a city search by its four settings (those chosen at creation) | exact match on settings; a bug: every row is the first city | one city per `Data` (the console clamps to 1), with its members; path in item 2 |
+| `LayerSiblingListHead/Data/Foot` | Change Gates (Relocate, at a gate's entrance) | the gates, but no path in them: picking one fails | same shape as the child list; item 2 (path) is the jump target |
+| `LayerMediationLock/Unlock` | sitting on a city's seats (1–12) and arm wrestling (13–14) | always yes, notices commented out: two players on one seat, no release on disconnect | refusal = an alert answer; notices `NtcLayerMediationLock/Unlock` to the city |
+| `LayerTell` | chat to one hunter, in a gate or world-server lobby only (cities go P2P) | answers, echoes to the sender | `NtcLayerTell` to the target; whether the chat menu offers it: unknown |
+| `NtcLayerTellLow` | never sent by the console, and ignored when received | — | not implemented |
+
+**Beyond them:** joining from a list (a sibling gate, a city found by search, maybe a player found) goes through
+`ReqLayerInfo` (0x6421) and `ReqLayerJump` (0x6410, same world server) or `ReqLayerJumpReady`/`JumpGo` (0x6416/0x6417,
+another): neither MH3SP nor we answer them (on MH3SP these flows hang after the list). And the console only jumps to a
+path whose first `u32` is its own, which is 4 in every recording, where our paths (and MH3SP's) carry the depth (1–3).
+
 ## Decisions
 
 
