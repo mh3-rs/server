@@ -43,6 +43,33 @@ Every scenario's `udp/` files hold the consoles' datagrams (NatNeg and P2P). Per
 Counts over the corpus: 68 `INIT`, 64 `CONNECT`, 32 `CONNECT_PING` each way, 16 `REPORT`, then ~12,000 P2P datagrams
 each way (towns and hunts). Measured P2P traffic: ~5.5 packets/s, ~42 bytes each, ~0.23 kB/s per direction.
 
+### The game's NatNeg client (decomp, 2026-10-09)
+
+Read in `mhtri-decomp/src/DWCi/DWCi_NatNeg.c` (DWC's build of GameSpy's `natneg.c`) and the GT2 glue
+(`GameSpyInterfaceThread.cpp`, `NetworkLayerPat.cpp`, `NetworkSessionStable.cpp`), checked against the corpus.
+
+- **Cookie** = the XOR of the two consoles' PAT peer ids (relayed by the server in `NtcLayerBinary(2)`): the server
+  can tell which pair a negotiation is for.
+- **INIT**: port type 0 from the game socket to natneg1; 1 from a NatNeg socket to natneg1; 2 and 3 from that socket
+  (carrying the game socket's local port) to **natneg2 and natneg3**. Resent every 500 ms, 10 times; then error 11687.
+  Once all are acked, the client waits **60 s** for `CONNECT` (else 11686).
+- **CONNECT** is acked whenever it comes, but **acted on only before pinging starts**: a second one, e.g. a relay
+  address after a failed punch, is ignored. No check of who sent it.
+- **Pings**: from the game socket to the given address, every 700 ms, 7 retries: a failed punch gives up after
+  ~6.3 s, sends `REPORT` with failure, and shows **11688**. A ping's *source* becomes the peer address (no check).
+- **Nothing retries a failed negotiation**; a pair whose established link drops is renegotiated with the same cookie.
+  A player rejoining gets a new cookie. (`0x80030042`, 11677, is not a NatNeg error: a peer link lost.)
+- **GT2 uses NatNeg's address**, not the IP:port in the PAT offers (those are only for a same-LAN path, skipped
+  since MH3SP's "mode" values differ per user). **GT2 checks the source address** of every datagram: the address
+  that answers the pings must be the one that carries the game traffic.
+- **No NAT-type detection** in the client (never sends `ADDRESS_CHECK` or `NATIFY`; `REPORT` always says "unknown").
+  The server can still classify: different public ports for port types 1 and 2/3 (sent to natneg1 vs natneg2/3 on
+  *different IPs*) mean a symmetric NAT.
+- **Topology: a full mesh**, negotiated pair by pair (the host with each member, then the members two by two): 6 pairs
+  for 4 players. The session also has its own relay through another member (to explore: it may tolerate one failed
+  pair with 3+ players).
+- Keepalives: every 1 s; a peer silent for 20 s is dropped (matches the M3 D4 cut test).
+
 From the disconnect test (M3 D4): the P2P link survives 15 s of silence, not 20 (both see "dev exited the game"). The
 relay must never be the reason a link drops: no idle timeout under a few minutes, no queueing.
 
@@ -56,12 +83,12 @@ relay must never be the reason a link drops: no idle timeout under a few minutes
 - **D2 Strategies and default.** `NATNEG_STRATEGY = p2p | relay | hybrid` (environment variable), default
   **`hybrid`**: P2P first, the relay for a console known to fail. `relay` for players on a network known to block P2P
   (or a whole deployment), `p2p` for a LAN or a test.
-- **D3 Hybrid: when to use the relay.** Signals: a `REPORT` with result 0 (failure), and the game's error report
-  (`NtcCollectionLog` with `0x80030042`, already logged in M3). Remembered **per console** (by its Capcom ID, in
-  memory, for the game session; 30 minutes, renewed on each failure), not per pair: a console that can't punch one peer
-  rarely punches others. The game doesn't retry by itself: the player retries once (rejoins the city or quest) and
-  gets the relay. Later, if worth it: try the relay at once on a failed `REPORT` (needs the game to accept a second
-  `CONNECT`: to check).
+- **D3 Hybrid: when to use the relay.** The choice can only be made **when sending the first `CONNECT`** (a second
+  one is ignored, and nothing retries). So: (a) remember failures — a `REPORT` with failure, or the game's 11688
+  in `NtcCollectionLog` — **per console** (by Capcom ID, in memory, 30 minutes renewed on each failure): its next
+  negotiation, i.e. the player's retry, goes through the relay; (b) optionally, decide upfront from the `INIT`s
+  (symmetric NAT spotted → relay at once), which needs natneg2/natneg3 on a second IP (D9). Injecting pings mid-attempt
+  is possible but blind and blocked by restrictive NATs: no.
 - **D4 Relay ports.** One UDP port **per pair** of consoles: each console sees its peer at `relay:port`, the relay
   forwards by source (from A to B, from B to A, nothing else). A console's datagrams for different peers leave one game
   socket, so one port per peer is the only way to tell them apart. Ports from a configured range
@@ -71,18 +98,23 @@ relay must never be the reason a link drops: no idle timeout under a few minutes
   logged-in player (their FMP connection's); anything else is ignored. The relay forwards only between the two
   addresses the negotiation registered, so it's never an open relay. Per console: at most 8 relayed pairs, at most
   ~20 kB/s (100 × the measured rate). Over a limit: dropped, one `warn`.
-- **D6 Addresses in the PAT connection offers.** `NtcLayerBinary2` / `NtcCircleBinary2` carry the host's IP and port.
-  If the game connects to that address rather than the NatNeg one, the relay mode must rewrite it. **To check first**
-  (decomp: what GT2 does with it; lab: a `relay`-only run shows it at once).
-- **D7 Quest topology.** Star (host to each member) or mesh (everyone to everyone)? The decomp names a host and
-  "subhost": to read, then to see with 3 consoles (`lab/p3`, `p4` profiles exist). It sets the relay's size: 3 pairs
-  per party (star) or 6 (mesh).
+- **D6 Addresses in the PAT connection offers. Answered (decomp):** GT2 uses NatNeg's address; the offers' IP:port
+  only serve a same-LAN shortcut the game skips. No rewriting: NatNeg handing out relay addresses is enough. The
+  relay learns each console's address from its first ping on the relay port (not from `INIT`: a symmetric NAT maps
+  each destination differently), and forwards pings and game traffic through the same port.
+- **D7 Topology. Answered (decomp):** a full mesh, pair by pair: up to 6 relayed pairs per city or party. To see with
+  3 consoles (`lab/p3`, `p4` profiles exist), with one pair blocked (the session's own relay through a member).
+- **D9 natneg1/2/3.** The game sends `INIT`s to three hostnames. One IP for all three works (what AltWFC does);
+  a second IP for natneg2/natneg3 enables the upfront symmetric-NAT detection (D3 b). Recommendation: one IP now, the
+  detection later if hybrid's "fail once, then relay" proves annoying.
 - **D8 The relay's address.** `EXTERNAL_ADDRESS` (already the address consoles reach FMP at): one public IPv4. The
   relay and NatNeg listen on all interfaces, like the TCP roles.
 
 ## Work (once the decisions are settled)
 
-- [ ] Research (D6, D7): the decomp on GT2's use of the offer's address and on the quest topology.
+- [x] Research (D6, D7): done, see "The game's NatNeg client".
+- [ ] Lab: forced failure (pings dropped between the consoles): 11688 at ~6 s, no automatic retry, a new cookie
+      when the player rejoins; a second `CONNECT` ignored.
 - [ ] Wire: NatNeg records (magic, version, type, session id, port type, client index, then per type) typed and
       round-tripped on every recorded datagram; the QR availability packet (D1).
 - [ ] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
