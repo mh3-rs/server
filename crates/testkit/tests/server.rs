@@ -977,3 +977,141 @@ fn position_lp2(position: &[u8]) -> Vec<u8> {
     v.extend_from_slice(position);
     v
 }
+
+/// What a console receives within `window`, by packet id.
+async fn drain(console: &mut Console, window: Duration) -> Vec<wire::PacketId> {
+    let mut ids = Vec::new();
+    while let Received::Frame(f) = console.recv(window).await.unwrap() {
+        ids.push(f.id);
+    }
+    ids
+}
+
+/// Two consoles in city 1 of `gate`, B in A's quest (A ready and B ready when `depart`, then the quest started).
+async fn party(running: &server::Running, gate: u16, depart: bool) -> (Console, Console) {
+    let mut a = enter_world(running).await;
+    let mut b = enter_world(running).await;
+    for c in [&mut a, &mut b] {
+        send(
+            c,
+            10,
+            ReqLayerDown {
+                layer: gate,
+                info: PatData::new(),
+            },
+        )
+        .await;
+    }
+    send(&mut a, 11, ReqLayerCreateHead { number: 1 }).await;
+    send(
+        &mut a,
+        12,
+        ReqLayerCreateSet {
+            number: 1,
+            layer: PatData::new(),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    send(&mut a, 13, ReqLayerCreateFoot { number: 1, unk: 0 }).await;
+    // A's city exists (its reservation over) before B enters it.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    send(
+        &mut b,
+        11,
+        ReqLayerDown {
+            layer: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    let info = PatData::new().with(0x09, Item::Long(4));
+    send(
+        &mut a,
+        14,
+        ReqCircleCreate {
+            info,
+            extra: Default::default(),
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    send(
+        &mut b,
+        12,
+        ReqCircleJoin {
+            circle: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    if depart {
+        for c in [&mut a, &mut b] {
+            send(
+                c,
+                20,
+                ReqCircleMatchOptionSet {
+                    options: PatData::new().with(0x03, Item::Byte(1)),
+                },
+            )
+            .await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        send(&mut a, 21, ReqCircleMatchStart {}).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drain(&mut a, Duration::from_millis(100)).await;
+    drain(&mut b, Duration::from_millis(100)).await;
+    (a, b)
+}
+
+/// Tier 3: a quest leader whose console vanishes (a crash, a lost connection) leaves cleanly: before departure the
+/// party is cancelled for the others, after departure the next member leads it; the city gets a new host.
+#[tokio::test]
+async fn a_vanishing_leader_is_cleaned_up() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+
+    let (a, mut b) = party(&running, 1, false).await;
+    drop(a);
+    let seen = drain(&mut b, Duration::from_millis(500)).await;
+    for expected in [
+        NtcCircleLeave::ID,
+        NtcCircleBreak::ID,
+        NtcCircleListLayerChange::ID,
+        NtcLayerOut::ID,
+        NtcLayerHost::ID,
+    ] {
+        assert!(
+            seen.contains(&expected),
+            "before departure: no {expected} in {seen:?}"
+        );
+    }
+    // B is out of the party: it can create its own quest.
+    send(
+        &mut b,
+        30,
+        ReqCircleCreate {
+            info: PatData::new(),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    assert!(seen.contains(&AnsCircleCreate::ID), "{seen:?}");
+
+    let (a, mut b) = party(&running, 2, true).await;
+    drop(a);
+    let seen = drain(&mut b, Duration::from_millis(500)).await;
+    for expected in [NtcCircleLeave::ID, NtcCircleHost::ID, NtcLayerOut::ID] {
+        assert!(
+            seen.contains(&expected),
+            "after departure: no {expected} in {seen:?}"
+        );
+    }
+    assert!(
+        !seen.contains(&NtcCircleBreak::ID),
+        "a departed quest goes on: {seen:?}"
+    );
+    running.stop().await;
+}
