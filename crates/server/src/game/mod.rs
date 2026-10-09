@@ -11,10 +11,11 @@ use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
+use bytes::BufMut;
 use bytes::Bytes;
 use sqlx::SqlitePool;
 use wire::packets::{AnsServerTime, Packet, ReqConnection};
-use wire::{DecodeError, EncodeError, Frame, PacketId};
+use wire::{DecodeError, EncodeError, Frame, PacketId, PatWrite};
 
 use crate::Shared;
 use crate::accounts::Console;
@@ -171,6 +172,20 @@ pub fn server_time(seq: u16) -> Handled {
             current_time: now,
         },
     )
+}
+
+/// An answer refused with a message the console shows: the answer's id with kind byte `0x01`, then a flag (0 would
+/// hide the message) and the text.
+pub fn alert(answer: PacketId, seq: u16, message: crate::text::Text) -> Handled {
+    let text = crate::text::text(message, crate::text::Language::default());
+    let mut payload = Vec::new();
+    payload.put_u32(1);
+    payload.put_lp2_string(text.as_bytes())?;
+    Ok(vec![Frame {
+        seq,
+        id: PacketId(answer.0 | 0x01),
+        payload: payload.into(),
+    }])
 }
 
 pub fn unexpected(id: PacketId) -> Fault {

@@ -547,18 +547,24 @@ async fn fmp_progress() {
             .iter()
             .filter(|r| r.name.ends_with("-fmp"))
         {
-            let first = r
-                .mismatches
-                .first()
-                .map(|m| format!("{} {:?}", m.expected.name, m.got))
-                .unwrap_or_default();
+            let detail = r.mismatches.first().map_or(String::new(), |m| match &m.got {
+                replay::Got::Frame(f) => {
+                    let expected = corpus::unhex(&m.expected.payload).unwrap();
+                    let at = expected.iter().zip(f.payload.iter()).position(|(a, b)| a != b).unwrap_or(expected.len().min(f.payload.len()));
+                    let around = |b: &[u8]| corpus::hex(&b[at.saturating_sub(8).min(b.len())..(at + 16).min(b.len())]);
+                    format!(
+                        "{} (got {}): first difference at {at} of {}/{}: expected …{}… got …{}…",
+                        m.expected.name, f.id, expected.len(), f.payload.len(), around(&expected), around(&f.payload)
+                    )
+                }
+                other => format!("{} {other:?}", m.expected.name),
+            });
             println!(
-                "{} {}: {}/{} {}",
+                "{} {}: {}/{} {detail}",
                 scenario.file_name().unwrap().to_string_lossy(),
                 r.name,
                 r.matched,
-                r.expected,
-                &first[..first.len().min(160)]
+                r.expected
             );
         }
     }

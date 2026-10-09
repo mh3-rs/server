@@ -95,7 +95,12 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       times), `0x03` (NPC greeters: quest names from the rotation's files), `0x04` (trading post), read from
       `CONTENT_DIR` (tests and CI: MH3SP at `f53b06c`, cloned by `scripts/ci-tests.sh` when absent). Replays run
       at the scenario's recording date (`clock_offset`). The three `s02` scenarios replay whole (`clean_so_far`).
-- [ ] FMP connection 2: city list and creation.
+- [x] FMP connection 2, cities: the city list of a gate (with each city's settings), creating one
+      (`LayerCreateHead` reserves it, shown full; `Set` creates it and puts its creator in; `Foot` ends the
+      reservation), entering and leaving one. A city exists from its reservation until its last player leaves; the
+      reservation goes with its player; a leader leaving hands the city to the earliest player left. Refusals are
+      alerts (the answer's id with kind byte `0x01`). Layer states are MH3SP's: 1 empty, 2 full, 3 joinable. `s03`
+      creates its city and stops at the quest downloads.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
 - [ ] Content binaries (D1); the content folder with MH3SP's event files (D2); time (D6).
 - [ ] World model (D3), players registry and `Effect`s (D4).

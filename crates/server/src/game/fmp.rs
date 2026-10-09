@@ -10,7 +10,7 @@ use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
 use super::players::Mailbox;
-use super::{Fault, Handled, PROFILE_SIZE, Session, reply, server_time, unexpected, world};
+use super::{Fault, Handled, PROFILE_SIZE, Session, alert, reply, server_time, unexpected, world};
 use crate::Shared;
 use crate::content::{self, Binary};
 use crate::text::Language;
@@ -221,19 +221,27 @@ impl Fmp {
             }
             ReqLayerChildListHead::ID => {
                 ReqLayerChildListHead::decode(p)?;
+                let (_, gate, _) = location(shared, session)?;
+                let count = match gate {
+                    None => world::GATES,
+                    Some(_) => world::CITIES,
+                };
                 reply(
                     seq,
                     &AnsLayerChildListHead {
                         unk: 0,
-                        count: u32::from(world::GATES),
+                        count: u32::from(count),
                     },
                 )
             }
             ReqLayerChildListData::ID => {
                 let r = ReqLayerChildListData::decode(p)?;
-                let server = world_server(session)?;
-                let children =
-                    world::gates(&shared.world.lock().unwrap(), server, r.first, r.count);
+                let (server, gate, _) = location(shared, session)?;
+                let world = shared.world.lock().unwrap();
+                let children = match gate {
+                    None => world::gates(&world, server, r.first, r.count),
+                    Some(gate) => world::cities(&world, server, gate, r.first, r.count),
+                };
                 reply(
                     seq,
                     &AnsLayerChildListData {
@@ -260,26 +268,82 @@ impl Fmp {
             }
             ReqLayerDown::ID => {
                 let r = ReqLayerDown::decode(p)?;
+                let me = capcom_id(session);
+                let (server, gate, city) = location(shared, session)?;
                 let mut world = shared.world.lock().unwrap();
-                let place = world
-                    .place(capcom_id(session))
-                    .ok_or_else(|| Fault::Client(anyhow!("layer down outside a world server")))?;
-                match place.gate {
-                    None if (1..=world::GATES).contains(&r.layer) => {
-                        place.gate = Some(r.layer);
+                match (gate, city) {
+                    (None, _) if (1..=world::GATES).contains(&r.layer) => {
+                        world.place(me).expect("located").gate = Some(r.layer);
                         info!(gate = r.layer, "entered gate");
                     }
-                    None => return Err(Fault::Client(anyhow!("no gate {}", r.layer))),
-                    Some(_) => return Err(unexpected(req.id)),
+                    (Some(gate), None) => {
+                        if let Err(refusal) = world.join_city((server, gate, r.layer), me) {
+                            return alert(AnsLayerDown::ID, seq, refusal.text());
+                        }
+                        info!(gate, city = r.layer, "entered city");
+                    }
+                    _ => return Err(Fault::Client(anyhow!("no layer {} below", r.layer))),
                 }
                 reply(seq, &AnsLayerDown { layer: r.layer })
             }
             ReqLayerUp::ID => {
                 ReqLayerUp::decode(p)?;
-                if let Some(place) = shared.world.lock().unwrap().place(capcom_id(session)) {
-                    place.gate = None;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                if let Some(place) = world.place(me) {
+                    if place.city.is_some() {
+                        world.leave_city(me);
+                    } else {
+                        place.gate = None;
+                    }
                 }
                 reply(seq, &AnsLayerUp {})
+            }
+            ReqLayerCreateHead::ID => {
+                let r = ReqLayerCreateHead::decode(p)?;
+                let (server, gate, city) = location(shared, session)?;
+                let (Some(gate), None) = (gate, city) else {
+                    return Err(Fault::Client(anyhow!("city created outside a gate")));
+                };
+                if !(1..=world::CITIES).contains(&r.number) {
+                    return Err(Fault::Client(anyhow!("no city {}", r.number)));
+                }
+                if let Err(refusal) = shared
+                    .world
+                    .lock()
+                    .unwrap()
+                    .reserve_city((server, gate, r.number), capcom_id(session))
+                {
+                    return alert(AnsLayerCreateHead::ID, seq, refusal.text());
+                }
+                reply(seq, &AnsLayerCreateHead { number: r.number })
+            }
+            ReqLayerCreateSet::ID => {
+                let r = ReqLayerCreateSet::decode(p)?;
+                let (server, gate, _) = location(shared, session)?;
+                let gate =
+                    gate.ok_or_else(|| Fault::Client(anyhow!("city created outside a gate")))?;
+                if let Err(refusal) = shared.world.lock().unwrap().create_city(
+                    (server, gate, r.number),
+                    capcom_id(session),
+                    r.extra,
+                ) {
+                    return alert(AnsLayerCreateSet::ID, seq, refusal.text());
+                }
+                info!(gate, city = r.number, "created city");
+                reply(seq, &AnsLayerCreateSet { number: r.number })
+            }
+            ReqLayerCreateFoot::ID => {
+                let r = ReqLayerCreateFoot::decode(p)?;
+                let (server, gate, _) = location(shared, session)?;
+                if let Some(gate) = gate {
+                    shared
+                        .world
+                        .lock()
+                        .unwrap()
+                        .release_city((server, gate, r.number), capcom_id(session));
+                }
+                reply(seq, &AnsLayerCreateFoot { number: r.number })
             }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;
@@ -396,10 +460,13 @@ fn capcom_id(session: &Session) -> &str {
     session.capcom_id.as_deref().unwrap_or_default()
 }
 
-fn world_server(session: &Session) -> Result<u32, Fault> {
-    session
-        .world_server
-        .ok_or_else(|| Fault::Client(anyhow!("no world server picked")))
+/// Where the player is: world server, gate, city.
+fn location(shared: &Shared, session: &Session) -> Result<(u32, Option<u16>, Option<u16>), Fault> {
+    let mut world = shared.world.lock().unwrap();
+    let place = world
+        .place(capcom_id(session))
+        .ok_or_else(|| Fault::Client(anyhow!("not in a world server")))?;
+    Ok((place.server, place.gate, place.city))
 }
 
 /// Content binary `kind`, built now.
