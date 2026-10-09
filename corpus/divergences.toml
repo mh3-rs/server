@@ -81,8 +81,8 @@ reason = "a quest's password never leaves the server (M3 D9): a placeholder wher
 # the Rust server answers the real gate or city record.
 [[mask]]
 packet = "AnsLayerChildInfo"
-offset = 2
-reason = "the real layer record, not MH3SP's placeholder (Local Info showed 0/4)"
+offset = 0
+reason = "the console's own number echoed (MH3SP: always 1, so the console ignored the record), the real layer record and the city's settings, not MH3SP's placeholder (Local Info showed 0/4)"
 
 # Frames the Rust server doesn't send, on purpose: [[omit]] names the scenario, the connection, the packet and its
 # sequence number, with a reason.

@@ -174,7 +174,13 @@ fn typed_packets_reencode() {
             .join("\n")
     );
     if !scenarios().is_empty() {
-        let never_recorded = ["ReqMaintenance", "AnsMaintenance", "NtcCircleBreak"];
+        // Typed from the decomp, never sent by MH3SP (NtcLayerUserNum: the city counts Local Info shows, M3).
+        let never_recorded = [
+            "ReqMaintenance",
+            "AnsMaintenance",
+            "NtcCircleBreak",
+            "NtcLayerUserNum",
+        ];
         let missing: Vec<_> = TYPED
             .iter()
             .map(|(_, name)| *name)

@@ -341,7 +341,8 @@ packets! {
     AnsLayerChildListFoot = 0x64260200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
     ReqLayerChildInfo = 0x64230100 { unk: u16, fields: Vec<u8>, rest: Rest }
-    AnsLayerChildInfo = 0x64230200 { unk: u16, layer: PatData, unk2: u16 }
+    AnsLayerChildInfo = 0x64230200 { unk: u16, layer: PatData, settings: OptionalFields, rest: Rest }
+    NtcLayerUserNum = 0x64031000 { kind: u8, layer: PatData }
     ReqLayerDown = 0x64140100 { layer: u16, info: PatData }
     AnsLayerDown = 0x64140200 { layer: u16 }
     ReqLayerUp = 0x64150100 {}

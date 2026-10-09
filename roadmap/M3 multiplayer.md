@@ -167,6 +167,10 @@ player kicked for not being ready, a party broken by its leader before departure
   - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
         took that as an empty name: stored it, wiped the hunter's profile, friends and blocks (an empty "from" on
         the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.
-  - [ ] Local Info's city population still says 0/4, whatever the population, the players on a quest (field
-        `0x0b`) or the layer data sent; where the console reads it from is open (the decomp: Local Info's screen).
+  - [ ] Local Info's city population said 0/4. Found in the game's code: the screen shows the console's own layer
+        record (population `0x06`, capacity `0x09`, then the city's settings), which only `AnsLayerStart`,
+        `AnsLayerChildInfo` *echoing the request's 0* and `NtcLayerUserNum` (kind 2) write; MH3SP (and we) answered
+        1, so the console kept the login placeholder (0 of 4). Fixed: the request's number echoed, the city's
+        settings sent, `NtcLayerUserNum` to the city on every join and leave. To confirm on the consoles; then
+        look for a player list or kick there (the code drawing the numbers has none; no city kick in the protocol).
   - [x] The disconnect test (D4): see D4, settled.

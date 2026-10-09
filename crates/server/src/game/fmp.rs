@@ -400,8 +400,10 @@ impl Fmp {
             }
             ReqLayerChildInfo::ID => {
                 // A layer's record: `unk` 0 the player's own layer, else that child of it (a gate from a world
-                // server, a city from a gate). The game shows it (Local Info: name, population). MH3SP answered a
-                // placeholder (0 of 4 players) every time; the world server level keeps it.
+                // server, a city from a gate). Answered with the same `unk`: only for 0 does the console take the
+                // record as its own layer's (Local Info: population, capacity, then the city's settings: HR limit,
+                // goal, seeking). MH3SP answered 1 and a placeholder (0 of 4 players) every time; the world server
+                // level keeps the placeholder.
                 let r = ReqLayerChildInfo::decode(p)?;
                 let (server, gate, city) = location(shared, session)?;
                 let world = shared.world.lock().unwrap();
@@ -416,13 +418,16 @@ impl Fmp {
                     }
                     _ => None,
                 };
-                let layer = record.map_or_else(placeholder_layer, |(record, _)| record);
+                let (layer, settings) =
+                    record.unwrap_or_else(|| (placeholder_layer(), OptionalFields::default()));
+                // A trailing 0 after the settings, as MH3SP sends (the console doesn't read it).
                 reply(
                     seq,
                     &AnsLayerChildInfo {
-                        unk: 1,
+                        unk: r.unk,
                         layer,
-                        unk2: 0,
+                        settings,
+                        rest: Rest(Bytes::from_static(&[0])),
                     },
                 )
             }
@@ -445,6 +450,7 @@ impl Fmp {
                             return alert(AnsLayerDown::ID, seq, refusal.text());
                         }
                         info!(gate, city = r.layer, "entered city");
+                        user_num(shared, &world, me, (server, gate, r.layer))?;
                     }
                     _ => return Err(Fault::Client(anyhow!("no layer {} below", r.layer))),
                 }
@@ -1095,6 +1101,10 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
             shared.players.send(other, out.clone());
         }
     }
+    if let Some(id) = city.filter(|_| leaves_city) {
+        // Best effort: the departure itself is done.
+        let _ = user_num(shared, world, me, id);
+    }
     if let Some(id) = city.filter(|_| was_host)
         && let Some(host) = world.city_host(id)
     {
@@ -1116,6 +1126,37 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
             }
         }
     }
+}
+
+/// The city's population changed: the others in it get its counts (`NtcLayerUserNum`, kind 2: the console's own
+/// layer), which Local Info shows.
+fn user_num(
+    shared: &Shared,
+    world: &World,
+    me: &str,
+    (server, gate, city): (u32, u16, u16),
+) -> Result<(), Fault> {
+    let Some((record, _)) = world::cities(world, server, gate, u32::from(city), 1).pop() else {
+        return Ok(());
+    };
+    let count = |field| record.get(field).cloned().unwrap_or(Item::Long(0));
+    let ntc = frame(
+        0,
+        &NtcLayerUserNum {
+            kind: 2,
+            layer: PatData::new()
+                .with(0x02, count(0x06))
+                .with(0x03, count(0x07))
+                .with(0x05, count(0x09))
+                .with(0x07, count(0x0b)),
+        },
+    )?;
+    for other in world.players_at(server, Some(gate), Some(city)) {
+        if other.0 != me {
+            shared.players.send(other.0, ntc.clone());
+        }
+    }
+    Ok(())
 }
 
 /// A player arriving (`NtcLayerIn`): Capcom ID, then name and profile block.

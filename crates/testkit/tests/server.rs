@@ -712,6 +712,24 @@ async fn solo_city_and_quest() {
     expect::<AnsLayerCreateSet>(&mut c).await;
     send(&mut c, 17, ReqLayerCreateFoot { number: 3, unk: 0 }).await;
     expect::<AnsLayerCreateFoot>(&mut c).await;
+    // Asked about its own layer (0), the console gets 0 back, so it takes the record as its own (Local Info): one
+    // player of 4, and the city's settings.
+    let own = ReqLayerChildInfo {
+        unk: 0,
+        fields: vec![],
+        rest: wire::packets::Rest(Bytes::new()),
+    };
+    send(&mut c, 40, own).await;
+    let info = expect::<AnsLayerChildInfo>(&mut c).await;
+    assert_eq!(
+        (
+            info.unk,
+            long(info.layer.get(0x06)),
+            long(info.layer.get(0x09))
+        ),
+        (0, 1, 4)
+    );
+    assert_eq!(info.settings, settings);
 
     // A quest: the creator gets the city's notification before its answer.
     let info = PatData::new()
@@ -826,7 +844,17 @@ async fn cities_are_shared() {
     send(&mut b, 15, ReqLayerUserList { fields: vec![] }).await;
     assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 2);
 
-    // The creator leaves the game: B sees them go and becomes the city's host; the city stays.
+    // A learns the city's new population (what Local Info shows): 2 of 4.
+    let counts = |ntc: NtcLayerUserNum| {
+        (
+            ntc.kind,
+            long(ntc.layer.get(0x02)),
+            long(ntc.layer.get(0x05)),
+        )
+    };
+    assert_eq!(counts(expect::<NtcLayerUserNum>(&mut a).await), (2, 2, 4));
+
+    // The creator leaves the game: B sees them go and becomes the city's host; the city stays, with 1 of 4.
     send(&mut a, 14, ReqLayerUserList { fields: vec![] }).await;
     let a_id = string(expect::<AnsLayerUserList>(&mut a).await.users[0].get(0x01));
     drop(a);
@@ -834,6 +862,7 @@ async fn cities_are_shared() {
         String::from_utf8(expect::<NtcLayerOut>(&mut b).await.capcom_id.to_vec()).unwrap(),
         a_id
     );
+    assert_eq!(counts(expect::<NtcLayerUserNum>(&mut b).await), (2, 1, 4));
     let host = expect::<NtcLayerHost>(&mut b).await;
     assert_ne!(String::from_utf8(host.capcom_id.to_vec()).unwrap(), a_id);
     send(&mut b, 16, ReqLayerUserList { fields: vec![] }).await;
