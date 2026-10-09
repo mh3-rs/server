@@ -1,0 +1,14 @@
+description = "Quest party edge cases: dev1 creates a city and a quest with a password (1234) and a remark; dev2's join with the wrong password is refused ('Wrong Password!'), the right one works; no kick found in the menus (Local Info shows 'population 0/4': MH3SP answers LayerChildInfo with a placeholder layer); dev1 starts while dev2 isn't ready: dev1 is asked to confirm, dev2 is removed (NtcCircleKick: 'You were unable to depart on the Quest'), the quest departs with dev1 alone; dev1 abandons; dev1 creates a second quest, dev2 joins, dev1 cancels it before departure: dev2 gets NtcCircleBreak ('The Quest you joined has been canceled'). A leader can't quit the game with a quest on, only cancel it."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev1: quest with password 1234 and a remark; dev2: join with 0000 (refused), then 1234",
+  "dev1: ready, start with dev2 not ready (dev2 removed), abandon the quest",
+  "dev1: second quest, dev2 joins, dev1 cancels it",
+  "both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
