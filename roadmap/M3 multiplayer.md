@@ -42,9 +42,14 @@ player kicked for not being ready, a party broken by its leader before departure
   *Recommended:* record them with two Dolphins at the start of M3, in the lab, against MH3SP (the oracle):
   `s07-chat` (layer chat, a tell), `s08-friends` (request, accept, list, delete), `s09-blacklist`, `s10-party-kick`
   (start with a player not ready; a leader leaving before departure).
-- **D2 Friends and black list storage.** Lists are permanent: *recommended:* SQLite tables `friends` and
-  `blacklist` (pairs of hunters, as sketched in `M1 schema.md`); a pending friend request lives in memory with its
-  two players (online only), unless the recordings show the game expects requests to an offline player.
+- **D2 Friends and black list storage.** Lists are permanent: SQLite tables `friends` and `blacklist` (pairs of
+  hunters, as sketched in `M1 schema.md`). A friend request reaches the recipient as a message (`NtcFriendAccept`,
+  built like a tell), answered with `ReqFriendAccept`; the protocol has no "pending requests" list. Whatever the
+  console does with it, the server must remember a request until it's answered (else a console could accept a
+  request never sent): *recommended:* pending requests in SQLite (`friend_requests`), which also allows delivering
+  one to an offline player at their next login (MH3SP loses them). What the game shows decides the rest, to watch
+  while recording (D1): if it keeps received requests to answer later, the server just stores and checks; if not,
+  the server could tell players about pending requests itself, e.g. a private message from "system".
 - **D3 The hunter profile block.** Stage 1 of the global plan: parse and validate the known fields (HR u16 @0,
   weapon type u8 @5) on every `UserBinarySet`; an invalid update is refused (the previous block kept and
   forwarded, one `warn`). *Recommended:* validation now (other consoles draw the hunter from it), the
@@ -52,15 +57,23 @@ player kicked for not being ready, a party broken by its leader before departure
 - **D4 Disconnects.** The Rust server sees a closed socket at once: others get `NtcLayerOut` immediately, not ~30 s
   later as with MH3SP (a vanished console that sends nothing is still dropped by the line check: 30 s, then one
   unanswered). *Recommended:* keep it; `s06`'s timing is a declared divergence.
-- **D5 Locking.** Relays (positions, game data) find the layer's players under the one `World` mutex and push to
-  their mailboxes without waiting. *Recommended:* keep the single lock, measure with the relay-latency test, split
-  per world server only if the p99 misses 2 ms.
+- **D5 Locking. Settled:** one lock for the whole `World` (relays look up the layer's players under it and push to
+  their mailboxes without waiting); written down where it's declared (`Shared::world`). Revisited the day the
+  relay-latency test or production shows contention: per world server first (nothing crosses that boundary but
+  population counts), finer locks (gate, city, quest) only with a lock ordering for every move between levels.
 - **D6 A slow player.** A full mailbox (256 frames) drops its connection today. Positions alone are ~0.23 kB/s per
   player. *Recommended:* keep (a console that far behind is gone); revisit with the stress test.
-- **D7 Leaders and parties**, MH3SP's rules: a city's leader leaving hands the city to the earliest player
-  (`NtcLayerHost`); a quest's leader leaving before departure breaks the party (`NtcCircleBreak`), after departure
+- **D7 Leaders and parties**, MH3SP's rules. A city's "leader" is the **host of its P2P session**: a console joining
+  asks `LayerHost` who it is and connects to that console directly; no powers in the protocol (no kick). The host
+  leaving hands the session to the earliest player (`NtcLayerHost`), and the others reconnect to them; a quest's leader leaving before departure breaks the party (`NtcCircleBreak`), after departure
   hands it over (`NtcCircleHost`); at departure, players not ready are kicked from the party (`NtcCircleKick`).
   *Recommended:* the same.
+- **D9 Quest capacity and password.** Both are set at creation and stored with the quest (in memory: a quest lives
+  minutes, never in the database or the logs). *Recommended:* enforce them at `CircleJoin` ("quest is full", "wrong
+  password" alerts). MH3SP puts the password itself in the quest's record, sent to everyone in the city (copied in
+  M2); the record also has a "has password" flag. To test while recording: does the console only need the flag?
+  If so the password stops leaving the server. Not hashed: a quest password is a few characters, guessed in no
+  time from any hash, and it only ever sits in memory, compared once per join.
 - **D8 Tier 4** (live differential, kept for later in M1). M3 is where it pays off: scripted multi-console scenarios
   the corpus doesn't have, run against MH3SP and Rust. *Recommended:* decide after D1's recordings (they may cover
   enough).

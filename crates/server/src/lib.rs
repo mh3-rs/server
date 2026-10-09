@@ -40,6 +40,12 @@ struct Shared {
     /// Players logged in on FMP, by Capcom ID.
     players: Players,
     /// Where the players are.
+    ///
+    /// ponytail: one lock for the whole world. Held for microseconds (a lookup, frames dropped into mailboxes;
+    /// never across an `.await` or a socket write): ~500 players relaying ~4 messages a second is ~0.4 % of a
+    /// core. If the relay-latency test (p99 < 2 ms) or production shows contention, split per world server first
+    /// (nothing crosses that boundary but population counts); finer locks (gate, city, quest) would need lock
+    /// ordering for every move between levels.
     world: std::sync::Mutex<game::world::World>,
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
