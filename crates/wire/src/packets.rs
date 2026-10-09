@@ -254,10 +254,10 @@ packets! {
     AnsTermsVersion = 0x62100200 { version: u32, size: u32 }
     ReqTerms = 0x62110100 { version: u32, offset: u32, size: u32 }
     AnsTerms = 0x62110200 { offset: u32, size: u32, chunk: Bytes }
-    ReqSubTermsInfo = 0x62130100 { unk: u8 }
-    AnsSubTermsInfo = 0x62130200 { unk1: u32, unk: u8, size: u32 }
-    ReqSubTerms = 0x62140100 { version: u32, unk: u8, offset: u32, size: u32 }
-    AnsSubTerms = 0x62140200 { unk: u8, offset: u32, size: u32, chunk: Bytes }
+    ReqSubTermsInfo = 0x62130100 { index: u8 }
+    AnsSubTermsInfo = 0x62130200 { version: u32, index: u8, size: u32 }
+    ReqSubTerms = 0x62140100 { version: u32, index: u8, offset: u32, size: u32 }
+    AnsSubTerms = 0x62140200 { index: u8, offset: u32, size: u32, chunk: Bytes }
     /// Never recorded: empty per MH3SP, which ignores the payload.
     ReqMaintenance = 0x62200100 {}
     /// Never recorded: the text the console shows when refused (`NtcLogin` status 2).
@@ -281,7 +281,7 @@ packets! {
     /// The Nintendo login's token (0x0a) and a state (0x09).
     ReqLoginInfo = 0x61010100 { data: PatData }
     /// `data` carries the console's online support code (0x07), issued here to a first-time console.
-    AnsLoginInfo = 0x61010200 { need_ticket: u8, unk: Bytes, data: PatData }
+    AnsLoginInfo = 0x61010200 { status: u8, message: Bytes, data: PatData }
     /// The Capcom ID slots, `count` from `first` (1-based); `fields` lists the record fields wanted.
     ReqUserListHead = 0x61100100 { first: u32, count: u32, fields: Vec<u8> }
     AnsUserListHead = 0x61100200 { first: u32, count: u32 }
@@ -293,14 +293,14 @@ packets! {
     /// The chosen slot and the hunter playing it (name 0x03, …).
     ReqUserObject = 0x61200100 { unk: u8, slot: u32, user: PatData }
     /// The request's record with the slot's Capcom ID (0x02).
-    AnsUserObject = 0x61200200 { need_ticket: u8, unk: Bytes, unk2: u32, user: PatData }
+    AnsUserObject = 0x61200200 { status: u8, message: Bytes, unused: u32, user: PatData }
     ReqFmpListVersion = 0x61300100 {}
     AnsFmpListVersion = 0x61300200 { version: u32 }
     ReqFmpListHead = 0x61310100 { version: u32, first: u32, count: u32, fields: Vec<u8> }
-    AnsFmpListHead = 0x61310200 { unk: u32, count: u32 }
+    AnsFmpListHead = 0x61310200 { first: u32, count: u32 }
     ReqFmpListData = 0x61320100 { first: u32, count: u32 }
     /// One record per world server: index, address, port, type, population, capacity, name, …
-    AnsFmpListData = 0x61320200 { unk: u32, servers: Vec<PatData> }
+    AnsFmpListData = 0x61320200 { first: u32, servers: Vec<PatData> }
     ReqFmpListFoot = 0x61330100 {}
     AnsFmpListFoot = 0x61330200 {}
     /// The FMP address (0x02) and port (0x03) of world server `index`: `fields` lists the fields wanted.
@@ -310,7 +310,7 @@ packets! {
     // FMP: content downloads.
     /// `kind`: the content type (`0x01`–`0x0f` the English set: server types, time events, quests, …).
     ReqBinaryVersion = 0x63010100 { kind: u8 }
-    AnsBinaryVersion = 0x63010200 { unk: u8, version: u32 }
+    AnsBinaryVersion = 0x63010200 { kind: u8, version: u32 }
     ReqBinaryHead = 0x63020100 { kind: u8 }
     AnsBinaryHead = 0x63020200 { version: u32, size: u32 }
     ReqBinaryData = 0x63030100 { kind: u8, version: u32, offset: u32, size: u32 }
@@ -321,9 +321,9 @@ packets! {
     ReqFmpListVersion2 = 0x63100100 {}
     AnsFmpListVersion2 = 0x63100200 { version: u32 }
     ReqFmpListHead2 = 0x63110100 { version: u32, first: u32, count: u32, fields: Vec<u8> }
-    AnsFmpListHead2 = 0x63110200 { unk: u32, count: u32 }
+    AnsFmpListHead2 = 0x63110200 { first: u32, count: u32 }
     ReqFmpListData2 = 0x63120100 { first: u32, count: u32 }
-    AnsFmpListData2 = 0x63120200 { unk: u32, servers: Vec<PatData> }
+    AnsFmpListData2 = 0x63120200 { first: u32, servers: Vec<PatData> }
     ReqFmpListFoot2 = 0x63130100 {}
     AnsFmpListFoot2 = 0x63130200 {}
     ReqFmpInfo2 = 0x63140100 { index: u32, fields: Vec<u8> }
@@ -334,14 +334,14 @@ packets! {
     ReqLayerEnd = 0x64020100 {}
     AnsLayerEnd = 0x64020200 {}
     ReqLayerChildListHead = 0x64240100 { first: u32, count: u32, fields: Vec<u8> }
-    AnsLayerChildListHead = 0x64240200 { unk: u32, count: u32 }
+    AnsLayerChildListHead = 0x64240200 { first: u32, count: u32 }
     ReqLayerChildListData = 0x64250100 { first: u32, count: u32 }
     AnsLayerChildListData = 0x64250200 { first: u32, children: Vec<(PatData, OptionalFields)> }
     ReqLayerChildListFoot = 0x64260100 {}
     AnsLayerChildListFoot = 0x64260200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
-    ReqLayerChildInfo = 0x64230100 { unk: u16, fields: Vec<u8>, rest: Rest }
-    AnsLayerChildInfo = 0x64230200 { unk: u16, layer: PatData, settings: OptionalFields, rest: Rest }
+    ReqLayerChildInfo = 0x64230100 { layer: u16, fields: Vec<u8>, rest: Rest }
+    AnsLayerChildInfo = 0x64230200 { layer: u16, record: PatData, settings: OptionalFields, rest: Rest }
     NtcLayerUserNum = 0x64031000 { kind: u8, layer: PatData }
     ReqLayerDown = 0x64140100 { layer: u16, info: PatData }
     AnsLayerDown = 0x64140200 { layer: u16 }
@@ -362,11 +362,11 @@ packets! {
     ReqLayerUserListHead = 0x64640100 { unk: u8, layer: Bytes, first: u32, count: u32, fields: Vec<u8> }
     AnsLayerUserListHead = 0x64640200 { first: u32, count: u32 }
     ReqLayerUserListData = 0x64650100 { first: u32, count: u32 }
-    AnsLayerUserListData = 0x64650200 { unk: u32, users: Vec<(PatData, OptionalFields)> }
+    AnsLayerUserListData = 0x64650200 { first: u32, users: Vec<(PatData, OptionalFields)> }
     ReqLayerUserListFoot = 0x64660100 {}
     AnsLayerUserListFoot = 0x64660200 {}
-    ReqLayerMediationList = 0x64820100 { unk: u8, unk2: u8, fields: Vec<u8> }
-    AnsLayerMediationList = 0x64820200 { unk: u8, items: ShortList }
+    ReqLayerMediationList = 0x64820100 { mode: u8, max_count: u8, fields: Vec<u8> }
+    AnsLayerMediationList = 0x64820200 { mode: u8, items: ShortList }
     NtcLayerIn = 0x64141000 { capcom_id: Bytes, user: PatData }
     NtcLayerOut = 0x64151000 { capcom_id: Bytes }
     /// The console's position in town; relayed with the sender's Capcom ID in front (a layout per direction).
@@ -380,7 +380,7 @@ packets! {
     AnsCircleInfoNoticeSet = 0x65800200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
     ReqCircleListLayer = 0x65270100 { fields: Vec<u8>, rest: Rest }
-    AnsCircleListLayer = 0x65270200 { unk: u32, circles: Vec<(PatData, OptionalFields)> }
+    AnsCircleListLayer = 0x65270200 { first: u32, circles: Vec<(PatData, OptionalFields)> }
     NtcCircleListLayerChange = 0x65821000 { circle: u32, info: PatData, extra: OptionalFields }
     ReqCircleCreate = 0x65010100 { info: PatData, extra: OptionalFields }
     AnsCircleCreate = 0x65010200 { circle: u32 }
@@ -394,10 +394,10 @@ packets! {
     NtcCircleJoin = 0x65031000 { circle: u32, capcom_id: Bytes, name: Bytes, player: u8, state: u8 }
     ReqCircleLeave = 0x65040100 { circle: u32 }
     AnsCircleLeave = 0x65040200 { circle: u32 }
-    NtcCircleLeave = 0x65041000 { circle: u32, capcom_id: Bytes, player: u8, unk: u8 }
+    NtcCircleLeave = 0x65041000 { circle: u32, capcom_id: Bytes, player: u8, state: u8 }
     ReqCircleHost = 0x65410100 { circle: u32 }
     AnsCircleHost = 0x65410200 { circle: u32, leader: u8, capcom_id: Bytes, name: Bytes }
-    NtcCircleHost = 0x65411000 { unk: u32, leader: u8, capcom_id: Bytes, name: Bytes }
+    NtcCircleHost = 0x65411000 { circle: u32, leader: u8, capcom_id: Bytes, name: Bytes }
     ReqCircleUserList = 0x65600100 { fields: Vec<u8> }
     AnsCircleUserList = 0x65600200 { users: Vec<PatData> }
     ReqCircleMatchOptionSet = 0x65100100 { options: PatData }
@@ -418,23 +418,23 @@ packets! {
     /// Part of the hunter's 256-byte profile block.
     ReqUserBinarySet = 0x66310100 { offset: u32, data: Bytes }
     AnsUserBinarySet = 0x66310200 {}
-    ReqUserBinaryNotice = 0x66320100 { unk: u8, capcom_id: Bytes, offset: u32, size: u32 }
+    ReqUserBinaryNotice = 0x66320100 { target: u8, capcom_id: Bytes, offset: u32, size: u32 }
     AnsUserBinaryNotice = 0x66320200 {}
-    NtcUserBinaryNotice = 0x66321000 { unk: u8, capcom_id: Bytes, offset: u32, data: Bytes }
+    NtcUserBinaryNotice = 0x66321000 { target: u8, capcom_id: Bytes, offset: u32, data: Bytes }
     ReqUserSearchSet = 0x66300100 { extra: OptionalFields }
     AnsUserSearchSet = 0x66300200 {}
     ReqUserStatusSet = 0x66400100 { status: PatData }
     AnsUserStatusSet = 0x66400200 {}
     ReqFriendList = 0x66540100 { first: u32, count: u32, fields: Vec<u8> }
-    AnsFriendList = 0x66540200 { unk: u32, friends: Vec<PatData> }
+    AnsFriendList = 0x66540200 { first: u32, friends: Vec<PatData> }
     ReqBlackList = 0x66620100 { first: u32, count: u32, fields: Vec<u8> }
-    AnsBlackList = 0x66620200 { unk: u32, users: Vec<PatData> }
+    AnsBlackList = 0x66620200 { first: u32, users: Vec<PatData> }
     /// The game's own integrity report (anti-cheat, M6).
     NtcCheatCheck = 0x60801000 { data: Rest }
 
     // FMP: chat and messages.
     /// City chat (`info`: colour, time, sender's Capcom ID and name, filled in by the server when relayed).
-    NtcLayerChat = 0x64721000 { unk: u8, info: PatData, text: Bytes }
+    NtcLayerChat = 0x64721000 { channel: u8, info: PatData, text: Bytes }
     /// A message to one player (`capcom_id`: the recipient; the server fills in the sender in `info`).
     ReqTell = 0x66110100 { capcom_id: Bytes, info: PatData, text: Bytes }
     AnsTell = 0x66110200 {}
@@ -460,9 +460,9 @@ packets! {
     // FMP: player search.
     /// The players under a layer (a gate: its cities too), optionally by Capcom ID or name.
     ReqLayerUserSearchHead = 0x64670100 { unk: u8, layer: Bytes, capcom_id: Bytes, name: Bytes, search: DetailedOptionalFields, first: u32, count: u32, fields: Vec<u8> }
-    AnsLayerUserSearchHead = 0x64670200 { unk: u32, count: u32 }
+    AnsLayerUserSearchHead = 0x64670200 { first: u32, count: u32 }
     ReqLayerUserSearchData = 0x64680100 { first: u32, count: u32 }
-    AnsLayerUserSearchData = 0x64680200 { unk: u32, users: Vec<(PatData, OptionalFields)> }
+    AnsLayerUserSearchData = 0x64680200 { first: u32, users: Vec<(PatData, OptionalFields)> }
     ReqLayerUserSearchFoot = 0x64690100 {}
     AnsLayerUserSearchFoot = 0x64690200 {}
     /// A player's card: profile block, where they are, the ids relayed data is attributed with.
@@ -471,9 +471,9 @@ packets! {
     /// The console reporting an error (field 0x01: its code).
     NtcCollectionLog = 0x60501000 { log: PatData }
     /// Never recorded: a party broken by its leader leaving before departure (MH3SP's layout: an unknown u32).
-    NtcCircleBreak = 0x65051000 { unk: u32 }
+    NtcCircleBreak = 0x65051000 { circle: u32 }
     /// A member removed from the party (at departure, not ready): an unknown byte and an empty text.
-    NtcCircleKick = 0x65351000 { unk: u8, text: Bytes }
+    NtcCircleKick = 0x65351000 { kind: u8, text: Bytes }
 }
 
 #[cfg(test)]

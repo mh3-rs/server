@@ -1,6 +1,6 @@
 # Unknown fields in the packets the server sends
 
-**Status: report (2026-10-09), fixes proposed, not applied.**
+**Status: report (2026-10-09), fixes applied (M5).**
 
 Why: `AnsLayerChildInfo`'s leading `unk: u16` turned out to be the layer index the console asked about (0 = "my own
 layer"); we answered MH3SP's constant 1, so the console filed the city's record as another layer's and Local Info

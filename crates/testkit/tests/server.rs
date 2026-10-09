@@ -699,7 +699,7 @@ async fn solo_city_and_quest() {
     // Asked about its own layer (0), the console gets 0 back, so it takes the record as its own (Local Info): one
     // player of 4, and the city's settings.
     let own = ReqLayerChildInfo {
-        unk: 0,
+        layer: 0,
         fields: vec![],
         rest: wire::packets::Rest(Bytes::new()),
     };
@@ -707,9 +707,9 @@ async fn solo_city_and_quest() {
     let info = expect::<AnsLayerChildInfo>(&mut c).await;
     assert_eq!(
         (
-            info.unk,
-            long(info.layer.get(0x06)),
-            long(info.layer.get(0x09))
+            info.layer,
+            long(info.record.get(0x06)),
+            long(info.record.get(0x09))
         ),
         (0, 1, 4)
     );
@@ -929,6 +929,56 @@ async fn messages_wait_for_their_recipient() {
     send(&mut b, 33, request(&a_id)).await;
     assert_eq!(mail(&mut b).await, [NtcFriendAdd::ID]);
     assert_eq!(mail(&mut a).await, [NtcFriendAdd::ID]);
+    running.stop().await;
+}
+
+/// Tier 3: a profile notice for one player (`target` 1, naming them) reaches only them; one for everyone (2), all.
+#[tokio::test]
+async fn profile_notices_reach_their_target() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let mut consoles = Vec::new();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let (code, id) = new_hunter(lmp).await;
+        let mut c = play(&running, &code).await;
+        let info = PatData::new();
+        send(&mut c, 10, ReqLayerDown { layer: 1, info }).await;
+        consoles.push(c);
+        ids.push(id);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for c in &mut consoles {
+        drain(c, Duration::from_millis(100)).await;
+    }
+    let notice = |target: u8, to: &str| ReqUserBinaryNotice {
+        target,
+        capcom_id: to.to_owned().into(),
+        offset: 0,
+        size: 2,
+    };
+    let got = |ids: Vec<wire::PacketId>| ids.contains(&NtcUserBinaryNotice::ID);
+    send(&mut consoles[0], 20, notice(1, &ids[1])).await;
+    let (b, c) = (
+        drain(&mut consoles[1], Duration::from_millis(200)).await,
+        drain(&mut consoles[2], Duration::from_millis(200)).await,
+    );
+    assert_eq!(
+        (got(b), got(c)),
+        (true, false),
+        "target 1: only the named player"
+    );
+    send(&mut consoles[0], 21, notice(2, "")).await;
+    let (b, c) = (
+        drain(&mut consoles[1], Duration::from_millis(200)).await,
+        drain(&mut consoles[2], Duration::from_millis(200)).await,
+    );
+    assert_eq!(
+        (got(b), got(c)),
+        (true, true),
+        "target 2: everyone at the place"
+    );
     running.stop().await;
 }
 

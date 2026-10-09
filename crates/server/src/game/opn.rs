@@ -197,8 +197,8 @@ impl Opn {
                 reply(
                     seq,
                     &AnsSubTermsInfo {
-                        unk1: terms.version,
-                        unk: r.unk,
+                        version: terms.version,
+                        index: r.index,
                         size: terms.text.len() as u32,
                     },
                 )
@@ -209,7 +209,7 @@ impl Opn {
                 reply(
                     seq,
                     &AnsSubTerms {
-                        unk: r.unk,
+                        index: r.index,
                         offset: r.offset,
                         size: r.size,
                         chunk: chunk(&terms.text, r.offset, r.size),

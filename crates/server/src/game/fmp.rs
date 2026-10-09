@@ -135,7 +135,7 @@ impl Fmp {
             ReqBinaryVersion::ID => {
                 let r = ReqBinaryVersion::decode(p)?;
                 let version = binary(shared, r.kind)?.version;
-                reply(seq, &AnsBinaryVersion { unk: 0, version })
+                reply(seq, &AnsBinaryVersion { kind: 0, version })
             }
             ReqBinaryHead::ID => {
                 let r = ReqBinaryHead::decode(p)?;
@@ -202,7 +202,7 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsLayerUserSearchHead {
-                        unk: 0,
+                        first: 0,
                         count: self.search.len() as u32,
                     },
                 )
@@ -210,7 +210,7 @@ impl Fmp {
             ReqLayerUserSearchData::ID => {
                 ReqLayerUserSearchData::decode(p)?;
                 let users = found_users(shared, &self.search);
-                reply(seq, &AnsLayerUserSearchData { unk: 0, users })
+                reply(seq, &AnsLayerUserSearchData { first: 0, users })
             }
             ReqLayerUserSearchFoot::ID => {
                 ReqLayerUserSearchFoot::decode(p)?;
@@ -337,7 +337,8 @@ impl Fmp {
             }
             ReqUserBinaryNotice::ID => {
                 // The profile changed: the others at the player's place get the part named, from the validated
-                // block. Never a window past the block: the receiving console copies it at the offset unchecked.
+                // block; with `target` 1, only the player the request names (if there too: the decomp's sender).
+                // Never a window past the block: the receiving console copies it at the offset unchecked.
                 let r = ReqUserBinaryNotice::decode(p)?;
                 let me = capcom_id(session);
                 let block = session.profile.bytes();
@@ -348,12 +349,23 @@ impl Fmp {
                 {
                     Some(end) => {
                         let ntc = NtcUserBinaryNotice {
-                            unk: r.unk,
+                            target: r.target,
                             capcom_id: Bytes::copy_from_slice(me.as_bytes()),
                             offset: r.offset,
                             data: block.slice(start..end),
                         };
-                        relay(shared, me, &ntc, seq)?;
+                        match r.target {
+                            ONE_PLAYER => {
+                                let to = String::from_utf8_lossy(&r.capcom_id).into_owned();
+                                let here = shared.world.lock().unwrap().others(me).contains(&to);
+                                if here {
+                                    shared.players.send(&to, frame(seq, &ntc)?);
+                                }
+                            }
+                            _ => {
+                                relay(shared, me, &ntc, seq)?;
+                            }
+                        }
                     }
                     None => warn!(
                         offset = r.offset,
@@ -373,7 +385,7 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsLayerChildListHead {
-                        unk: 0,
+                        first: 0,
                         count: u32::from(count),
                     },
                 )
@@ -407,7 +419,7 @@ impl Fmp {
                 let r = ReqLayerChildInfo::decode(p)?;
                 let (server, gate, city) = location(shared, session)?;
                 let world = shared.world.lock().unwrap();
-                let record = match (r.unk, gate, city) {
+                let record = match (r.layer, gate, city) {
                     (0, Some(g), Some(c)) => {
                         world::cities(&world, server, g, u32::from(c), 1).pop()
                     }
@@ -424,8 +436,8 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsLayerChildInfo {
-                        unk: r.unk,
-                        layer,
+                        layer: r.layer,
+                        record: layer,
                         settings,
                         rest: Rest(Bytes::from_static(&[0])),
                     },
@@ -521,7 +533,7 @@ impl Fmp {
             ReqLayerUserListData::ID => {
                 ReqLayerUserListData::decode(p)?;
                 let users = found_users(shared, &self.search);
-                reply(seq, &AnsLayerUserListData { unk: 1, users })
+                reply(seq, &AnsLayerUserListData { first: 1, users })
             }
             ReqLayerUserListFoot::ID => {
                 ReqLayerUserListFoot::decode(p)?;
@@ -641,7 +653,7 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsLayerMediationList {
-                        unk: 0,
+                        mode: 0,
                         items: ShortList(items),
                     },
                 )
@@ -653,7 +665,7 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsCircleListLayer {
-                        unk: 0,
+                        first: 0,
                         circles: world.circles_in(city),
                     },
                 )
@@ -757,7 +769,7 @@ impl Fmp {
                         frame(
                             seq,
                             &NtcCircleKick {
-                                unk: 0,
+                                kind: 0,
                                 text: Bytes::new(),
                             },
                         )?,
@@ -937,7 +949,7 @@ impl Fmp {
                     shared,
                     me,
                     &NtcLayerChat {
-                        unk: r.unk,
+                        channel: r.channel,
                         info,
                         text: r.text,
                     },
@@ -972,7 +984,7 @@ impl Fmp {
                 reply(
                     seq,
                     &AnsFmpListHead2 {
-                        unk: 0,
+                        first: 0,
                         count: world::SERVERS.len() as u32,
                     },
                 )
@@ -980,7 +992,7 @@ impl Fmp {
             ReqFmpListData2::ID => {
                 let r = ReqFmpListData2::decode(p)?;
                 let servers = world::list(shared, r.first, r.count)?;
-                reply(seq, &AnsFmpListData2 { unk: 0, servers })
+                reply(seq, &AnsFmpListData2 { first: 0, servers })
             }
             ReqFmpListFoot2::ID => {
                 ReqFmpListFoot2::decode(p)?;
@@ -1239,6 +1251,10 @@ fn without_sender(data: &[u8]) -> Result<&[u8], Fault> {
 }
 
 /// Sends a relayed packet to the others at the sender's place.
+/// `ReqUserBinaryNotice`'s `target` naming one player (the request carries their Capcom ID; other values, 0 and
+/// 2–4, are for everyone at the place: 2 is the only one recorded).
+const ONE_PLAYER: u8 = 1;
+
 fn relay<P: Packet>(shared: &Shared, me: &str, packet: &P, seq: u16) -> Handled {
     let ntc = frame(seq, packet)?;
     for other in shared.world.lock().unwrap().others(me) {
@@ -1391,6 +1407,7 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                 capcom_id: Bytes::copy_from_slice(me.as_bytes()),
                 name: session.name.clone(),
                 player: index,
+                // 2 would count the player in a tally the console keeps; leaving must then send 2 too (unk.md).
                 state: 0,
             };
             let ntc = frame(seq, &ntc)?;
@@ -1462,7 +1479,8 @@ fn quit_quest(
             circle: leaving.id.1,
             capcom_id: Bytes::copy_from_slice(leaver.as_bytes()),
             player: leaving.index,
-            unk: 0,
+            // The same as its `NtcCircleJoin.state`: 2 counts the player in a tally the console keeps (unk.md).
+            state: 0,
         },
     )?;
     notify(shared, requester, &leaving.others, &left, out);
@@ -1476,7 +1494,7 @@ fn quit_quest(
         let host = frame(
             seq,
             &NtcCircleHost {
-                unk: 0,
+                circle: 0,
                 leader: *index,
                 capcom_id: leader.clone().into(),
                 name,
@@ -1485,7 +1503,7 @@ fn quit_quest(
         notify(shared, requester, &leaving.others, &host, out);
     }
     if leaving.broken {
-        let broken = frame(seq, &NtcCircleBreak { unk: 0 })?;
+        let broken = frame(seq, &NtcCircleBreak { circle: 0 })?;
         notify(shared, requester, &leaving.others, &broken, out);
     }
     list_change(shared, world, requester, leaving.id, seq, out)
@@ -1722,7 +1740,7 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             reply(
                 seq,
                 &AnsFriendList {
-                    unk: 0,
+                    first: 0,
                     friends: hunter_records(list, r.first, r.count),
                 },
             )
@@ -1793,7 +1811,7 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             reply(
                 seq,
                 &AnsBlackList {
-                    unk: 0,
+                    first: 0,
                     users: hunter_records(list, r.first, r.count),
                 },
             )

@@ -121,8 +121,8 @@ impl Lmp {
                 reply(
                     seq,
                     &AnsLoginInfo {
-                        need_ticket: 1,
-                        unk: Bytes::from_static(b"dummy_data"),
+                        status: 1,
+                        message: Bytes::from_static(b"dummy_data"),
                         data: PatData::new().with(0x07, Item::String(code.into())),
                     },
                 )
@@ -214,9 +214,9 @@ impl Lmp {
                 reply(
                     seq,
                     &AnsUserObject {
-                        need_ticket: 1,
-                        unk: Bytes::from_static(b"Unk_UserObj_str"),
-                        unk2: 0,
+                        status: 1,
+                        message: Bytes::from_static(b"Unk_UserObj_str"),
+                        unused: 0,
                         user,
                     },
                 )
@@ -235,7 +235,7 @@ impl Lmp {
                 reply(
                     seq,
                     &AnsFmpListHead {
-                        unk: 0,
+                        first: 0,
                         count: world::SERVERS.len() as u32,
                     },
                 )
@@ -243,7 +243,7 @@ impl Lmp {
             (Stage::SecondVisit, ReqFmpListData::ID) => {
                 let r = ReqFmpListData::decode(p)?;
                 let servers = world::list(shared, r.first, r.count)?;
-                reply(seq, &AnsFmpListData { unk: 0, servers })
+                reply(seq, &AnsFmpListData { first: 0, servers })
             }
             (Stage::SecondVisit, ReqFmpListFoot::ID) => {
                 ReqFmpListFoot::decode(p)?;

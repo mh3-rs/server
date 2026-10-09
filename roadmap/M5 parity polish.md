@@ -74,7 +74,8 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 
 ## Work (once the decisions are settled)
 
-- [ ] `roadmap/unk.md`: renames; `NtcUserBinaryNotice` routing (a test with `target` 1).
+- [x] `roadmap/unk.md`: renames (no change on the wire); `NtcUserBinaryNotice` with `target` 1 to its one player
+      (`profile_notices_reach_their_target`); the join/leave `state` note in the code.
 - [ ] Recordings (D1) and the missing handlers, each replaying whole.
 - [ ] Content (D2): the generator's rework, the live branch's quests byte-identical.
 - [ ] Announcements (D3): the endpoint, `mh3sp announce`, a test.
