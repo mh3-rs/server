@@ -1,6 +1,6 @@
 # M4 — NAT negotiation and relay
 
-**Status: decisions settled (2026-10-09); lab checks before building (D6, D7, the failure path).**
+**Status: done (2026-10-09), but the mixed-city run with a second machine (kept for another day).**
 
 The consoles play towns and hunts peer to peer (UDP, GameSpy GT2); the server only matchmakes. To connect, two
 consoles go through GameSpy's **NAT negotiation** (NatNeg, UDP 27901), done today by AltWFC. M4 brings it into the
@@ -143,7 +143,9 @@ Settled with the user on 2026-10-09.
       Negotiations happen at the city level only (each pair of city members); a party reuses the city's links.
 - [x] Lab, a 15 s cut through the relay (run 13, `relay`): in town and mid-quest, the cut console freezes for the
       other, then comes back; same connections, same relay pair, no new negotiation: as with a direct link (M3 D4).
-- [ ] Lab: a `relay` run with 3 consoles (D7).
+- [x] Lab, 3 consoles in `relay` (run 14): a city and a quest together; three relay pairs (the full mesh, D7). The
+      game negotiates them one after another, ~5 s each (its own wait before `REPORT`): a console entering a city
+      with two players in it is fully linked 12.7 s later. Nothing to win on our side (our part takes milliseconds).
 - [ ] Lab, another day: a mixed city (one console relayed, the others direct: decided per pair, unit-tested), with a
       Dolphin on another machine (the lab's consoles share one IP, so one flag relays them all).
 - [x] Deployment: `README.md` (the settings an operator sets, the ports to open, natneg1/2/3's DNS, Docker with
