@@ -67,7 +67,7 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
   solo play already gets notifications sent "to the city", which is the player itself, through the path M3 uses.
   A second login with the same Capcom ID kicks the first.
 - **D5 Hunter profile block** (256 bytes, `UserBinarySet`): in memory with the player (M3 forwards it and
-  persists its parsed fields). `NtcCheatCheck`: logged at `trace`, ignored until M6.
+  persists its parsed fields). `NtcCheatCheck`: logged at `trace`, ignored until M9 (anti-cheat).
 - **D6 Time**: MH3SP's `time_utils.py` ported as pure functions of the clock (server time, day/night, sandstorm,
   Jhen Mohran).
 - **D7 Content languages**: the English set (`0x01`–`0x0f`, all the recordings ask); other languages when a console

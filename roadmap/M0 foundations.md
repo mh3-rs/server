@@ -77,14 +77,14 @@ Only what M1 builds on; nothing here gets thrown away.
 - [x] Startup: connect Postgres (pool) and run `sqlx::migrate!()`; connect Valkey (connection manager) and `PING`.
       Either unreachable → exit 1 with a clear error.
 - [x] Listeners: one tokio task per listener, one task per connection. OPN is TLS through `tokio-openssl` with the
-      legacy setup (decision 6 in `00. global.md`): `@SECLEVEL=0`, minimum protocol SSLv3/TLS 1.0, ciphers
+      legacy setup (decision 6 in `architecture.md`): `@SECLEVEL=0`, minimum protocol SSLv3/TLS 1.0, ciphers
       `AES128-SHA:AES256-SHA:DES-CBC-SHA:DES-CBC3-SHA:RC4-MD5:RC4-SHA` (same list as MH3SP `other/utils.py`).
-- [x] Logging per decision 8 of `00. global.md` (colours only on a terminal): `tracing-subscriber` terminal output with `EnvFilter`, one span per
+- [x] Logging per decision 8 of `architecture.md` (colours only on a terminal): `tracing-subscriber` terminal output with `EnvFilter`, one span per
       connection (`conn`, `role`); anonymous (no names, no IPs) and no secrets.
 - [x] Each connection: read frames with the `wire` codec, log one line per frame (`RECV <name> id seq len`, hexdump at
       `debug`), keep the connection open until the peer closes it. No replies yet (M1 adds `ReqConnection`).
 - [x] Graceful shutdown on Ctrl-C and SIGTERM (`docker stop`): stop accepting, close connections.
-- [x] Health endpoints and `mh3sp healthcheck` (decision 9 of `00. global.md`). Verified: Valkey or Postgres
+- [x] Health endpoints and `mh3sp healthcheck` (decision 9 of `architecture.md`). Verified: Valkey or Postgres
       stopped → live 200, ready 503 with the reason, back to ready by itself when they return.
 - [x] `Dockerfile` (+ `.dockerignore`): verified healthy under Docker, Wii TLS handshake with Debian's OpenSSL,
       `docker stop` exits 0.
@@ -245,7 +245,7 @@ Friends, blacklist, event quests and the trading post get their own scenarios wi
 - [x] Validation against Python MH3SP: `corpus replay corpus/s* --before tools/oracle.sh --nudge` replays every
       single-console scenario clean (637/637 server frames, twice in a row): exit criterion 4 for `s00`–`s03`.
       Manual in M0; it becomes the nightly tier 4 job in M1. Multi-console scenarios follow at step 8.
-- [x] `--nudge` (Python only): Python MH3SP stalls when frames arrive together (see the global roadmap's list of
+- [x] `--nudge` (Python only): Python MH3SP stalls when frames arrive together (see `architecture.md`'s list of
       Python issues); after 500 ms without an answer the harness sends a harmless `AnsLineCheck` to wake it.
       The Rust server is replayed without it.
 

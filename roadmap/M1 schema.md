@@ -71,8 +71,8 @@ bans            (id, console_id NULL, hunter_id NULL, reason, banned_by, created
 -- ReqUserBinarySet and the server hands to other players (AnsLayerUserList, NtcLayerIn,
 -- NtcUserBinaryNotice). Self-reported by the console: the save is the truth. Known: HR (u16 @0),
 -- weapon type (u8 @5); likely equipment and appearance (other consoles draw the hunter from it).
--- Persisted for the website (hunter pages) and anti-cheat (impossible values or jumps, M6).
--- History (one row per change) only if M6 needs it.
+-- Persisted for the website (hunter pages) and anti-cheat (impossible values or jumps, M9).
+-- History (one row per change) only if M9 needs it.
 -- Stored as fields (M3 D3: every byte mapped from the game's code), no raw block; equipment in its own table.
 hunter_profiles (hunter_id PRIMARY KEY, hr, weapon_type, gender, …, updated_at)
 hunter_equipment (hunter_id, slot, kind, item, decorations, skills)
@@ -84,7 +84,7 @@ blacklist       (hunter_id, blocked_hunter_id, created_at)
 
 -- M2: event content is files (MH3SP's JSON, `CONTENT_DIR`), not tables; the website (M8) decides again.
 
--- M6/M7: anti-cheat and administration.
+-- M6–M9: bans, administration, anti-cheat.
 anticheat_flags (id, hunter_id, kind, evidence /* JSON */, created_at, reviewed_by NULL, …)
 admins          (id, account_id, role, …)
 admin_actions   (id BLOB PRIMARY KEY /* UUID v7; audit log: append-only */, admin_id, action, target, details /* JSON */, created_at)

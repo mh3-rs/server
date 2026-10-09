@@ -1075,7 +1075,7 @@ impl Fmp {
                 reply(seq, &AnsCircleInfoNoticeSet {})
             }
             NtcCheatCheck::ID => {
-                // The game's integrity report: read with anti-cheat (M6).
+                // The game's integrity report: read with anti-cheat (M9).
                 trace!(len = p.len(), "cheat check");
                 Ok(vec![])
             }

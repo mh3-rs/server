@@ -1,6 +1,6 @@
 # mh3sp-rs
 
-A Rust rewrite of the Monster Hunter Tri (Wii) server. Plans and decisions: `roadmap/` (`00. global.md` first).
+A Rust rewrite of the Monster Hunter Tri (Wii) server. Plans and decisions: `roadmap/` (`00. global.md` first: status and order; `architecture.md`: the lasting decisions).
 
 ## Sources
 

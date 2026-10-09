@@ -155,7 +155,7 @@ player kicked for not being ready, a party broken by its leader before departure
   - [x] Kicks (D7): none in the game, for players: not in the menus, in a city or a quest party, nor in Local Info
         once it showed the real population (run 8); nothing online either; the protocol has no city kick (only
         quest party kick packets, never offered in the menus). The only removal is at departure (players not ready
-        stay behind). Kicks from the website: a future step (global roadmap).
+        stay behind). Kicks from the website: M8.
   - [x] Messages and friend requests (D2), runs 2–5: the game's inbox doesn't outlive the game, drops a message
         arriving while a scene loads (sent at the world server, or on entering a gate: lost), and deleting from it
         is local (no packet). A plain message is `ReqTell` → `NtcTell` (what the corpus calls a tell: the same

@@ -62,7 +62,7 @@ CREATE INDEX hunters_console ON hunters (console_id);
 
 -- A hunter's public profile, from the 256-byte block the console writes and other consoles draw the hunter from
 -- (game/profile.rs maps every byte and validates it as the game does). Self-reported: the save is the truth. Kept
--- for the website (hunter pages) and anti-cheat (M6). Where the player is (city settings, server type, in a party)
+-- for the website (hunter pages) and anti-cheat (M9). Where the player is (city settings, server type, in a party)
 -- isn't kept. `unknown_*` and `appearance_*` are save bytes whose meaning isn't known yet, named by their offset.
 CREATE TABLE hunter_profiles (
     hunter_id       INTEGER PRIMARY KEY REFERENCES hunters (id) ON DELETE CASCADE,

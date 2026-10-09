@@ -435,7 +435,7 @@ packets! {
     AnsFriendList = 0x66540200 { first: u32, friends: Vec<PatData> }
     ReqBlackList = 0x66620100 { first: u32, count: u32, fields: Vec<u8> }
     AnsBlackList = 0x66620200 { first: u32, users: Vec<PatData> }
-    /// The game's own integrity report (anti-cheat, M6).
+    /// The game's own integrity report (anti-cheat, M9).
     NtcCheatCheck = 0x60801000 { data: Rest }
 
     // FMP: chat and messages.

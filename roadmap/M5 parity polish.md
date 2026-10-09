@@ -3,7 +3,7 @@
 **Status: decisions settled (2026-10-09).**
 
 Everything MH3SP does that we don't yet, the content and operations a public server needs, and the leftovers of
-M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7–M8, and anti-cheat, M6, come after).
+M1–M4. After M5 the Rust server can replace MH3SP for players (the public release, M6, the website, M7–M8, and anti-cheat, M9, come after).
 
 ## Exit criteria
 
@@ -91,7 +91,7 @@ console sessions to do: `recordings.md`.
   failed), relay pairs and traffic, request latency. No database, no history. Anonymous only: counts, never Capcom
   IDs.
 - **D6 Chat logs. Settled: not in M5.** Never logged now (user content, M1's logging rule); what to keep, where and
-  how long is for moderation (M6–M8).
+  how long is for moderation (M7–M9).
 - **D7 Town position interval. Settled (lab run 17): 500 ms stays** (MH3SP's value, likely the original servers').
   The layer record's field `0x11` is the console's position interval (how often it sends its own position while
   moving; the decomp's `applyLoginRecord`). Tried on two consoles running in a city:
