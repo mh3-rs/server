@@ -76,6 +76,14 @@ offset = 4
 len = 4
 reason = "a quest's password never leaves the server (M3 D9): a placeholder where MH3SP sent it in clear"
 
+# A layer's record (LayerChildInfo: the game's Local Info screen): MH3SP answers a placeholder layer named
+# "LayerStart" with 0 of 4 players every time (seen on a console: "population 0/4" with two players in the city);
+# the Rust server answers the real gate or city record.
+[[mask]]
+packet = "AnsLayerChildInfo"
+offset = 2
+reason = "the real layer record, not MH3SP's placeholder (Local Info showed 0/4)"
+
 # Frames the Rust server doesn't send, on purpose: [[omit]] names the scenario, the connection, the packet and its
 # sequence number, with a reason.
 

@@ -385,13 +385,29 @@ impl Fmp {
                 reply(seq, &AnsLayerChildListFoot {})
             }
             ReqLayerChildInfo::ID => {
-                // MH3SP answers its placeholder layer whatever is asked; the console accepts it.
-                ReqLayerChildInfo::decode(p)?;
+                // A layer's record: `unk` 0 the player's own layer, else that child of it (a gate from a world
+                // server, a city from a gate). The game shows it (Local Info: name, population). MH3SP answered a
+                // placeholder (0 of 4 players) every time; the world server level keeps it.
+                let r = ReqLayerChildInfo::decode(p)?;
+                let (server, gate, city) = location(shared, session)?;
+                let world = shared.world.lock().unwrap();
+                let record = match (r.unk, gate, city) {
+                    (0, Some(g), Some(c)) => {
+                        world::cities(&world, server, g, u32::from(c), 1).pop()
+                    }
+                    (0, Some(g), None) => world::gates(&world, server, u32::from(g), 1).pop(),
+                    (n, None, _) if n > 0 => world::gates(&world, server, u32::from(n), 1).pop(),
+                    (n, Some(g), None) if n > 0 => {
+                        world::cities(&world, server, g, u32::from(n), 1).pop()
+                    }
+                    _ => None,
+                };
+                let layer = record.map_or_else(placeholder_layer, |(record, _)| record);
                 reply(
                     seq,
                     &AnsLayerChildInfo {
                         unk: 1,
-                        layer: placeholder_layer(),
+                        layer,
                         unk2: 0,
                     },
                 )

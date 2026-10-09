@@ -114,7 +114,9 @@ player kicked for not being ready, a party broken by its leader before departure
       by the real one); player search (`LayerUserSearch*`), player cards (`UserSearchInfo`), console error reports
       (`NtcCollectionLog`, logged).
 - [x] Parties: join (full, gone, wrong password), user list, host, binaries to all / one, leave, break, host
-      transfer (D7); `NtcUserBinaryNotice`. Left for `s10`: kicks, the kick list, players not ready at departure.
+      transfer (D7); `NtcUserBinaryNotice`; players not ready stay behind at departure (`NtcCircleKick`). `s10`
+      showed no kick in the menus against MH3SP (whose Local Info said 0/4 players: maybe the reason). A leader whose
+      console vanishes is cleaned up, before and after departure (tier 3).
 - [x] Chat (MH3SP's colour by level), tells, friends (mutual, requests stored and delivered once), black list
       (personal; blocked hunters' tells and requests not delivered) (D1, D2).
 - [ ] Profile block (D3): validation, `hunter_profiles` (raw block and known fields), the block rebuilt for others.
@@ -129,6 +131,9 @@ player kicked for not being ready, a party broken by its leader before departure
       ~0.13 ms, p99 ~0.3 ms, max ~0.6 ms; MH3SP: 50–80 ms.
 - [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test.
 - [ ] Dolphin run with two consoles (exit criterion 1).
-- [ ] Lab checks: does a friend request survive in the inbox across a game restart (deliver once vs again)? Does
+- [ ] Lab checks: with two consoles on the Rust server, does Local Info now show the real population (the Rust
+      server answers `LayerChildInfo` with the real layer, MH3SP a 0/4 placeholder), and does a kick option appear
+      then (none found against MH3SP, `s10`)? Does a friend request survive in the inbox across a game restart
+      (deliver once vs again)? Does
       a password quest work with the placeholder instead of the password (D9)? A city kick in the menus (D7)?
       The disconnect test (D4).
