@@ -152,7 +152,8 @@ player kicked for not being ready, a party broken by its leader before departure
         is local (no packet). A plain message is `ReqTell` → `NtcTell` (what the corpus calls a tell: the same
         inbox message), a request `ReqFriendAdd` → `NtcFriendAccept`. Settled: both are stored (`messages`) and
         delivered once, when the recipient stands in a city (at once if they do, else at their next position
-        there; confirmed run 5); a plain message is then deleted, a request kept 30 days as the proof an answer
+        there; confirmed runs 5–6: messages sent while the recipient was at the gate selection or in a gate
+        all arrived on entering a city, then were gone from the database; crossed requests made friends); a plain message is then deleted, a request kept 30 days as the proof an answer
         needs; sending it again delivers it again; two hunters asking each other become friends at once. A blocked
         sender's messages are never stored; 100 waiting per recipient at most; everything expires after 30 days. A
         friend deletion ends it for both; the other's list updates at its next login (no notice in the protocol).
