@@ -134,7 +134,9 @@ Settled with the user on 2026-10-09.
 - [x] Lab, `p2p` (run 11): the same, direct, through our NatNeg. Timings as with AltWFC: entering a city takes ~5–6 s,
       almost all the game's own wait before `REPORT` (5 s after the peer answers); our `CONNECT` comes 5 ms after
       the `INIT`s (AltWFC ~70 ms). Joining a party: no negotiation, answered in ~30 ms.
-- [ ] Lab: `hybrid` (after step 4); a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold
-      like P2P does).
+- [x] Lab, `hybrid` (run 12): direct link blocked (`lab/p2p.sh block`, relay range let through): the first join fails
+      (both report failure, 11688), the retry opens a relay, then a city and a quest through it, still blocked.
+      Negotiations happen at the city level only (each pair of city members); a party reuses the city's links.
+- [ ] Lab: a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold like P2P does).
 - [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range), the configuration
       (`NATNEG_STRATEGY`, `RELAY_PORTS`; natneg2/natneg3's DNS for the symmetric-NAT check).
