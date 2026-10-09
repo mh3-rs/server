@@ -13,6 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio::time::{Instant, interval_at};
 use tokio_openssl::SslStream;
 use tokio_util::codec::Framed;
@@ -117,18 +118,28 @@ async fn connection(
         _ = shutdown.cancelled() => return Ok(()),
         _ = tokio::time::sleep(PAUSE) => {}
     }
-    let (mailbox, kicked) = Mailbox::new(conn);
+    let (mailbox, mut mail, kicked) = Mailbox::new(conn);
     let (mut handler, first) = Handler::start(role, mailbox);
-    let result = serve_frames(&mut framed, &mut handler, first, &kicked, shared, &shutdown).await;
+    let result = serve_frames(
+        &mut framed,
+        &mut handler,
+        first,
+        &mut mail,
+        &kicked,
+        shared,
+        &shutdown,
+    )
+    .await;
     handler.close(shared);
     result
 }
 
-/// Requests in, answers out, until the connection ends.
+/// Requests in, answers and mail out, until the connection ends.
 async fn serve_frames(
     framed: &mut Framed<Box<dyn Io>, FrameCodec>,
     handler: &mut Handler,
     first: Handled,
+    mail: &mut mpsc::Receiver<Frame>,
     kicked: &CancellationToken,
     shared: &Shared,
     shutdown: &CancellationToken,
@@ -146,6 +157,7 @@ async fn serve_frames(
                 info!("kicked");
                 return Ok(());
             }
+            Some(frame) = mail.recv() => vec![frame],
             _ = line_check.tick() => {
                 if !answered {
                     info!("line check unanswered, disconnecting");

@@ -86,6 +86,9 @@ pub const GATES: u16 = 40;
 pub const GATE_CAPACITY: u32 = 100;
 pub const CITIES: u16 = 40;
 pub const CITY_CAPACITY: u32 = 4;
+/// Quests (circles) per city, and players per quest at most.
+pub const CIRCLES: u32 = 4;
+pub const CIRCLE_CAPACITY: u32 = 4;
 
 /// Where the players are, and the cities that exist (D3 of M2). Resources exist on demand: a world server or a
 /// gate is just where players are; a city exists from its reservation until its last player leaves. Populations
@@ -94,12 +97,15 @@ pub const CITY_CAPACITY: u32 = 4;
 pub struct World {
     places: HashMap<String, Place>,
     cities: HashMap<CityId, City>,
+    circles: HashMap<CircleId, Circle>,
     /// Orders players by arrival (lists show the earliest first).
     arrivals: u64,
 }
 
 /// World server, gate, city (1-based).
 pub type CityId = (u32, u16, u16);
+/// A city, and a circle in it (1-based).
+pub type CircleId = (CityId, u32);
 
 /// Where a player is, and what others see of them.
 #[derive(Clone, Debug)]
@@ -108,6 +114,7 @@ pub struct Place {
     pub server: u32,
     pub gate: Option<u16>,
     pub city: Option<u16>,
+    pub circle: Option<u32>,
     pub name: Bytes,
     pub profile: Box<[u8; PROFILE_SIZE]>,
     /// The connection that placed the player (a newer login replaces the place, the older one mustn't remove it).
@@ -122,6 +129,50 @@ pub struct City {
     pub reserved_by: Option<String>,
     /// The city's settings (`LayerCreateSet`): shown in the city list.
     pub settings: OptionalFields,
+}
+
+/// A quest being prepared or played: from its creation until its leader leaves.
+#[derive(Debug)]
+pub struct Circle {
+    pub leader: String,
+    /// Player slots (a player's index is its slot + 1).
+    slots: Vec<Option<String>>,
+    password: Option<Bytes>,
+    remarks: Option<Bytes>,
+    /// Unknown (from `CircleCreate`).
+    unk_0e: u8,
+    quest_id: u32,
+    /// The quest started: no one joins any more.
+    departed: bool,
+    /// Ready to depart (`CircleMatchOptionSet`).
+    standby: Vec<String>,
+    /// On the quest.
+    in_quest: Vec<String>,
+}
+
+/// What `CircleCreate` asks for.
+pub struct NewCircle {
+    pub password: Option<Bytes>,
+    pub remarks: Option<Bytes>,
+    pub unk_0e: u8,
+    pub capacity: u32,
+    pub quest_id: u32,
+}
+
+impl Circle {
+    /// The players, by index (1-based).
+    pub fn members(&self) -> impl Iterator<Item = (u8, &str)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.as_deref().map(|id| (i as u8 + 1, id)))
+    }
+
+    pub fn index_of(&self, capcom_id: &str) -> Option<u8> {
+        self.members()
+            .find(|(_, id)| *id == capcom_id)
+            .map(|(i, _)| i)
+    }
 }
 
 /// Why a city can't be created or entered.
@@ -157,6 +208,7 @@ impl World {
             server,
             gate: None,
             city: None,
+            circle: None,
             name,
             profile,
             conn,
@@ -269,6 +321,7 @@ impl World {
     /// The player leaves its city, if in one, or drops its reservation: an empty city goes, a leader leaving hands
     /// the city to the earliest player left.
     pub fn leave_city(&mut self, capcom_id: &str) {
+        self.leave_circle(capcom_id);
         let Some(place) = self.places.get_mut(capcom_id) else {
             return;
         };
@@ -289,6 +342,178 @@ impl World {
         for id in ids {
             self.tidy(id);
         }
+    }
+
+    /// Where the player's city is, if in one.
+    pub fn city_of(&self, capcom_id: &str) -> Option<CityId> {
+        let p = self.places.get(capcom_id)?;
+        Some((p.server, p.gate?, p.city?))
+    }
+
+    /// Everyone in a city, the earliest first.
+    pub fn city_players(&self, (server, gate, city): CityId) -> Vec<String> {
+        let mut list: Vec<_> = self
+            .places
+            .iter()
+            .filter(|(_, p)| p.server == server && p.gate == Some(gate) && p.city == Some(city))
+            .collect();
+        list.sort_by_key(|(_, p)| p.arrival);
+        list.into_iter().map(|(id, _)| id.clone()).collect()
+    }
+
+    /// Creates a circle in the player's city, in its first free slot, and puts the player in it as leader.
+    pub fn create_circle(&mut self, capcom_id: &str, new: NewCircle) -> Option<CircleId> {
+        let city = self.city_of(capcom_id)?;
+        let index = (1..=CIRCLES).find(|i| !self.circles.contains_key(&(city, *i)))?;
+        let mut slots = vec![None; new.capacity.clamp(1, CIRCLE_CAPACITY) as usize];
+        slots[0] = Some(capcom_id.to_owned());
+        let circle = Circle {
+            leader: capcom_id.to_owned(),
+            slots,
+            password: new.password,
+            remarks: new.remarks,
+            unk_0e: new.unk_0e,
+            quest_id: new.quest_id,
+            departed: false,
+            standby: Vec::new(),
+            in_quest: Vec::new(),
+        };
+        self.circles.insert((city, index), circle);
+        self.places.get_mut(capcom_id).expect("in a city").circle = Some(index);
+        Some((city, index))
+    }
+
+    pub fn circle(&self, id: CircleId) -> Option<&Circle> {
+        self.circles.get(&id)
+    }
+
+    /// The circle the player is in.
+    pub fn circle_of(&self, capcom_id: &str) -> Option<CircleId> {
+        let city = self.city_of(capcom_id)?;
+        Some((city, self.places.get(capcom_id)?.circle?))
+    }
+
+    pub fn set_standby(&mut self, capcom_id: &str, standby: bool) {
+        if let Some(circle) = self
+            .circle_of(capcom_id)
+            .and_then(|id| self.circles.get_mut(&id))
+        {
+            circle.standby.retain(|id| id != capcom_id);
+            if standby {
+                circle.standby.push(capcom_id.to_owned());
+            }
+        }
+    }
+
+    /// The quest departs: the players ready go on it (index and Capcom ID).
+    pub fn depart(&mut self, id: CircleId) -> Vec<(u8, String)> {
+        let Some(circle) = self.circles.get_mut(&id) else {
+            return Vec::new();
+        };
+        circle.departed = true;
+        let ready: Vec<(u8, String)> = circle
+            .members()
+            .filter(|(_, m)| circle.standby.iter().any(|s| s == m))
+            .map(|(i, m)| (i, m.to_owned()))
+            .collect();
+        circle.in_quest = ready.iter().map(|(_, m)| m.clone()).collect();
+        ready
+    }
+
+    /// The player leaves its circle: a leader leaving ends it. Returns the circle left.
+    pub fn leave_circle(&mut self, capcom_id: &str) -> Option<CircleId> {
+        let id = self.circle_of(capcom_id)?;
+        self.places.get_mut(capcom_id).expect("in a circle").circle = None;
+        let circle = self.circles.get_mut(&id)?;
+        if circle.leader == capcom_id {
+            let members: Vec<String> = circle.members().map(|(_, m)| m.to_owned()).collect();
+            self.circles.remove(&id);
+            for m in members {
+                if let Some(p) = self.places.get_mut(&m) {
+                    p.circle = None;
+                }
+            }
+        } else {
+            for slot in circle
+                .slots
+                .iter_mut()
+                .filter(|s| s.as_deref() == Some(capcom_id))
+            {
+                *slot = None;
+            }
+            circle.standby.retain(|m| m != capcom_id);
+            circle.in_quest.retain(|m| m != capcom_id);
+        }
+        Some(id)
+    }
+
+    /// A circle as lists show it (`CircleInfo`): an empty slot shows its index only.
+    pub fn circle_info(&self, id: CircleId) -> (PatData, OptionalFields) {
+        let index = id.1;
+        let mut info = PatData::new().with(0x01, Item::Long(index));
+        let Some(circle) = self.circles.get(&id) else {
+            return (
+                info,
+                OptionalFields(vec![(1, Some(CIRCLE_CAPACITY)), (2, Some(0))]),
+            );
+        };
+        if let Some(password) = &circle.password {
+            info = info
+                .with(0x03, Item::Byte(1))
+                .with(0x04, Item::String(password.clone()));
+        }
+        // Per player: Capcom ID at 0x10·i, name at 0x40 + 0x10·i, weapon type at 0x80 + i, a flag at 0x84 + i.
+        let mut party = vec![0u8; 0x88];
+        for (index, member) in circle.members() {
+            let i = usize::from(index - 1);
+            let place = self.places.get(member);
+            let name = place.map_or(&[][..], |p| &p.name[..]);
+            for (offset, bytes) in [(0x10 * i, member.as_bytes()), (0x40 + 0x10 * i, name)] {
+                let n = bytes.len().min(0x0f);
+                party[offset..offset + n].copy_from_slice(&bytes[..n]);
+            }
+            party[0x80 + i] = place.map_or(0, |p| p.profile[5]);
+            party[0x84 + i] = 0xff;
+        }
+        info = info.with(0x05, Item::Binary(party.into()));
+        if let Some(remarks) = &circle.remarks {
+            info = info.with(0x06, Item::String(remarks.clone()));
+        }
+        let capacity = circle.slots.len() as u32;
+        let count = circle.members().count() as u32;
+        let info = info
+            .with(0x07, Item::Long(count))
+            .with(0x09, Item::Long(capacity))
+            .with(0x0c, Item::Long(index))
+            .with(
+                0x0d,
+                Item::String(Bytes::copy_from_slice(circle.leader.as_bytes())),
+            )
+            .with(0x0e, Item::Byte(circle.unk_0e))
+            .with(
+                0x0f,
+                Item::Byte(u8::from(circle.departed || count >= capacity)),
+            );
+        (
+            info,
+            OptionalFields(vec![(1, Some(capacity)), (2, Some(circle.quest_id))]),
+        )
+    }
+
+    /// The circles of a city that exist.
+    pub fn circles_in(&self, city: CityId) -> Vec<(PatData, OptionalFields)> {
+        (1..=CIRCLES)
+            .filter(|i| self.circles.contains_key(&(city, *i)))
+            .map(|i| self.circle_info((city, i)))
+            .collect()
+    }
+
+    fn in_quest(&self, city: CityId) -> u32 {
+        self.circles
+            .iter()
+            .filter(|((c, _), _)| *c == city)
+            .map(|(_, circle)| circle.in_quest.len() as u32)
+            .sum()
     }
 
     /// Removes a city nobody is in or about to create; gives a leaderless city to its earliest player.
@@ -375,8 +600,8 @@ pub fn cities(
                 .with(0x06, Item::Long(population))
                 .with(0x07, Item::Long(population))
                 .with(0x09, Item::Long(CITY_CAPACITY))
-                // Players of the city on a quest (circles come with quests).
-                .with(0x0b, Item::Long(0))
+                // Players of the city on a quest.
+                .with(0x0b, Item::Long(world.in_quest(id)))
                 // Unknown; MH3SP's value.
                 .with(0x0c, Item::Long(0xc))
                 .with(

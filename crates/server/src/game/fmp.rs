@@ -4,16 +4,19 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 use tracing::{Span, info, trace};
 use wire::packets::*;
-use wire::{Frame, Item, PatData};
+use wire::{Frame, Item, PatData, PatWrite, Reader};
 
 use super::players::Mailbox;
-use super::{Fault, Handled, PROFILE_SIZE, Session, alert, reply, server_time, unexpected, world};
+use super::world::{CircleId, NewCircle, World};
+use super::{
+    Fault, Handled, PROFILE_SIZE, Session, alert, frame, reply, server_time, unexpected, world,
+};
 use crate::Shared;
 use crate::content::{self, Binary};
-use crate::text::Language;
+use crate::text::{Language, Text};
 
 /// `NtcLogin` status on FMP.
 const LOGGED_IN: u8 = 3;
@@ -345,6 +348,233 @@ impl Fmp {
                 }
                 reply(seq, &AnsLayerCreateFoot { number: r.number })
             }
+            ReqLayerMediationList::ID => {
+                // MH3SP's placeholder list (its meaning is unknown): 14 unlocked entries named "Test".
+                ReqLayerMediationList::decode(p)?;
+                let items = (1..=14)
+                    .map(|i| {
+                        PatData::new()
+                            .with(0x01, Item::String(Bytes::from_static(b"Test")))
+                            .with(0x02, Item::Byte(i))
+                            .with(0x03, Item::Byte(0))
+                    })
+                    .collect();
+                reply(
+                    seq,
+                    &AnsLayerMediationList {
+                        unk: 0,
+                        items: ShortList(items),
+                    },
+                )
+            }
+            ReqCircleListLayer::ID => {
+                ReqCircleListLayer::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
+                reply(
+                    seq,
+                    &AnsCircleListLayer {
+                        unk: 0,
+                        circles: world.circles_in(city),
+                    },
+                )
+            }
+            ReqCircleCreate::ID => {
+                let r = ReqCircleCreate::decode(p)?;
+                let string = |field| match r.info.get(field) {
+                    Some(Item::String(s)) => Some(s.clone()),
+                    _ => None,
+                };
+                let new = NewCircle {
+                    password: string(0x04),
+                    remarks: string(0x06),
+                    unk_0e: match r.info.get(0x0e) {
+                        Some(Item::Byte(b)) => *b,
+                        _ => 0,
+                    },
+                    capacity: match r.info.get(0x09) {
+                        Some(Item::Long(c)) => *c,
+                        _ => world::CIRCLE_CAPACITY,
+                    },
+                    quest_id: r
+                        .extra
+                        .0
+                        .iter()
+                        .find(|(f, _)| *f == 0x02)
+                        .and_then(|(_, v)| *v)
+                        .unwrap_or(0),
+                };
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let Some(id) = world.create_circle(me, new) else {
+                    return alert(AnsCircleCreate::ID, seq, Text::NoQuestSlot);
+                };
+                info!(circle = id.1, "created quest");
+                let mut out = Vec::new();
+                list_change(shared, &world, me, id, seq, &mut out)?;
+                out.push(frame(seq, &AnsCircleCreate { circle: id.1 })?);
+                Ok(out)
+            }
+            ReqCircleMatchOptionSet::ID => {
+                let r = ReqCircleMatchOptionSet::decode(p)?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                world.set_standby(me, matches!(r.options.get(0x03), Some(Item::Byte(1))));
+                let circle = world.circle(id).expect("circle of the player");
+                let options = set(
+                    set(
+                        set(
+                            r.options,
+                            0x05,
+                            Item::String(Bytes::copy_from_slice(me.as_bytes())),
+                        ),
+                        0x06,
+                        Item::String(session.name.clone()),
+                    ),
+                    0x04,
+                    Item::Byte(circle.index_of(me).unwrap_or(0)),
+                );
+                let others: Vec<String> = circle
+                    .members()
+                    .filter(|(_, m)| *m != me)
+                    .map(|(_, m)| m.to_owned())
+                    .collect();
+                let ntc = frame(seq, &NtcCircleMatchOptionSet { options })?;
+                let mut out = Vec::new();
+                notify(shared, me, &others, &ntc, &mut out);
+                out.push(frame(seq, &AnsCircleMatchOptionSet {})?);
+                Ok(out)
+            }
+            ReqCircleInfo::ID => {
+                let r = ReqCircleInfo::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
+                let (info, extra) = world.circle_info((city, r.circle));
+                reply(
+                    seq,
+                    &AnsCircleInfo {
+                        circle: r.circle,
+                        info,
+                        extra,
+                    },
+                )
+            }
+            ReqCircleInfoSet::ID => {
+                // Relayed to the circle; MH3SP doesn't apply it to the circle (the list keeps its creation values).
+                let r = ReqCircleInfoSet::decode(p)?;
+                let me = capcom_id(session);
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                let id = (city, r.circle);
+                let others: Vec<String> = world
+                    .circle(id)
+                    .map(|c| {
+                        c.members()
+                            .filter(|(_, m)| *m != me)
+                            .map(|(_, m)| m.to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let ntc = frame(
+                    seq,
+                    &NtcCircleInfoSet {
+                        circle: r.circle,
+                        info: r.info,
+                        extra: r.extra,
+                    },
+                )?;
+                let mut out = Vec::new();
+                notify(shared, me, &others, &ntc, &mut out);
+                out.push(frame(seq, &AnsCircleInfoSet { circle: r.circle })?);
+                list_change(shared, &world, me, id, seq, &mut out)?;
+                Ok(out)
+            }
+            ReqCircleMatchStart::ID => {
+                ReqCircleMatchStart::decode(p)?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                let ready = world.depart(id);
+                info!(circle = id.1, players = ready.len(), "quest departs");
+                // The players departing: count, then per player its index, Capcom ID, a flag and an unknown 21.
+                let mut data = Vec::new();
+                data.put_u32(ready.len() as u32);
+                for (index, member) in &ready {
+                    data.put_u8(*index);
+                    data.put_lp2_string(member.as_bytes())?;
+                    data.put_lp2_string(b"\x01")?;
+                    data.put_u16(21);
+                }
+                let members: Vec<String> = world
+                    .circle(id)
+                    .map(|c| c.members().map(|(_, m)| m.to_owned()).collect())
+                    .unwrap_or_default();
+                let ntc = frame(
+                    seq,
+                    &NtcCircleMatchStart {
+                        data: data.into(),
+                        rest: Rest(Bytes::from_static(&[0, 0, 0, 1])),
+                    },
+                )?;
+                let mut out = Vec::new();
+                notify(shared, me, &members, &ntc, &mut out);
+                out.push(frame(seq, &AnsCircleMatchStart {})?);
+                Ok(out)
+            }
+            NtcCircleBinary::ID => {
+                // Game data for the circle: relayed with the sender's Capcom ID and name in front.
+                let r = NtcCircleBinary::decode(p)?;
+                let mut reader = Reader::new(&r.data.0);
+                reader.pat_data()?;
+                let me = capcom_id(session);
+                let mut data = Vec::new();
+                data.put_lp2_string(me.as_bytes())?;
+                data.put_pat_data(
+                    &PatData::new()
+                        .with(0x01, Item::Long(0x1234_5678))
+                        .with(0x02, Item::String(Bytes::copy_from_slice(me.as_bytes())))
+                        .with(0x03, Item::String(session.name.clone())),
+                )?;
+                data.extend_from_slice(reader.rest());
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                let others: Vec<String> = world
+                    .circle((city, r.circle))
+                    .map(|c| {
+                        c.members()
+                            .filter(|(_, m)| *m != me)
+                            .map(|(_, m)| m.to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let ntc = frame(
+                    seq,
+                    &NtcCircleBinary {
+                        circle: r.circle,
+                        data: Rest(data.into()),
+                    },
+                )?;
+                let mut out = Vec::new();
+                notify(shared, me, &others, &ntc, &mut out);
+                Ok(out)
+            }
+            ReqCircleMatchEnd::ID => {
+                ReqCircleMatchEnd::decode(p)?;
+                reply(seq, &AnsCircleMatchEnd {})
+            }
+            ReqCircleLeave::ID => {
+                let r = ReqCircleLeave::decode(p)?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let mut out = Vec::new();
+                if let Some(id) = world.leave_circle(me) {
+                    info!(circle = id.1, "left quest");
+                    list_change(shared, &world, me, id, seq, &mut out)?;
+                }
+                out.push(frame(seq, &AnsCircleLeave { circle: r.circle })?);
+                Ok(out)
+            }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;
                 reply(seq, &AnsCircleInfoNoticeSet {})
@@ -453,6 +683,56 @@ fn placeholder_layer() -> PatData {
         .with(0x10, Item::Byte(1))
         .with(0x11, Item::Long(500))
         .with(0x12, Item::Byte(1))
+}
+
+/// Sends `ntc` to `to`: the requester's own copy goes in its answer (`out`), in order; the others' to their
+/// mailboxes.
+fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<Frame>) {
+    for player in to {
+        match player == me {
+            true => out.push(ntc.clone()),
+            false => shared.players.send(player, ntc.clone()),
+        }
+    }
+}
+
+/// Tells everyone in the city (the requester included) how circle `id` looks now.
+fn list_change(
+    shared: &Shared,
+    world: &World,
+    me: &str,
+    id: CircleId,
+    seq: u16,
+    out: &mut Vec<Frame>,
+) -> Result<(), Fault> {
+    let (info, extra) = world.circle_info(id);
+    let ntc = frame(
+        seq,
+        &NtcCircleListLayerChange {
+            circle: id.1,
+            info,
+            extra,
+        },
+    )?;
+    notify(shared, me, &world.city_players(id.0), &ntc, out);
+    Ok(())
+}
+
+fn not_in_city() -> Fault {
+    Fault::Client(anyhow!("not in a city"))
+}
+
+fn not_in_circle() -> Fault {
+    Fault::Client(anyhow!("not in a quest"))
+}
+
+/// Sets `field` in place, or appends it.
+fn set(mut data: PatData, field: u8, item: Item) -> PatData {
+    match data.0.iter_mut().find(|(f, _)| *f == field) {
+        Some(entry) => entry.1 = item,
+        None => data.0.push((field, item)),
+    }
+    data
 }
 
 /// Logged in on FMP means a Capcom ID (checked at login).

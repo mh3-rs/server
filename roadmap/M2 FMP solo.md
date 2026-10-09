@@ -101,12 +101,16 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       reservation goes with its player; a leader leaving hands the city to the earliest player left. Refusals are
       alerts (the answer's id with kind byte `0x01`). Layer states are MH3SP's: 1 empty, 2 full, 3 joinable. `s03`
       creates its city and stops at the quest downloads.
-- [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
+- [x] Circles (quests): mediation list (MH3SP's placeholder), circle list, create, match options, info, info set
+      (relayed, not applied: MH3SP's behaviour), match start (the players ready depart), match end, leave, game
+      data relayed to the circle. A circle lives from its creation until its leader leaves. Notifications: the
+      requester's own copy goes in its answer, in the recorded order; others' copies to their mailboxes (a bounded
+      channel per connection; a full one drops its connection). No `Effect` type needed.
 - [x] Content binaries (D1), from MH3SP's event files (D2), time (D6): all of `0x01`–`0x0f`. Quests are parsed
       into typed structs (`content/quest.rs`) and laid out as MH3SP does; checked once against MH3SP's own
       generator on all 40 quest files: byte-identical. MH3SP quirk kept: Grudge Match Wyvern Trio and Land Lords
       have 9 items in their last arena set's 8-slot pouch, written whole.
-- [ ] World model (D3), players registry and `Effect`s (D4).
-- [ ] Replay gate: the solo scenarios, every connection.
+- [x] World model (D3), players registry and mailboxes (D4).
+- [x] Replay gate: the solo scenarios, every connection (`REACHED = M2`: `s00`, the three `s02`, `s03`).
 - [ ] Tier 3 solo scenarios.
 - [ ] Dolphin run (exit criterion 1).

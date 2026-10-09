@@ -198,22 +198,6 @@ fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
     assert!(dirty.is_empty(), "{}: {dirty:#?}", scenario.display());
 }
 
-/// Whole scenarios of the milestone in progress (M2) that replay cleanly already; replaced by `REACHED` once M2 is.
-const CLEAN_SO_FAR: [&str; 4] = [
-    "s00-returning-new-slot",
-    "s02-first-login-gate",
-    "s02-login-gate",
-    "s02-login-gate-2",
-];
-
-#[tokio::test]
-async fn clean_so_far() {
-    for name in CLEAN_SO_FAR {
-        let scenario = repo().join("corpus").join(name);
-        assert_clean(&scenario, &replay(&scenario).await);
-    }
-}
-
 /// Tier 2: scenarios whose milestone is reached must replay cleanly against the Rust server.
 #[tokio::test]
 async fn reached_scenarios_replay_cleanly() {
