@@ -164,6 +164,8 @@ struct Shared<'a> {
 /// be done before it can be expected, and how long it took after the last of them when recorded.
 struct Step<'a> {
     record: &'a FrameRecord,
+    /// Answered with an alert instead, on purpose (`[[omit]]` with `alert`).
+    refused: bool,
     turn: Option<usize>,
     after: usize,
     lag: Duration,
@@ -227,16 +229,24 @@ async fn replay_console(
             .iter()
             .enumerate()
             .filter(|(_, f)| !is_line_check(f))
-            // Frames the Rust server leaves out on purpose (`[[omit]]` in divergences.toml).
-            .filter(|(_, f)| {
+            // Frames the Rust server leaves out, or answers with an alert, on purpose (`[[omit]]` in
+            // divergences.toml).
+            .filter_map(|(fi, f)| {
                 let name = format!("{}-{:02}-{}", rec.console, n + 1, c.role);
-                !(f.dir == Dir::S2c
-                    && shared
+                match f.dir {
+                    Dir::S2c => match shared
                         .masks
-                        .omitted(&shared.scenario, &name, &f.name, f.seq))
+                        .omitted(&shared.scenario, &name, &f.name, f.seq)
+                    {
+                        Some(false) => None,
+                        refused => Some((fi, f, refused.is_some())),
+                    },
+                    Dir::C2s => Some((fi, f, false)),
+                }
             })
-            .map(|(fi, record)| Step {
+            .map(|(fi, record, refused)| Step {
                 record,
+                refused,
                 turn: turn_of.get(&(ci, n, fi)).copied(),
                 after: send_times.partition_point(|&t| t < record.t),
                 lag: lag(send_times, record.t),
@@ -291,6 +301,7 @@ pub async fn replay_connection(
         .filter(|f| !is_line_check(f))
         .map(|record| Step {
             record,
+            refused: false,
             turn: None,
             after: 0,
             lag: Duration::ZERO,
@@ -375,6 +386,9 @@ async fn run(
             };
             let fits = |p: usize| {
                 let record = steps[p].record;
+                if steps[p].refused {
+                    return frame.id.0 == id_of(record) | 0x01 && frame.seq == record.seq;
+                }
                 frame.id.0 == id_of(record)
                     && frame.seq == record.seq
                     && hex::decode(&record.payload).is_ok_and(|recorded| {

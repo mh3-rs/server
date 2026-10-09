@@ -28,7 +28,8 @@ pub struct Mask {
 pub struct Masks(Vec<Mask>, Vec<Omit>);
 
 /// A server frame the Rust server doesn't send, on purpose (`[[omit]]` in `divergences.toml`): the recording's
-/// frame of `packet` with `seq` on `connection` (`dev1-05-fmp`) of `scenario` isn't expected.
+/// frame of `packet` with `seq` on `connection` (`dev1-05-fmp`) of `scenario` isn't expected; with `alert`, an answer
+/// the Rust server replaces with an alert (a refusal: the answer's id with kind byte 0x01, its text not compared).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Omit {
@@ -36,6 +37,8 @@ pub struct Omit {
     pub connection: String,
     pub packet: String,
     pub seq: u16,
+    #[serde(default)]
+    pub alert: bool,
     pub reason: String,
 }
 
@@ -91,14 +94,24 @@ impl Masks {
         Ok(Self(masks, omits))
     }
 
-    /// Whether the Rust server leaves this recorded frame out on purpose.
-    pub fn omitted(&self, scenario: &str, connection: &str, packet: &str, seq: u16) -> bool {
-        self.1.iter().any(|o| {
-            o.scenario == scenario
-                && o.connection == connection
-                && o.packet == packet
-                && o.seq == seq
-        })
+    /// What the Rust server does on purpose instead of sending this recorded frame: `Some(true)` an alert in its
+    /// place, `Some(false)` nothing.
+    pub fn omitted(
+        &self,
+        scenario: &str,
+        connection: &str,
+        packet: &str,
+        seq: u16,
+    ) -> Option<bool> {
+        self.1
+            .iter()
+            .find(|o| {
+                o.scenario == scenario
+                    && o.connection == connection
+                    && o.packet == packet
+                    && o.seq == seq
+            })
+            .map(|o| o.alert)
     }
 
     fn of<'a>(&'a self, packet: &'a str, len: usize) -> impl Iterator<Item = &'a Mask> + 'a {

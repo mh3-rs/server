@@ -1,0 +1,14 @@
+description = "City seats and arm wrestling (ReqLayerMediationLock/Unlock) against MH3SP: sitting and standing show on the other console (the game's own P2P); MH3SP says yes to every lock and tells nobody, so dev2 sits on dev1's seat while dev1 is on it. Arm wrestling at the barrel works. dev1 quits (window closed) while seated: the seat is free for dev2, but MH3SP never held it anyway."
+steps = [
+  "both: Online, slot 1, Valor1, City Gate 1; dev1: create City 1; dev2: join it",
+  "dev1: sit, stand up, sit on the same seat again; dev2: watches",
+  "dev2: sit on dev1's seat while dev1 is on it (allowed)",
+  "dev1: stand up; both: arm wrestle at the barrel",
+  "dev1: sit, then close its window while seated",
+  "dev2: the seat is free; close",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M5"

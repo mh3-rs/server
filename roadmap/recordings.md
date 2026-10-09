@@ -10,18 +10,6 @@ The lab: `lab/play.sh` boots each console from its save state (the Village or Ci
 
 ## Pending
 
-### s13-seats (record against MH3SP, M5 D1)
-
-City seats (1–12) and arm wrestling (13–14): `ReqLayerMediationLock/Unlock`. MH3SP lets two players share a seat and
-never tells the others; the Rust server will fix both (check run below).
-
-1. both: Online, slot 1, Valor1, City Gate 1. dev1: create City 1. dev2: join it.
-2. dev1: sit on a seat, stand up, sit again. dev2: watch dev1 sit and stand.
-3. dev2: try to sit on dev1's seat (MH3SP allows it).
-4. both: arm wrestling together (the barrel).
-5. dev1: sit, then quit the game while seated. dev2: is the seat free again?
-6. both: close.
-
 ### s14-layer-tell (record against MH3SP, M5 D1)
 
 Chat to one hunter (`ReqLayerTell`), which only exists in a gate or a world-server lobby (cities go console to
@@ -62,3 +50,7 @@ punch), the others direct; a city and a quest with all three. Shows a relayed an
   card's "Warp to" into dev2's city, and the friends list's warp to dev2 on another world server (Greed1: the
   reconnection and the ticket) all land where they should; no error or warning in the server's log. Not tried: a jump
   refused (a full or reserved city).
+- 2026-10-09, s13-seats (against MH3SP): sitting and standing show on the other console; MH3SP lets dev2 sit on
+  dev1's seat while dev1 is on it and tells nobody; arm wrestling works; dev1 closing its window while seated leaves
+  the seat free (MH3SP never held it). Replays on the Rust server, the refused seat declared (`[[omit]]` with
+  `alert`: an answer replaced by a refusal, new in the harness).
