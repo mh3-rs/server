@@ -841,8 +841,8 @@ async fn cities_are_shared() {
     running.stop().await;
 }
 
-/// Tier 3: the game's inbox lasts one game session and drops messages at the world server level, so a friend
-/// request not answered yet is delivered on reaching a gate, once per game, until answered.
+/// Tier 3: the game's inbox lasts one game session and drops messages arriving while a scene loads, so a friend
+/// request not answered yet is delivered at the player's first position in a city, once per game, until answered.
 #[tokio::test]
 async fn friend_requests_wait_for_an_answer() {
     let (config, _db) = config();
@@ -863,32 +863,28 @@ async fn friend_requests_wait_for_an_answer() {
     send(&mut a, 10, request).await;
     expect::<AnsFriendAdd>(&mut a).await;
 
-    let friend_list = ReqFriendList {
-        first: 1,
-        count: 10,
-        fields: vec![],
+    let position = || NtcLayerUserPosition {
+        data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
     };
-    for game in [1, 2] {
+    for (game, gate) in [(1, 1), (2, 2)] {
         let mut b = play(&running, &code).await;
-        send(&mut b, 10, friend_list.clone()).await;
+        // Nothing in a gate, nor on entering a city: first a position there, then once per game.
+        let info = PatData::new();
+        send(&mut b, 10, ReqLayerDown { layer: gate, info }).await;
+        meet(&mut b, &mut enter_world(&running).await, gate, 2).await;
         let seen = drain(&mut b, Duration::from_millis(200)).await;
-        assert_eq!(
-            seen,
-            [AnsFriendList::ID],
-            "game {game}: at the world server"
+        assert!(
+            !seen.contains(&NtcFriendAccept::ID),
+            "game {game}: {seen:?}"
         );
-        // In a gate, and again in another: once per game (the inbox still has it).
-        for (seq, gate, expected) in [(11, 1, true), (13, 2, false)] {
-            let info = PatData::new();
-            send(&mut b, seq, ReqLayerDown { layer: gate, info }).await;
+        for (seq, expected) in [(30, true), (31, false)] {
+            send(&mut b, seq, position()).await;
             let seen = drain(&mut b, Duration::from_millis(200)).await;
             assert_eq!(
                 seen.contains(&NtcFriendAccept::ID),
                 expected,
-                "game {game}, gate {gate}: {seen:?}"
+                "game {game}, position {seq}: {seen:?}"
             );
-            send(&mut b, seq + 1, ReqLayerUp {}).await;
-            drain(&mut b, Duration::from_millis(100)).await;
         }
     }
     running.stop().await;

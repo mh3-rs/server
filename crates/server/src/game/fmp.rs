@@ -91,7 +91,7 @@ impl Fmp {
                     None => self.request(shared, req),
                 };
                 let (session, _) = self.login.as_mut().expect("logged in");
-                pending_requests(shared, session, handled).await
+                pending_requests(shared, session, req, handled).await
             }
         }
     }
@@ -1507,22 +1507,28 @@ async fn profile_set(shared: &Shared, session: &mut Session, req: &Frame) -> Han
     reply(req.seq, &AnsUserBinarySet {})
 }
 
-/// After a request handled: once per game session, on reaching a gate, the friend requests not answered yet. The
-/// game's inbox only lasts until it quits, and it drops messages sent at the world server level (seen in the lab:
-/// delivered with the friend list, they never showed).
-async fn pending_requests(shared: &Shared, session: &mut Session, handled: Handled) -> Handled {
+/// After a request handled: once per game session, the friend requests not answered yet, on the player's first
+/// position in a city. The game's inbox only lasts until it quits, and it drops a message arriving while a scene
+/// loads (seen in the lab: sent with the friend list, then on entering a gate, they never showed; sent to a player
+/// standing in a city, they do). A position means the town is loaded and the hunter on screen.
+async fn pending_requests(
+    shared: &Shared,
+    session: &mut Session,
+    req: &Frame,
+    handled: Handled,
+) -> Handled {
     let mut out = handled?;
-    if session.requests_sent {
+    if session.requests_sent || req.id != NtcLayerUserPosition::ID {
         return Ok(out);
     }
     let me = capcom_id(session);
-    let in_gate = shared
+    let in_city = shared
         .world
         .lock()
         .unwrap()
         .place(me)
-        .is_some_and(|p| p.gate.is_some());
-    if !in_gate {
+        .is_some_and(|p| p.city.is_some());
+    if !in_city {
         return Ok(out);
     }
     let db = shared
