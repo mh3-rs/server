@@ -32,6 +32,8 @@ fn config() -> (Config, tempfile::TempDir) {
         lmp: any,
         fmp: any,
         health: any,
+        qr: any,
+        natneg: any,
         tls_cert: repo().join("certs/dev/server.crt"),
         tls_key: repo().join("certs/dev/server.key"),
         database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
@@ -1483,6 +1485,119 @@ fn request<P: Packet>(seq: u16, packet: P) -> Frame {
         id: P::ID,
         payload: payload.into(),
     }
+}
+
+/// The NatNeg records a socket receives within 300 ms.
+async fn natneg_received(socket: &tokio::net::UdpSocket) -> Vec<wire::natneg::Record> {
+    let mut records = Vec::new();
+    let mut buf = [0; 1500];
+    while let Ok(Ok(n)) =
+        tokio::time::timeout(Duration::from_millis(300), socket.recv(&mut buf)).await
+    {
+        records.push(wire::natneg::Record::decode(&buf[..n]).unwrap());
+    }
+    records
+}
+
+/// Tier 5: two consoles negotiate through the server: each gets a `CONNECT` with the other's game socket address;
+/// a report is acknowledged; nothing is answered for an address with no logged-in console. The QR check is answered.
+#[tokio::test]
+async fn natneg_pairs_two_consoles() {
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use tokio::net::UdpSocket;
+    use wire::natneg::{Body, Port, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let local = |port: u16| SocketAddr::from(([127, 0, 0, 1], port));
+    let (natneg, qr) = (
+        local(running.natneg.unwrap().port()),
+        local(running.qr.unwrap().port()),
+    );
+    let cookie = 0x5a8f_90df;
+    let init = |kind, client_index| Record {
+        cookie,
+        body: Body::Init {
+            port: Port { kind, client_index },
+            use_game_port: 1,
+            local: SocketAddrV4::new(Ipv4Addr::new(192, 168, 0, 2), 0),
+            game: Bytes::from_static(b"mh3uswii"),
+        },
+    };
+    // Each console: its game socket and its NatNeg socket.
+    let mut consoles = Vec::new();
+    for _ in 0..2 {
+        consoles.push((
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+        ));
+    }
+
+    // Nobody logged in: ignored.
+    let (game, _) = &consoles[0];
+    game.send_to(&init(0, 0).encode(), natneg).await.unwrap();
+    assert!(natneg_received(game).await.is_empty());
+
+    let _logged_in = enter_world(&running).await;
+    for (index, (game, nn)) in consoles.iter().enumerate() {
+        game.send_to(&init(0, index as u8).encode(), natneg)
+            .await
+            .unwrap();
+        nn.send_to(&init(1, index as u8).encode(), natneg)
+            .await
+            .unwrap();
+    }
+    for (index, (game, nn)) in consoles.iter().enumerate() {
+        let mut got = natneg_received(game).await;
+        got.extend(natneg_received(nn).await);
+        let acks = got
+            .iter()
+            .filter(|r| matches!(r.body, Body::InitAck(_)))
+            .count();
+        assert_eq!(acks, 2, "console {index}: {got:?}");
+        let peer = consoles[1 - index].0.local_addr().unwrap();
+        assert!(
+            got.iter()
+                .any(|r| matches!(&r.body, Body::Connect(p) if SocketAddr::V4(p.addr) == peer)),
+            "console {index}: no CONNECT to {peer}: {got:?}"
+        );
+    }
+
+    let (_, nn) = &consoles[0];
+    let report = Record {
+        cookie,
+        body: Body::Report {
+            port: Port {
+                kind: 0x80,
+                client_index: 0,
+            },
+            result: 1,
+            nat_type: 6,
+            mapping: 0,
+            game: Bytes::from_static(b"mh3uswii"),
+        },
+    };
+    nn.send_to(&report.encode(), natneg).await.unwrap();
+    assert!(matches!(
+        natneg_received(nn).await[..],
+        [Record {
+            body: Body::ReportAck(..),
+            ..
+        }]
+    ));
+
+    let check = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    check
+        .send_to(&hex::decode("09000000006d6833757377696900").unwrap(), qr)
+        .await
+        .unwrap();
+    let mut buf = [0; 64];
+    let n = tokio::time::timeout(Duration::from_secs(1), check.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(buf[..n], wire::natneg::AVAILABLE);
+    running.stop().await;
 }
 
 /// Tier 3: a quest leader whose console vanishes (a crash, a lost connection) leaves cleanly: before departure the

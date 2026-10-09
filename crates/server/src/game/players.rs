@@ -2,6 +2,7 @@
 //! registry (decision 4). The socket stays with its connection task, the only writer: frames for a player go
 //! through its mailbox.
 
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,6 +22,8 @@ const MAILBOX_SIZE: usize = 256;
 pub struct Mailbox {
     /// The internal connection number (tells two logins of the same Capcom ID apart).
     pub conn: u64,
+    /// The console's address (its connection's): NAT negotiation is for logged-in consoles only.
+    pub ip: IpAddr,
     tx: mpsc::Sender<Frame>,
     kick: CancellationToken,
     /// Messages may wait in the database (from the start: they may have come while away).
@@ -29,12 +32,13 @@ pub struct Mailbox {
 
 impl Mailbox {
     /// The mailbox, the frames its connection sends, and the signal it watches.
-    pub fn new(conn: u64) -> (Self, mpsc::Receiver<Frame>, CancellationToken) {
+    pub fn new(conn: u64, ip: IpAddr) -> (Self, mpsc::Receiver<Frame>, CancellationToken) {
         let (tx, rx) = mpsc::channel(MAILBOX_SIZE);
         let kick = CancellationToken::new();
         (
             Mailbox {
                 conn,
+                ip,
                 tx,
                 kick: kick.clone(),
                 mail: Arc::new(AtomicBool::new(true)),
@@ -92,6 +96,12 @@ impl Players {
         }
     }
 
+    /// Whether a logged-in player connects from `ip`. ponytail: a scan of every player, per NAT negotiation
+    /// started; an index by address if thousands play at once.
+    pub fn online(&self, ip: IpAddr) -> bool {
+        self.0.iter().any(|m| m.ip == ip)
+    }
+
     /// Unregisters a player, unless another connection took its Capcom ID since.
     pub fn unregister(&self, capcom_id: &str, conn: u64) {
         self.0.remove_if(capcom_id, |_, m| m.conn == conn);
@@ -105,8 +115,9 @@ mod tests {
     #[test]
     fn a_second_login_kicks_the_first() {
         let players = Players::default();
-        let (first, _rx1, kicked1) = Mailbox::new(1);
-        let (second, _rx2, kicked2) = Mailbox::new(2);
+        let ip = IpAddr::from([127, 0, 0, 1]);
+        let (first, _rx1, kicked1) = Mailbox::new(1, ip);
+        let (second, _rx2, kicked2) = Mailbox::new(2, ip);
         players.register("ABC123", first);
         players.register("ABC123", second);
         assert!(kicked1.is_cancelled() && !kicked2.is_cancelled());

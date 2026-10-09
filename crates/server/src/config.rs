@@ -5,6 +5,7 @@
 //! | Variable | Default |
 //! |---|---|
 //! | `OPN_PORT`, `LMP_PORT`, `FMP_PORT`, `HEALTH_PORT` | 8200, 8201, 8202, 8280 |
+//! | `QR_PORT`, `NATNEG_PORT` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
 //! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
 //! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
 //! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
@@ -31,6 +32,9 @@ pub struct Config {
     pub lmp: SocketAddr,
     pub fmp: SocketAddr,
     pub health: SocketAddr,
+    /// UDP.
+    pub qr: SocketAddr,
+    pub natneg: SocketAddr,
     pub tls_cert: PathBuf,
     pub tls_key: PathBuf,
     pub database_url: String,
@@ -66,6 +70,8 @@ impl Config {
             lmp: listen("LMP_PORT", 8201)?,
             fmp: listen("FMP_PORT", 8202)?,
             health: health()?,
+            qr: listen("QR_PORT", 27900)?,
+            natneg: listen("NATNEG_PORT", 27901)?,
             tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
             tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
             database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),

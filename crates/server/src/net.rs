@@ -3,6 +3,7 @@
 //! always written whole and in order.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,10 +52,10 @@ pub async fn serve(
     shutdown: CancellationToken,
 ) {
     loop {
-        let tcp = tokio::select! {
+        let (tcp, peer) = tokio::select! {
             _ = shutdown.cancelled() => return,
             accepted = listener.accept() => match accepted {
-                Ok((tcp, _peer)) => tcp,
+                Ok(accepted) => accepted,
                 Err(e) => {
                     // Usually out of file descriptors: back off instead of spinning.
                     warn!(%role, error = %e, "accept failed");
@@ -76,7 +77,7 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         tokio::spawn(
             async move {
-                match connection(tcp, conn, role, tls, &shared, shutdown).await {
+                match connection(tcp, peer.ip(), conn, role, tls, &shared, shutdown).await {
                     Ok(()) => debug!("disconnected"),
                     Err(Fault::Client(e)) => warn!(error = %format!("{e:#}"), "connection dropped"),
                     Err(Fault::Server(e)) => {
@@ -91,6 +92,7 @@ pub async fn serve(
 
 async fn connection(
     tcp: TcpStream,
+    ip: IpAddr,
     conn: u64,
     role: Role,
     tls: Option<SslContext>,
@@ -118,7 +120,7 @@ async fn connection(
         _ = shutdown.cancelled() => return Ok(()),
         _ = tokio::time::sleep(PAUSE) => {}
     }
-    let (mailbox, mut mail, kicked) = Mailbox::new(conn);
+    let (mailbox, mut mail, kicked) = Mailbox::new(conn, ip);
     let (mut handler, first) = Handler::start(role, mailbox);
     let result = serve_frames(
         &mut framed,

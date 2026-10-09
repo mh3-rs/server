@@ -18,6 +18,7 @@ mod content;
 mod database;
 mod game;
 pub mod health;
+mod natneg;
 mod net;
 mod text;
 mod tls;
@@ -27,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -89,6 +90,9 @@ pub struct Running {
     pub lmp: Option<SocketAddr>,
     pub fmp: Option<SocketAddr>,
     pub health: SocketAddr,
+    /// UDP; off in maintenance mode.
+    pub qr: Option<SocketAddr>,
+    pub natneg: Option<SocketAddr>,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
 }
@@ -179,6 +183,23 @@ pub async fn start(config: &Config) -> Result<Running> {
         ));
     }
 
+    // The game's UDP services (M4): its availability check, NAT negotiation.
+    let (mut qr, mut natneg) = (None, None);
+    if config.maintenance.is_none() {
+        let socket = UdpSocket::bind(config.qr)
+            .await
+            .with_context(|| format!("bind QR on {}", config.qr))?;
+        qr = Some(socket.local_addr()?);
+        info!(role = "qr", addr = %socket.local_addr()?, "listening");
+        tasks.spawn(natneg::serve_qr(socket, shutdown.clone()));
+        let socket = UdpSocket::bind(config.natneg)
+            .await
+            .with_context(|| format!("bind NatNeg on {}", config.natneg))?;
+        natneg = Some(socket.local_addr()?);
+        info!(role = "natneg", addr = %socket.local_addr()?, "listening");
+        tasks.spawn(natneg::serve(socket, shared.clone(), shutdown.clone()));
+    }
+
     let listener = TcpListener::bind(config.health)
         .await
         .with_context(|| format!("bind health on {}", config.health))?;
@@ -192,6 +213,8 @@ pub async fn start(config: &Config) -> Result<Running> {
         lmp,
         fmp,
         health,
+        qr,
+        natneg,
         shutdown,
         tasks,
     })
