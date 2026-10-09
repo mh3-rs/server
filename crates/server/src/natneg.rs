@@ -266,3 +266,94 @@ async fn send(socket: &UdpSocket, datagram: &[u8], to: SocketAddr) {
         debug!(error = %e, "NatNeg send failed");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use wire::natneg::Port;
+
+    use super::*;
+    use crate::game::players::Mailbox;
+
+    /// `hybrid` decides per pair: with three consoles on three addresses and only the second flagged `Relay`, the
+    /// pairs with it go through the relay, the other one stays direct.
+    #[tokio::test]
+    async fn hybrid_relays_only_the_pairs_of_a_flagged_console() {
+        let ips = [1, 2, 3].map(|n| Ipv4Addr::new(10, 0, 0, n));
+        let players = Players::default();
+        let mut mail = Vec::new();
+        for (i, ip) in ips.iter().enumerate() {
+            let (mailbox, rx, _) = Mailbox::new(i as u64, IpAddr::V4(*ip));
+            players.register(&format!("HUNTR{i}"), mailbox);
+            mail.push(rx);
+        }
+        players.learn(IpAddr::V4(ips[1]), Nat::Relay);
+        let shutdown = CancellationToken::new();
+        let connector = Connector {
+            strategy: Strategy::Hybrid,
+            relays: Some(Relays::new(
+                Ipv4Addr::new(203, 0, 113, 1),
+                42000..=42099,
+                shutdown.clone(),
+            )),
+        };
+        // Console i: game socket i:1000, NatNeg socket i:2000.
+        let game = |i: usize| SocketAddrV4::new(ips[i], 1000);
+        let mut negotiations = HashMap::new();
+        let mut told = |cookie: u32, pair: [usize; 2]| {
+            let mut connects = Vec::new();
+            for (index, &console) in pair.iter().enumerate() {
+                for (kind, port) in [(0, 1000), (1, 2000), (2, 2000), (3, 2000)] {
+                    let init = Record {
+                        cookie,
+                        body: Body::Init {
+                            port: Port {
+                                kind,
+                                client_index: index as u8,
+                            },
+                            use_game_port: 1,
+                            local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                            game: bytes::Bytes::from_static(b"mh3uswii"),
+                        },
+                    };
+                    let from = SocketAddrV4::new(ips[console], port);
+                    for (datagram, _) in handle(
+                        &connector,
+                        &players,
+                        &mut negotiations,
+                        init,
+                        from,
+                        Instant::now(),
+                    ) {
+                        if let Body::Connect(p) = Record::decode(&datagram).unwrap().body {
+                            connects.push(p.addr);
+                        }
+                    }
+                }
+            }
+            connects
+        };
+        let relayed = |connects: &[SocketAddrV4]| {
+            connects
+                .iter()
+                .all(|a| *a.ip() == Ipv4Addr::new(203, 0, 113, 1))
+        };
+        let direct = |connects: &[SocketAddrV4], pair: [usize; 2]| {
+            connects
+                .iter()
+                .all(|a| *a == game(pair[0]) || *a == game(pair[1]))
+        };
+        let (one_two, one_three, two_three) = (told(1, [0, 1]), told(2, [0, 2]), told(3, [1, 2]));
+        assert!(!one_two.is_empty() && relayed(&one_two), "{one_two:?}");
+        assert!(
+            !one_three.is_empty() && direct(&one_three, [0, 2]),
+            "{one_three:?}"
+        );
+        assert!(
+            !two_three.is_empty() && relayed(&two_three),
+            "{two_three:?}"
+        );
+        shutdown.cancel();
+    }
+}
