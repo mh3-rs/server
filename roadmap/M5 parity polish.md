@@ -1,6 +1,6 @@
 # M5 — Parity and polish
 
-**Status: draft (2026-10-09), decisions to settle.**
+**Status: decisions settled (2026-10-09).**
 
 Everything MH3SP does that we don't yet, the content and operations a public server needs, and the leftovers of
 M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7–M8, and anti-cheat, M6, come after).
@@ -38,35 +38,37 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 
 ## Decisions
 
-### Open (recommendation first)
 
-- **D1 New recordings.** Like M3: two (or three) Dolphins against MH3SP, one scenario per missing feature: party chat
+- **D1 New recordings. Settled.** Like M3: two (or three) Dolphins against MH3SP, one scenario per missing feature: party chat
   (`s11`), player and city searches (`s12`), whatever brings sibling lists, mediation lock and `LayerTell` (to find:
   the decomp says when the console sends them). A feature the game never sends from its menus isn't implemented.
-- **D2 Content: the live branch's files.** `CONTENT_DIR` pointed at a checkout of MH3SP's `event-quest-rotation-full`
+- **D2 Content: the live branch's files. Settled.** `CONTENT_DIR` pointed at a checkout of MH3SP's `event-quest-rotation-full`
   (content stays out of this repository); our quest generator updated to its rework (no `.dat` files), checked
   byte-identical on all its quests. Live rotation updates: already ours (files read on demand).
-- **D3 Announcements.** As MH3SP sends them (city chat from "[MH3SP]", 30-character lines), to every logged-in player
+- **D3 Announcements. Settled.** As MH3SP sends them (city chat from "[MH3SP]", 30-character lines), to every logged-in player
   (wherever they are: world server, gate, city; in a quest too). Triggered by the operator: `mh3sp announce "text"`,
   which talks to the running server through its health port (a `POST /announce`, internal like `/health`). The
   website (M8) uses the same endpoint. The same path serves "system" messages later (e.g. the friend-removed idea).
-- **D4 Stopping. Settled (2026-10-09), additions to confirm.** `mh3sp stop 5min` (a human-readable delay: `1h`,
-  `30s`…) asks the running server, through its internal health port, to stop: at once a broadcast ("Stopping in 5
-  minutes") and **maintenance at runtime** (no new logins, no new quests; everything else works as usual); reminders
-  at fixed steps (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay); then the connections
-  closed and the process exits. Proposed: `mh3sp stop cancel` (lifts it and the maintenance), and SIGTERM (`docker
-  stop`: 10 s by default) runs the same sequence from the step that fits. Quests in progress are P2P and go on.
+- **D4 Stopping. Settled (2026-10-09).** `mh3sp stop 5min` (a human-readable delay: `1h`, `30s`…) asks the
+  running server, through its internal health port, to stop: at once a broadcast ("Stopping in 5 minutes") and
+  **maintenance at runtime** (no new logins, no new quests; everything else works as usual); reminders at fixed steps
+  (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay); then the connections closed and the
+  process exits. `mh3sp stop cancel` lifts it and the maintenance. SIGTERM (`docker stop`: 10 s by default) runs the
+  same sequence from the step that fits. Quests in progress are P2P and go on.
 - **D5 Metrics. Settled:** `/metrics` on the health port, a JSON of the metrics (always); `/metrics/prometheus`
-  behind a `prometheus` cargo feature (open: built into the Docker image?). Players online (per world server),
-  cities, quests, NatNeg negotiations (direct, relayed, failed), relay pairs and traffic, request latency. No
-  database, no history. Anonymous only: counts, never Capcom IDs.
+  behind a `prometheus` cargo feature. Two images: `1` (without) and `1-prometheus` (with; also `1.0-prometheus`,
+  `1.0.0-prometheus`). Players online (per world server), cities, quests, NatNeg negotiations (direct, relayed,
+  failed), relay pairs and traffic, request latency. No database, no history. Anonymous only: counts, never Capcom
+  IDs.
 - **D6 Chat logs. Settled: not in M5.** Never logged now (user content, M1's logging rule); what to keep, where and
   how long is for moderation (M6–M8).
-- **D7 Town position interval. Settled: a lab test.** The layer record's field `0x11` is the console's position
-  interval (how often it sends its own position; the decomp's `applyLoginRecord`), set by the server: 500 ms today
-  (MH3SP's). Tried at 200 ms, then 100 ms: smoother? any console trouble? The lowest that works is kept (~80 bytes a
-  position, ~2 kB/s per full city at 100 ms).
-- **D8 Tier 4 (live differential against MH3SP). Recommendation: drop it.** Kept for later twice; the corpus replays
+- **D7 Town position interval. Settled: a lab test, extremes included.** The layer record's field `0x11` is the
+  console's position interval (how often it sends its own position; the decomp's `applyLoginRecord`), set by the
+  server: 500 ms today (MH3SP's). Tried from one extreme to the other (e.g. 33 ms, one frame at 30 fps; 50, 100, 200,
+  500, 1,000, 2,000 ms), noting for each how smooth town movement looks and the traffic measured (packets and bytes a
+  second, per console and per full city): smooth but heavy, laggy but light, and the balance kept. Any console
+  trouble at the low end ends that end.
+- **D8 Tier 4 (live differential against MH3SP). Settled: dropped.** Kept for later twice; the corpus replays
   (tier 2) and console runs covered parity so far, and MH3SP is a moving reference. Revisit only if a divergence
   can't be found otherwise.
 
