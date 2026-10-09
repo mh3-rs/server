@@ -51,8 +51,11 @@ player kicked for not being ready, a party broken by its leader before departure
   and their lists update at once. So the server stores pending requests (SQLite `friend_requests`) until answered,
   and refuses an answer to a request never sent; a request to an offline player waits for their next login. The
   friend list is only asked for when entering a world server, and the protocol has no notification of a deletion:
-  the other player's list updates at its next login. **Open:** a deletion one way (MH3SP: only the deleter's list)
-  or both ways (a friendship is mutual); and whether to tell the other player with a message from "system".
+  the other player's list updates at its next login. A friendship is **mutual**: one row per pair,
+  `friends (hunter_a, hunter_b)` referencing `hunters` (`ON DELETE CASCADE`), `CHECK (hunter_a < hunter_b)` so a pair
+  has one order, primary key on the pair; a deletion by either side removes the row, so the friendship ends for both
+  (MH3SP removes it from the deleter's list only). A hunter replaced on its slot drops its friendships (M1 schema).
+  **Open:** whether to tell the other player with a message from "system".
 - **D3 The hunter profile block. Settled:** stored in the database (`hunter_profiles`), as the raw block *and* the
   known fields, parsed and validated (HR u16 @0, weapon type u8 @5 so far; an invalid update is refused: the previous
   block kept, one `warn`). The block other consoles receive is rebuilt: the raw bytes with the known fields written
