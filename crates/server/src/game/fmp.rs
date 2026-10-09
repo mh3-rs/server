@@ -750,6 +750,10 @@ impl Fmp {
             }
             ReqCircleMatchStart::ID => {
                 ReqCircleMatchStart::decode(p)?;
+                // A hunt doesn't outlive the server: none starts in a stop's last 15 minutes.
+                if crate::stop::too_close(shared) {
+                    return alert(AnsCircleMatchStart::ID, seq, Text::StoppingSoon);
+                }
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let id = world.circle_of(me).ok_or_else(not_in_circle)?;
@@ -955,6 +959,33 @@ impl Fmp {
                     },
                     seq,
                 )
+            }
+            NtcCircleChat::ID => {
+                // Party chat through the server (the game's fallback without a P2P session): to the other members,
+                // the sender filled in (MH3SP's).
+                let r = NtcCircleChat::decode(p)?;
+                let me = capcom_id(session);
+                let info = set(
+                    set(
+                        r.info,
+                        0x03,
+                        Item::String(Bytes::copy_from_slice(me.as_bytes())),
+                    ),
+                    0x04,
+                    Item::String(session.name.clone()),
+                );
+                let world = shared.world.lock().unwrap();
+                let ntc = frame(seq, &NtcCircleChat { info, text: r.text })?;
+                for (_, member, _, _) in world
+                    .circle_of(me)
+                    .map(|id| world.circle_members(id))
+                    .unwrap_or_default()
+                {
+                    if member != me {
+                        shared.players.send(&member, ntc.clone());
+                    }
+                }
+                Ok(vec![])
             }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;

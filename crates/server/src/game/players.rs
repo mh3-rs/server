@@ -114,11 +114,11 @@ impl Players {
         self.0.len()
     }
 
-    /// Sends frames to every logged-in player: how many.
-    pub fn broadcast(&self, frames: &[Frame]) -> usize {
-        for mailbox in self.0.iter() {
-            for frame in frames {
-                mailbox.send(frame.clone());
+    /// Sends every logged-in player the frames `pick` chooses for them (by Capcom ID): how many.
+    pub fn broadcast<'a>(&self, pick: impl Fn(&str) -> &'a [Frame]) -> usize {
+        for entry in self.0.iter() {
+            for frame in pick(entry.key()) {
+                entry.value().send(frame.clone());
             }
         }
         self.0.len()

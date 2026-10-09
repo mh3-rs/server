@@ -15,7 +15,7 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use bytes::Bytes;
 use sqlx::SqlitePool;
-use wire::packets::{AnsServerTime, NtcLayerChat, Packet, ReqConnection};
+use wire::packets::{AnsServerTime, NtcCircleChat, NtcLayerChat, Packet, ReqConnection};
 use wire::{DecodeError, EncodeError, Frame, Item, PacketId, PatData, PatWrite};
 
 use crate::Shared;
@@ -155,9 +155,22 @@ pub fn frame<P: Packet>(seq: u16, packet: &P) -> Result<Frame, Fault> {
     })
 }
 
-/// An announcement to players (M5 D3), as MH3SP sends them: city chat from a made-up sender, the text in lines of at
-/// most 30 characters (the chat's width), cut between words (a longer word is cut).
-pub fn announcement(text: &str) -> Vec<Frame> {
+/// An announcement to every logged-in player (M5 D3), as MH3SP sends them: chat from a made-up sender, the text in
+/// lines of at most 30 characters (the chat's width), cut between words (a longer word is cut). Town chat doesn't
+/// show in a hunt (lab run 15): players on a quest get party chat (`NtcCircleChat`). How many players.
+pub fn announce(shared: &crate::Shared, text: &str) -> usize {
+    let (town, party) = (announcement(text, false), announcement(text, true));
+    let world = shared.world.lock().unwrap();
+    shared
+        .players
+        .broadcast(|capcom_id| match world.on_quest(capcom_id) {
+            true => &party,
+            false => &town,
+        })
+}
+
+/// An announcement's frames: town chat, or party chat (`party`).
+pub fn announcement(text: &str, party: bool) -> Vec<Frame> {
     const WIDTH: usize = 30;
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
@@ -182,12 +195,19 @@ pub fn announcement(text: &str) -> Vec<Frame> {
     lines
         .into_iter()
         .filter_map(|line| {
-            let chat = NtcLayerChat {
-                channel: 1,
-                info: info.clone(),
-                text: line.into(),
-            };
-            frame(0, &chat).ok()
+            let (info, text) = (info.clone(), line.into());
+            match party {
+                true => frame(0, &NtcCircleChat { info, text }),
+                false => frame(
+                    0,
+                    &NtcLayerChat {
+                        channel: 1,
+                        info,
+                        text,
+                    },
+                ),
+            }
+            .ok()
         })
         .collect()
 }
@@ -245,7 +265,7 @@ mod tests {
     #[test]
     fn announcements_fit_the_chat() {
         let lines = |text: &str| -> Vec<String> {
-            announcement(text)
+            announcement(text, false)
                 .iter()
                 .map(|f| {
                     String::from_utf8(NtcLayerChat::decode(&f.payload).unwrap().text.to_vec())

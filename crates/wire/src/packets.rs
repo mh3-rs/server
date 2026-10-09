@@ -435,6 +435,7 @@ packets! {
     // FMP: chat and messages.
     /// City chat (`info`: colour, time, sender's Capcom ID and name, filled in by the server when relayed).
     NtcLayerChat = 0x64721000 { channel: u8, info: PatData, text: Bytes }
+    NtcCircleChat = 0x65721000 { info: PatData, text: Bytes }
     /// A message to one player (`capcom_id`: the recipient; the server fills in the sender in `info`).
     ReqTell = 0x66110100 { capcom_id: Bytes, info: PatData, text: Bytes }
     AnsTell = 0x66110200 {}

@@ -1087,6 +1087,61 @@ async fn metrics_count_what_happens() {
     running.stop().await;
 }
 
+/// Tier 3, M5 run 15: players in a hunt get announcements as party chat (town chat doesn't show there), others as
+/// town chat; party chat a member sends reaches the others; in a stop's last 15 minutes, departures are refused.
+#[tokio::test]
+async fn hunters_get_announcements_and_no_late_departures() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = party(&running, 1, true).await;
+    let mut in_world = enter_world(&running).await;
+    let health = running.health;
+    tokio::task::spawn_blocking(move || server::health::announce(health, "Hello"))
+        .await
+        .unwrap()
+        .unwrap();
+    for hunter in [&mut a, &mut b] {
+        let seen = drain(hunter, Duration::from_millis(200)).await;
+        assert!(
+            seen.contains(&NtcCircleChat::ID) && !seen.contains(&NtcLayerChat::ID),
+            "{seen:?}"
+        );
+    }
+    expect::<NtcLayerChat>(&mut in_world).await;
+
+    // Party chat: to the other member, the sender filled in.
+    let chat = NtcCircleChat {
+        info: PatData::new(),
+        text: Bytes::from_static(b"hi"),
+    };
+    send(&mut a, 40, chat).await;
+    let got = expect::<NtcCircleChat>(&mut b).await;
+    assert_eq!(
+        (&got.text[..], string(got.info.get(0x04))),
+        (&b"hi"[..], "Aiko".to_owned())
+    );
+
+    // A stop in 10 minutes: a new party can't depart.
+    let (mut c, mut d) = party(&running, 2, false).await;
+    tokio::task::spawn_blocking(move || server::health::stop(health, "10min"))
+        .await
+        .unwrap()
+        .unwrap();
+    drain(&mut c, Duration::from_millis(100)).await;
+    drain(&mut d, Duration::from_millis(100)).await;
+    send(&mut c, 50, ReqCircleMatchStart {}).await;
+    assert!(
+        expect_alert(&mut c, AnsCircleMatchStart::ID)
+            .await
+            .contains("stops soon")
+    );
+    tokio::task::spawn_blocking(move || server::health::stop(health, "cancel"))
+        .await
+        .unwrap()
+        .unwrap();
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

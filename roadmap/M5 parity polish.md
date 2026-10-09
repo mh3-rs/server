@@ -96,6 +96,9 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - [x] Lab, run 15: an announcement shows in town chat (blue, "[MH3SP]", 30-character lines); a stop's warnings
       don't show in a quest; the server stopping mid-quest breaks the party (the leader sees the other leave at once,
       the other sees the leader frozen) and both end in a network error on the way back (11674, network instability).
-- [ ] Stopping, from run 15: warnings as party chat to players in a quest; departures refused in the last 15 minutes.
+- [x] Stopping, from run 15: announcements (and a stop's warnings) as party chat (`NtcCircleChat`) to players in a
+      departed quest, town chat to the others; departures refused in a stop's last 15 minutes ("The server stops
+      soon: no new hunts."). `NtcCircleChat` relayed to the party (the game's fallback without a P2P session: s11
+      shows a hunt's chat is console to console). To see on a console: does party chat show in a hunt?
 - [ ] Lab: the town interval (D7); the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).

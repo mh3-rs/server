@@ -68,7 +68,7 @@ async fn answer(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> {
             // The whole request must fit the one read.
             _ if n == buf.len() => ("413 Content Too Large", "too long\n".to_owned()),
             text => {
-                let players = shared.players.broadcast(&crate::game::announcement(text));
+                let players = crate::game::announce(shared, text);
                 info!(players, %text, "announcement");
                 ("200 OK", format!("sent to {players} players\n"))
             }

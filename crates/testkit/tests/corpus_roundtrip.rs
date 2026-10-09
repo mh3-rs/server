@@ -180,6 +180,7 @@ fn typed_packets_reencode() {
             "AnsMaintenance",
             "NtcCircleBreak",
             "NtcLayerUserNum",
+            "NtcCircleChat",
         ];
         let missing: Vec<_> = TYPED
             .iter()
