@@ -5,6 +5,7 @@ pub mod fmp;
 pub mod lmp;
 pub mod opn;
 pub mod players;
+pub mod profile;
 pub mod world;
 
 use std::fmt;
@@ -23,6 +24,7 @@ use fmp::Fmp;
 use lmp::Lmp;
 use opn::Opn;
 use players::Mailbox;
+use profile::Profile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -99,11 +101,8 @@ pub struct Session {
     /// The world server picked (1-based, `FmpInfo2`).
     pub world_server: Option<u32>,
     /// The hunter's public profile block, written by the console (`UserBinarySet`).
-    pub profile: Box<[u8; PROFILE_SIZE]>,
+    pub profile: Profile,
 }
-
-/// The size of the hunter profile block.
-pub const PROFILE_SIZE: usize = 0x100;
 
 impl Session {
     pub fn new(console: Console) -> Self {
@@ -112,7 +111,7 @@ impl Session {
             capcom_id: None,
             name: Bytes::new(),
             world_server: None,
-            profile: Box::new([0; PROFILE_SIZE]),
+            profile: Profile::default(),
         }
     }
 }

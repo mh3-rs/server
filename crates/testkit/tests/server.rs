@@ -820,6 +820,51 @@ async fn cities_are_shared() {
     running.stop().await;
 }
 
+/// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
+#[tokio::test]
+async fn invalid_profiles_are_refused() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut a = enter_world(&running).await;
+    let mut b = enter_world(&running).await;
+    // HR 5, weapon type 2; then HR 1000.
+    for (seq, offset, data) in [(10, 0, vec![0, 5, 0, 0, 0, 2]), (11, 0, vec![0x03, 0xe8])] {
+        send(
+            &mut a,
+            seq,
+            ReqUserBinarySet {
+                offset,
+                data: data.into(),
+            },
+        )
+        .await;
+        expect::<AnsUserBinarySet>(&mut a).await;
+    }
+    for (c, seq) in [(&mut a, 12), (&mut b, 10)] {
+        send(
+            c,
+            seq,
+            ReqLayerDown {
+                layer: 2,
+                info: PatData::new(),
+            },
+        )
+        .await;
+        expect::<AnsLayerDown>(c).await;
+    }
+    send(&mut b, 11, ReqLayerUserList { fields: vec![] }).await;
+    let users = expect::<AnsLayerUserList>(&mut b).await.users;
+    let blocks: Vec<_> = users
+        .iter()
+        .filter_map(|u| match u.get(0x07) {
+            Some(Item::Binary(block)) => Some(block[..6].to_vec()),
+            _ => None,
+        })
+        .collect();
+    assert!(blocks.contains(&vec![0, 5, 0, 0, 0, 2]), "{blocks:?}");
+    running.stop().await;
+}
+
 /// Tier 3: every content download is consistent (version, head, chunks), quests included.
 #[tokio::test]
 async fn content_downloads() {

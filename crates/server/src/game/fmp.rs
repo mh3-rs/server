@@ -11,9 +11,7 @@ use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
 
 use super::players::Mailbox;
 use super::world::{CircleId, NewCircle, World};
-use super::{
-    Fault, Handled, PROFILE_SIZE, Session, alert, frame, reply, server_time, unexpected, world,
-};
+use super::{Fault, Handled, Session, alert, frame, reply, server_time, unexpected, world};
 use crate::Shared;
 use crate::accounts;
 use crate::content::{self, Binary};
@@ -94,8 +92,12 @@ impl Fmp {
         }
     }
 
-    /// Messages, friends and the black list (they need the database); `None` for anything else.
+    /// The requests that need the database (profile, quests, messages, friends, black list); `None` for anything else.
     async fn social(&mut self, shared: &Shared, req: &Frame) -> Option<Handled> {
+        if req.id == ReqUserBinarySet::ID {
+            let (session, _) = self.login.as_mut().expect("logged in");
+            return Some(profile_set(shared, session, req).await);
+        }
         if req.id == ReqCircleCreate::ID || req.id == ReqCircleJoin::ID {
             let (session, _) = self.login.as_ref().expect("logged in");
             return Some(quests(shared, session, req).await);
@@ -247,10 +249,7 @@ impl Fmp {
                 let info = PatData::new()
                     .with(0x01, Item::String(r.capcom_id))
                     .with(0x02, Item::String(place.name.clone()))
-                    .with(
-                        0x03,
-                        Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
-                    )
+                    .with(0x03, Item::Binary(place.profile.bytes()))
                     .with(
                         0x04,
                         Item::Binary(Bytes::copy_from_slice(&world::path(
@@ -321,10 +320,7 @@ impl Fmp {
                         PatData::new()
                             .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
                             .with(0x02, Item::String(place.name.clone()))
-                            .with(
-                                0x07,
-                                Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
-                            )
+                            .with(0x07, Item::Binary(place.profile.bytes()))
                     })
                     .collect();
                 reply(seq, &AnsLayerUserList { users })
@@ -338,13 +334,14 @@ impl Fmp {
                 // The profile changed: the others at the player's place get the part named.
                 let r = ReqUserBinaryNotice::decode(p)?;
                 let me = capcom_id(session);
-                let start = (r.offset as usize).min(PROFILE_SIZE);
-                let end = start.saturating_add(r.size as usize).min(PROFILE_SIZE);
+                let block = session.profile.bytes();
+                let start = (r.offset as usize).min(block.len());
+                let end = start.saturating_add(r.size as usize).min(block.len());
                 let ntc = NtcUserBinaryNotice {
                     unk: r.unk,
                     capcom_id: Bytes::copy_from_slice(me.as_bytes()),
                     offset: r.offset,
-                    data: Bytes::copy_from_slice(&session.profile[start..end]),
+                    data: block.slice(start..end),
                 };
                 relay(shared, me, &ntc, seq)?;
                 reply(seq, &AnsUserBinaryNotice {})
@@ -927,21 +924,6 @@ impl Fmp {
                 trace!(len = p.len(), "cheat check");
                 Ok(vec![])
             }
-            ReqUserBinarySet::ID => {
-                let r = ReqUserBinarySet::decode(p)?;
-                let start = r.offset as usize;
-                let end = start + r.data.len();
-                if end > PROFILE_SIZE {
-                    return Err(Fault::Client(anyhow!(
-                        "profile write past {PROFILE_SIZE} bytes ({start}..{end})"
-                    )));
-                }
-                session.profile[start..end].copy_from_slice(&r.data);
-                if let Some(place) = shared.world.lock().unwrap().place(capcom_id(session)) {
-                    place.profile[start..end].copy_from_slice(&r.data);
-                }
-                reply(seq, &AnsUserBinarySet {})
-            }
             ReqUserSearchSet::ID => {
                 // What the player can be searched by (M3).
                 ReqUserSearchSet::decode(p)?;
@@ -1124,10 +1106,7 @@ fn layer_in(world: &World, me: &str, seq: u16) -> Result<Frame, Fault> {
     let user = PatData::new()
         .with(0x01, Item::String(Bytes::copy_from_slice(me.as_bytes())))
         .with(0x02, Item::String(place.name.clone()))
-        .with(
-            0x07,
-            Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
-        );
+        .with(0x07, Item::Binary(place.profile.bytes()));
     frame(
         seq,
         &NtcLayerIn {
@@ -1165,8 +1144,8 @@ fn found_users(shared: &Shared, found: &[String]) -> Vec<(PatData, OptionalField
                     ))),
                 );
             let in_quest = u32::from(on_quest);
-            let weapon = u32::from(place.profile[5]);
-            let hr = u32::from(u16::from_be_bytes([place.profile[0], place.profile[1]]));
+            let weapon = u32::from(place.profile.weapon);
+            let hr = u32::from(place.profile.hr);
             Some((
                 record,
                 OptionalFields(vec![
@@ -1475,6 +1454,35 @@ fn hunter_records(list: Vec<(String, Vec<u8>)>, first: u32, count: u32) -> Vec<P
                 .with(0x03, Item::String(name.into()))
         })
         .collect()
+}
+
+/// The console writes a window of its profile block: validated (an invalid write is refused, the previous profile
+/// kept), shown to others from now on, and stored.
+async fn profile_set(shared: &Shared, session: &mut Session, req: &Frame) -> Handled {
+    let r = ReqUserBinarySet::decode(&req.payload)?;
+    match session.profile.write(r.offset as usize, &r.data) {
+        Ok(profile) => {
+            let me = capcom_id(session);
+            if let Some(place) = shared.world.lock().unwrap().place(me) {
+                place.profile = profile.clone();
+            }
+            let db = shared
+                .db
+                .pool()
+                .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
+            let server = |e: anyhow::Error| Fault::Server(e);
+            let (id, _) = accounts::hunter(db, me)
+                .await
+                .map_err(server)?
+                .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
+            accounts::save_profile(db, id, &profile)
+                .await
+                .map_err(server)?;
+            session.profile = profile;
+        }
+        Err(e) => warn!("profile write refused: {e:#}"),
+    }
+    reply(req.seq, &AnsUserBinarySet {})
 }
 
 /// Messages, friends and the black list. A blocked hunter's tells and friend requests are answered as sent but

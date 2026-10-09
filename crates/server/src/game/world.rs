@@ -6,7 +6,8 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use wire::{Item, OptionalFields, PatData};
 
-use super::{Fault, PROFILE_SIZE};
+use super::Fault;
+use super::profile::Profile;
 use crate::Shared;
 use crate::text::{Language, Text, text};
 
@@ -117,7 +118,7 @@ pub struct Place {
     pub city: Option<u16>,
     pub circle: Option<u32>,
     pub name: Bytes,
-    pub profile: Box<[u8; PROFILE_SIZE]>,
+    pub profile: Profile,
     /// The connection that placed the player (a newer login replaces the place, the older one mustn't remove it).
     conn: u64,
     arrival: u64,
@@ -237,7 +238,7 @@ impl World {
         conn: u64,
         server: u32,
         name: Bytes,
-        profile: Box<[u8; PROFILE_SIZE]>,
+        profile: Profile,
     ) {
         self.arrivals += 1;
         let place = Place {
@@ -647,7 +648,7 @@ impl World {
                 let n = bytes.len().min(0x0f);
                 party[offset..offset + n].copy_from_slice(&bytes[..n]);
             }
-            party[0x80 + i] = place.map_or(0, |p| p.profile[5]);
+            party[0x80 + i] = place.map_or(0, |p| p.profile.weapon);
             party[0x84 + i] = 0xff;
         }
         info = info.with(0x05, Item::Binary(party.into()));
@@ -844,13 +845,7 @@ mod tests {
     fn world_with(players: &[&str]) -> World {
         let mut world = World::default();
         for (conn, id) in players.iter().enumerate() {
-            world.enter(
-                id,
-                conn as u64,
-                1,
-                Bytes::new(),
-                Box::new([0; PROFILE_SIZE]),
-            );
+            world.enter(id, conn as u64, 1, Bytes::new(), Profile::default());
             world.place(id).unwrap().gate = Some(1);
         }
         world

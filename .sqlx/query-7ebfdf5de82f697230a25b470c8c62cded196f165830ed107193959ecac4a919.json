@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hunter_profiles (hunter_id, raw, hr, weapon_type) VALUES (?1, ?2, ?3, ?4)\n           ON CONFLICT (hunter_id) DO UPDATE\n           SET raw = excluded.raw, hr = excluded.hr, weapon_type = excluded.weapon_type,\n               updated_at = CURRENT_TIMESTAMP",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "7ebfdf5de82f697230a25b470c8c62cded196f165830ed107193959ecac4a919"
+}

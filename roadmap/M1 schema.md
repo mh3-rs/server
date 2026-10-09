@@ -73,9 +73,9 @@ bans            (id, console_id NULL, hunter_id NULL, reason, banned_by, created
 -- weapon type (u8 @5); likely equipment and appearance (other consoles draw the hunter from it).
 -- Persisted for the website (hunter pages) and anti-cheat (impossible values or jumps, M6).
 -- History (one row per change) only if M6 needs it.
--- Only parsed, validated fields are stored, never the raw 256 bytes (they stay in memory while the player is
--- connected, for forwarding, until the block can be rebuilt from fields; see M3 in the global roadmap).
-hunter_profiles (hunter_id PRIMARY KEY, hr smallint, weapon_type smallint, … /* columns added as fields get mapped */, updated_at)
+-- Stored as the raw block and the parsed, validated fields (M3 D3, replacing "fields only"); the raw column goes
+-- once every field is mapped (see M3 in the global roadmap).
+hunter_profiles (hunter_id PRIMARY KEY, raw blob, hr, weapon_type, … /* columns added as fields get mapped */, updated_at)
 
 -- M3: social (friends also managed from the website, M7: the game fetches its list from the server).
 friends         (hunter_id, friend_id, created_at, PRIMARY KEY (hunter_id, friend_id))

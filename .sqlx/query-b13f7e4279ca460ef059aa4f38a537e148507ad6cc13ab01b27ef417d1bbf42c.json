@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM hunter_profiles WHERE hunter_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "b13f7e4279ca460ef059aa4f38a537e148507ad6cc13ab01b27ef417d1bbf42c"
+}

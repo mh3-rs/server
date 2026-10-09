@@ -119,7 +119,9 @@ player kicked for not being ready, a party broken by its leader before departure
       console vanishes is cleaned up, before and after departure (tier 3).
 - [x] Chat (MH3SP's colour by level), tells, friends (mutual, requests stored and delivered once), black list
       (personal; blocked hunters' tells and requests not delivered) (D1, D2).
-- [ ] Profile block (D3): validation, `hunter_profiles` (raw block and known fields), the block rebuilt for others.
+- [x] Profile block (D3): `game/profile.rs` validates every write (HR ≤ 999; weapon type ≤ 8, a guess: every
+      recording has 1), an invalid one refused (previous kept, `warn`); `hunter_profiles` stores the raw block and the
+      known fields; others get the rebuilt block. Every recorded profile is accepted and rebuilt byte for byte.
 - [ ] Disconnect lab test and grace period decision (D4).
 - [ ] Concurrency model written down (who owns what; no socket written but by its task) (D5).
 - [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,

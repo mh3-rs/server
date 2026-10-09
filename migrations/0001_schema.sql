@@ -60,6 +60,18 @@ CREATE TABLE hunters (
 ) STRICT;
 CREATE INDEX hunters_console ON hunters (console_id);
 
+-- A hunter's public profile, the 256-byte block the console writes and other consoles draw the hunter from
+-- (game/profile.rs). Self-reported: the save is the truth. Kept for the website (hunter pages) and anti-cheat (M6):
+-- the raw block as written, and the known fields, parsed and validated. As fields get mapped they become columns;
+-- once all are, the raw column goes.
+CREATE TABLE hunter_profiles (
+    hunter_id   INTEGER PRIMARY KEY REFERENCES hunters (id) ON DELETE CASCADE,
+    raw         BLOB NOT NULL CHECK (length(raw) = 256),
+    hr          INTEGER NOT NULL CHECK (hr BETWEEN 0 AND 999),
+    weapon_type INTEGER NOT NULL CHECK (weapon_type BETWEEN 0 AND 255),
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 -- Friendships are mutual: one row per pair, the lower hunter id first, so a pair has one order; either side
 -- deleting it ends it for both.
 CREATE TABLE friends (

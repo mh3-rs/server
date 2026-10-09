@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::config::Secret;
+use crate::game::profile::Profile;
 
 /// Support codes and PAT tickets are 11 characters, Capcom IDs 6 (D7).
 pub const SUPPORT_CODE_LEN: usize = 11;
@@ -146,7 +147,11 @@ pub async fn use_slot(
         if let Some(used) = used {
             let mut tx = db.begin().await?;
             if used.name != name {
-                // Another hunter on the slot: its social links go (the Capcom ID and its moderation records stay).
+                // Another hunter on the slot: its profile and social links go (the Capcom ID and its moderation
+                // records stay).
+                sqlx::query!("DELETE FROM hunter_profiles WHERE hunter_id = ?1", used.id)
+                    .execute(&mut *tx)
+                    .await?;
                 sqlx::query!(
                     "DELETE FROM friends WHERE hunter_a = ?1 OR hunter_b = ?1",
                     used.id
@@ -311,6 +316,24 @@ pub async fn undelivered_requests(
     .into_iter()
     .map(|r| (r.capcom_id, r.name, r.message))
     .collect())
+}
+
+/// Stores a hunter's profile: the raw block and its known fields.
+pub async fn save_profile(db: &SqlitePool, hunter: i64, profile: &Profile) -> Result<()> {
+    let raw = &profile.raw()[..];
+    sqlx::query!(
+        r#"INSERT INTO hunter_profiles (hunter_id, raw, hr, weapon_type) VALUES (?1, ?2, ?3, ?4)
+           ON CONFLICT (hunter_id) DO UPDATE
+           SET raw = excluded.raw, hr = excluded.hr, weapon_type = excluded.weapon_type,
+               updated_at = CURRENT_TIMESTAMP"#,
+        hunter,
+        raw,
+        profile.hr,
+        profile.weapon
+    )
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 pub async fn block(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<()> {
