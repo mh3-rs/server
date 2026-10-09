@@ -156,8 +156,10 @@ chat menu offers it; `NtcLayerTellLow` never. The console sessions to do: `recor
   - a gate's city list stays live: the players standing in the gate get a city's counts (`NtcLayerUserNum`, kind 4)
     when it's created or someone leaves it, and its whole record (`NtcLayerInfoSet`) when it's reserved, created or
     emptied, as MH3SP (test: `cities_are_shared`);
-  - lists show players in the order they reached the layer (MH3SP's), not the world server (`World::arrive`); the
-    city host handed on is the earliest to have entered the city;
+  - lists show players in the order they reached the layer, not the world server (`World::arrive`); the city host
+    handed on is the earliest to have entered the city. MH3SP's order is close but not the same: each layer has
+    fixed slots and a newcomer takes the first free one (`Players.add`), so after someone leaves, the next arrival
+    fills their place. No console shows a difference;
   - Change Gates' list (`LayerSiblingListHead/Data/Foot`): the world server's gates (from a city, its gate's
     cities), as MH3SP; our server closed the connection on it before. Picking one still fails (the jumps step);
   - the replay gate (`corpus::REACHED`) moves to M5; each scenario replays with the address it was recorded with

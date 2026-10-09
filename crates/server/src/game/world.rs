@@ -11,11 +11,11 @@ use super::profile::Profile;
 use crate::Shared;
 use crate::text::{Language, Text, text};
 
-/// The world servers (MH3SP's): name and type (1 open, 2 rookie, 3 expert, 4 recruiting).
 /// How often a console sends its own position in a layer, in milliseconds (the layer record's field `0x11`, read by
 /// the console on entering a layer: the decomp's `applyLoginRecord`). MH3SP's value; Capcom's is unknown (M5 D7).
 pub const POSITION_INTERVAL: u32 = 500;
 
+/// The world servers (MH3SP's): name and type (1 open, 2 rookie, 3 expert, 4 recruiting).
 pub const SERVERS: [(&str, u64); 12] = [
     ("Valor1", 1),
     ("Valor2", 1),
@@ -289,7 +289,8 @@ impl World {
         self.places.get_mut(capcom_id)
     }
 
-    /// The player reached another layer: lists show it after those already there (MH3SP's order).
+    /// The player reached another layer: lists show it after those already there. (MH3SP gives each layer fixed
+    /// slots and a newcomer the first free one: the same order until someone leaves.)
     pub fn arrive(&mut self, capcom_id: &str) {
         self.arrivals += 1;
         if let Some(place) = self.places.get_mut(capcom_id) {
