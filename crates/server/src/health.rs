@@ -8,6 +8,8 @@
 //!   A database outage doesn't make the server unhealthy: players already in town or on a quest
 //!   don't need it, a restart would drop them, and the pool reconnects by itself. It only means
 //!   "don't send new players here".
+//! - `GET /metrics`: what an operator watches, in JSON (`metrics.rs`); `GET /metrics/prometheus` the same for
+//!   Prometheus (the `prometheus` feature).
 //! - `POST /announce` (body: the text): an announcement to every logged-in player (`mh3sp announce`).
 //! - `POST /stop` (body: a delay like `5min`, or `cancel`): stopping with warning (`mh3sp stop`, `stop.rs`).
 //!
@@ -96,6 +98,15 @@ async fn answer(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> {
                     "database: not opened yet\n".to_owned(),
                 ),
             },
+            "/metrics" => (
+                "200 OK",
+                serde_json::to_string_pretty(&crate::metrics::snapshot(shared))? + "\n",
+            ),
+            #[cfg(feature = "prometheus")]
+            "/metrics/prometheus" => (
+                "200 OK",
+                crate::metrics::prometheus(&crate::metrics::snapshot(shared)),
+            ),
             "/health/ready" => match not_ready(shared).await {
                 None => ("200 OK", "ready\n".to_owned()),
                 Some(reasons) => ("503 Service Unavailable", reasons),
@@ -103,8 +114,12 @@ async fn answer(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> {
             _ => ("404 Not Found", "not found\n".to_owned()),
         },
     };
+    let kind = match path {
+        "/metrics" => "application/json",
+        _ => "text/plain",
+    };
     let response = format!(
-        "HTTP/1.0 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
+        "HTTP/1.0 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(response.as_bytes()).await?;

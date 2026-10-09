@@ -109,6 +109,11 @@ impl Players {
         }
     }
 
+    /// How many are logged in.
+    pub fn count(&self) -> usize {
+        self.0.len()
+    }
+
     /// Sends frames to every logged-in player: how many.
     pub fn broadcast(&self, frames: &[Frame]) -> usize {
         for mailbox in self.0.iter() {

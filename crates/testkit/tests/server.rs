@@ -54,6 +54,11 @@ fn config() -> (Config, tempfile::TempDir) {
 }
 
 async fn http_status(addr: SocketAddr, path: &str) -> String {
+    http_get(addr, path).await.0
+}
+
+/// A `GET` on the health port: status code and body.
+async fn http_get(addr: SocketAddr, path: &str) -> (String, String) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     s.write_all(format!("GET {path} HTTP/1.0\r\n\r\n").as_bytes())
@@ -61,7 +66,9 @@ async fn http_status(addr: SocketAddr, path: &str) -> String {
         .unwrap();
     let mut out = String::new();
     s.read_to_string(&mut out).await.unwrap();
-    out.split_whitespace().nth(1).unwrap_or_default().to_owned()
+    let status = out.split_whitespace().nth(1).unwrap_or_default().to_owned();
+    let body = out.split_once("\r\n\r\n").map_or("", |(_, b)| b).to_owned();
+    (status, body)
 }
 
 /// The next frame, which must be a `P`.
@@ -1053,6 +1060,30 @@ async fn stopping_warns_and_can_be_cancelled() {
     tokio::time::timeout(Duration::from_secs(3), running.stopping().cancelled())
         .await
         .unwrap();
+    running.stop().await;
+}
+
+/// Tier 3: `/metrics` counts players per world server, NAT negotiations and requests (never a Capcom ID).
+#[tokio::test]
+async fn metrics_count_what_happens() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let _first = enter_world(&running).await;
+    let _second = enter_world(&running).await;
+    negotiate(&running, 7, false).await;
+    let (status, body) = http_get(running.health, "/metrics").await;
+    assert_eq!(status, "200");
+    let m: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(m["players"], 2);
+    assert_eq!(m["world_servers"]["Valor1"], 2);
+    assert_eq!(m["natneg"]["pairs_direct"], 1);
+    assert!(m["requests"]["count"].as_u64().unwrap() > 10, "{body}");
+    assert!(!body.contains("capcom"), "{body}");
+    // The tests build the server without the `prometheus` feature: no such endpoint.
+    assert_eq!(
+        http_status(running.health, "/metrics/prometheus").await,
+        "404"
+    );
     running.stop().await;
 }
 

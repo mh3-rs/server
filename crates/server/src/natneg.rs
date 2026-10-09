@@ -19,6 +19,7 @@ use wire::natneg::{AVAILABLE, Body, Peer, Record, availability_request};
 use crate::Shared;
 use crate::config::Strategy;
 use crate::game::players::{Nat, Players};
+use crate::metrics::{Metrics, add};
 use crate::relay::Relays;
 
 /// A negotiation nobody has spoken in for this long is forgotten (the game gives up waiting for `CONNECT` after
@@ -52,6 +53,7 @@ pub struct Connector {
     pub strategy: Strategy,
     /// `None` without an IPv4 `EXTERNAL_ADDRESS`: direct only.
     pub relays: Option<Arc<Relays>>,
+    pub metrics: Arc<Metrics>,
 }
 
 pub async fn serve(
@@ -203,6 +205,15 @@ fn handle(
         } => {
             let success = result == 1;
             info!(cookie, success, "NatNeg report");
+            let m = &connector.metrics;
+            add(
+                if success {
+                    &m.reports_success
+                } else {
+                    &m.reports_failure
+                },
+                1,
+            );
             // A direct pair tells how both NATs fare: a failure sends both to the relay next time (which side
             // can't punch is unknown), the player's retry going through it (the game never retries by itself).
             if let Some(n) = negotiations.get(&cookie).filter(|n| !n.relayed) {
@@ -251,6 +262,15 @@ fn connect(
         false => None,
     };
     debug!(relayed = relay.is_some(), "NatNeg pair complete");
+    let m = &connector.metrics;
+    add(
+        if relay.is_some() {
+            &m.pairs_relayed
+        } else {
+            &m.pairs_direct
+        },
+        1,
+    );
     match relay {
         Some(relay) => ([relay, relay], true),
         None => ([consoles[1], consoles[0]], false),
@@ -299,8 +319,10 @@ mod tests {
             relays: Some(Relays::new(
                 Ipv4Addr::new(203, 0, 113, 1),
                 42000..=42099,
+                Default::default(),
                 shutdown.clone(),
             )),
+            metrics: Default::default(),
         };
         // Console i: game socket i:1000, NatNeg socket i:2000.
         let game = |i: usize| SocketAddrV4::new(ips[i], 1000);

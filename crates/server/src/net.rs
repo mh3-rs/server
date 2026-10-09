@@ -189,7 +189,12 @@ async fn serve_frames(
                         handler.leave(shared);
                         shut(&req)?
                     }
-                    _ => handler.handle(shared, &req).await?,
+                    _ => {
+                        let start = std::time::Instant::now();
+                        let out = handler.handle(shared, &req).await?;
+                        shared.metrics.request(start.elapsed());
+                        out
+                    }
                 }
             }
         };

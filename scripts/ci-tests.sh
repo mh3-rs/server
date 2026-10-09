@@ -31,5 +31,7 @@ fi
 
 rustup component add rustfmt clippy >/dev/null 2>&1
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
+# The `prometheus` feature's own code (the server's unit tests with it).
+cargo test -p server --lib --features prometheus --locked

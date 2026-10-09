@@ -16,6 +16,8 @@ use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::metrics::{Metrics, add};
+
 /// A pair silent for this long is closed and its port freed (the game itself drops a peer after 20 s).
 const IDLE: Duration = Duration::from_secs(5 * 60);
 /// Per console and pair: ~100 × the measured game traffic (~0.23 kB/s).
@@ -27,6 +29,7 @@ pub struct Relays {
     /// The address consoles reach the relay at.
     external: Ipv4Addr,
     free: Mutex<Free>,
+    metrics: Arc<Metrics>,
     shutdown: CancellationToken,
 }
 
@@ -40,6 +43,7 @@ impl Relays {
     pub fn new(
         external: Ipv4Addr,
         ports: RangeInclusive<u16>,
+        metrics: Arc<Metrics>,
         shutdown: CancellationToken,
     ) -> Arc<Self> {
         Arc::new(Relays {
@@ -48,6 +52,7 @@ impl Relays {
                 ports: ports.rev().collect(),
                 pairs: HashMap::new(),
             }),
+            metrics,
             shutdown,
         })
     }
@@ -90,9 +95,14 @@ impl Relays {
         socket.set_nonblocking(true).ok()?;
         let socket = UdpSocket::from_std(socket).ok()?;
         info!(port, "relay opened");
+        add(&self.metrics.relay_pairs_open, 1);
         let relays = self.clone();
         tokio::spawn(async move {
-            forward(socket, consoles, &relays.shutdown).await;
+            forward(socket, consoles, &relays.metrics, &relays.shutdown).await;
+            relays
+                .metrics
+                .relay_pairs_open
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             let mut free = relays.free.lock().unwrap();
             free.ports.push(port);
             for ip in ips {
@@ -110,7 +120,12 @@ impl Relays {
 }
 
 /// Forwards between the two consoles until the pair is idle.
-async fn forward(socket: UdpSocket, consoles: [SocketAddrV4; 2], shutdown: &CancellationToken) {
+async fn forward(
+    socket: UdpSocket,
+    consoles: [SocketAddrV4; 2],
+    metrics: &Metrics,
+    shutdown: &CancellationToken,
+) {
     let mut seen: [Option<SocketAddr>; 2] = [None; 2];
     let mut budget = [Budget::default(), Budget::default()];
     let mut buf = [0; 1500];
@@ -132,10 +147,11 @@ async fn forward(socket: UdpSocket, consoles: [SocketAddrV4; 2], shutdown: &Canc
         if !budget[side].spend(n) {
             continue;
         }
-        if let Some(to) = seen[1 - side]
-            && let Err(e) = socket.send_to(&buf[..n], to).await
-        {
-            debug!(error = %e, "relay send failed");
+        if let Some(to) = seen[1 - side] {
+            match socket.send_to(&buf[..n], to).await {
+                Ok(_) => add(&metrics.relay_bytes, n as u64),
+                Err(e) => debug!(error = %e, "relay send failed"),
+            }
         }
     }
 }

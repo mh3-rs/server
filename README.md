@@ -35,7 +35,7 @@ on):
 | 27900 | UDP | the game's availability check |
 | 27901 | UDP | NAT negotiation |
 | 40000–40999 | UDP | the relay (`RELAY_PORTS`) |
-| 8280 | TCP | health (`/health/live`, `/health/ready`) and operator commands (`announce`, `stop`): keep it internal |
+| 8280 | TCP | health (`/health/live`, `/health/ready`), metrics and operator commands (`announce`, `stop`): keep it internal |
 
 ### DNS
 
@@ -56,6 +56,13 @@ it could use them.
   `mh3sp stop cancel` changes your mind.
 - `docker stop` (or Ctrl-C) gives players a 5-second warning; a second one stops at once. For a planned restart, use
   `mh3sp stop` first.
+
+### Metrics
+
+`GET /metrics` on the health port: players (per world server), cities, quests, NAT negotiations (direct, relayed,
+reports), the relay (pairs open, bytes), requests (count, latency buckets), as JSON. Counts only, never a player's
+identity. The `-prometheus` images also serve `GET /metrics/prometheus`, the same in Prometheus' format (built with
+`--build-arg FEATURES=prometheus`, or `cargo build --features prometheus`).
 
 ### Docker
 

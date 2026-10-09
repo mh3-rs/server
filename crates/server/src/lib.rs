@@ -18,6 +18,7 @@ mod content;
 mod database;
 mod game;
 pub mod health;
+mod metrics;
 mod natneg;
 mod net;
 mod relay;
@@ -66,6 +67,7 @@ struct Shared {
     world: std::sync::Mutex<game::world::World>,
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
+    metrics: Arc<metrics::Metrics>,
     /// A stop under way (`stop.rs`): cancelling it lifts it.
     stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
@@ -181,6 +183,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         world: Default::default(),
         started: SystemTime::now(),
         stop: Default::default(),
+        metrics: Default::default(),
         shutdown: shutdown.clone(),
     });
     if config.maintenance.is_none() && !shared.configured() {
@@ -226,6 +229,7 @@ pub async fn start(config: &Config) -> Result<Running> {
             Some(Ok(external)) => Some(Relays::new(
                 external,
                 config.relay_ports.clone(),
+                shared.metrics.clone(),
                 shutdown.clone(),
             )),
             _ => {
@@ -240,6 +244,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         let connector = natneg::Connector {
             strategy: config.strategy,
             relays,
+            metrics: shared.metrics.clone(),
         };
         tasks.spawn(natneg::serve(
             socket,

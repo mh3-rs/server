@@ -4,7 +4,9 @@
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p server
+# FEATURES=prometheus builds the `…-prometheus` image (`/metrics/prometheus`).
+ARG FEATURES=""
+RUN cargo build --release --locked -p server --features "$FEATURES"
 
 FROM debian:bookworm-slim
 RUN apt-get update \

@@ -233,6 +233,15 @@ impl CityRefusal {
 }
 
 impl World {
+    /// Players per world server (1-based), cities, quests (metrics).
+    pub fn census(&self) -> (HashMap<u32, usize>, usize, usize) {
+        let mut by_server = HashMap::new();
+        for place in self.places.values() {
+            *by_server.entry(place.server).or_default() += 1;
+        }
+        (by_server, self.cities.len(), self.circles.len())
+    }
+
     /// The player enters world server `server` (its top level).
     pub fn enter(
         &mut self,

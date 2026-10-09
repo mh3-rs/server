@@ -83,6 +83,7 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
       from "[MH3SP]", 30-character lines (tests: the cutting; two consoles at different places). To see on a console.
 - [x] Stopping (D4): `stop.rs`, `POST /stop`, `mh3sp stop <delay|cancel>`; nothing refused meanwhile; a signal warns
       5 s, a second stops now (test: the whole sequence).
-- [ ] Metrics (D5).
+- [x] Metrics (D5): `metrics.rs`; `GET /metrics` (JSON), `GET /metrics/prometheus` (feature `prometheus`, written by
+      hand: no dependency); the Dockerfile's `FEATURES` build argument for the `-prometheus` image.
 - [ ] Lab: the town interval (D7); a quest ending without the server (M3 D4); the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).
