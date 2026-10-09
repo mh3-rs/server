@@ -144,5 +144,5 @@ Settled with the user on 2026-10-09.
 - [ ] Lab: a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold like P2P does).
 - [ ] Lab, another day: a mixed city (one console relayed, the others direct: decided per pair, unit-tested), with a
       Dolphin on another machine (the lab's consoles share one IP, so one flag relays them all).
-- [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range), the configuration
-      (`NATNEG_STRATEGY`, `RELAY_PORTS`; natneg2/natneg3's DNS for the symmetric-NAT check).
+- [x] Deployment: `README.md` (the settings an operator sets, the ports to open, natneg1/2/3's DNS, Docker with
+      host networking: NAT negotiation needs the consoles' real addresses); the Dockerfile exposes the UDP ports.
