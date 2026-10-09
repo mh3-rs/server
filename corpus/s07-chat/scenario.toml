@@ -1,0 +1,14 @@
+description = "City chat and a private message: dev2 creates a city, dev1 joins; dev2 says hello in the city chat, dev1 answers hi, then dev1 sends dev2 a tell (psst). MH3SP relays chat with the sender's Capcom ID and name, and its own colour (white) instead of the console's."
+steps = [
+  "dev2: Online, slot 1, Valor1, gate 1, create a city",
+  "dev1: Online, slot 1, Valor1, gate 1, join dev2's city",
+  "dev2: city chat 'hello'",
+  "dev1: city chat 'hi'",
+  "dev1: tell to dev2 'psst'",
+  "both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
