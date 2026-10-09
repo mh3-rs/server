@@ -1,7 +1,6 @@
 # M3 — Multiplayer
 
-**Status: decisions mostly settled (2026-10-09); open until tested on consoles: D4 (disconnects), D7 (kicks and
-leaders), D9's password behaviour.**
+**Status: decisions settled (2026-10-09) but D7 (kicks: none found in the game; Local Info to fix first).**
 
 Players see each other: in a gate and a city (arrivals, departures, positions, the game data consoles exchange
 through the server), in a quest party (join, ready, depart, leave, leader changes), and socially (chat, tells,
@@ -66,12 +65,20 @@ player kicked for not being ready, a party broken by its leader before departure
 - **D3 The hunter profile block. Settled, done:** first planned in stages (raw block plus the known fields, fields
   moving out of raw as they got mapped); then the game's code mapped every byte, so the block is parsed whole,
   validated, stored as fields (`hunter_profiles`, `hunter_equipment`) and rebuilt from them; no raw column.
-- **D4 Disconnects. Open, a lab test first.** The Rust server sees a closed socket at once (MH3SP ~30 s later, at
-  its next line check). A grace period (keeping a vanished player's place for a few seconds) only helps if the game
-  can come back: in the lab a broken connection so far ends on an error screen and back to the title, a new login;
-  but hunts are P2P, and telling the others "left" mid-quest might drop a player whose server connection only
-  hiccuped. The protocol has an `NtcRecconect` (sic) message: the game may support some reconnection. Test: cut one
-  Dolphin's network for 5, 15, 30 s, in town and mid-quest, watch both consoles; then decide.
+- **D4 Disconnects. Settled (lab, 2026-10-09): no grace period.** A closed connection is a departure, as before.
+  Tested with `lab/cut.sh` (pf blocks one Dolphin's sockets for N seconds), two consoles:
+  - The **server link** survives cuts of 5, 15 and 20 s (TCP resends what was held back; nobody notices). The game
+    gives up on its own after 20–30 s without the server ("network instability", back to the title, a new login);
+    the server never dropped anyone first (its line check drops only after 30 s unanswered, then 30 more).
+  - The **P2P link** between consoles holds 15 s, not 20: mid-quest, both see "dev exited the game" and hunt on
+    alone; the cut console then reports `0x8003003f` (11674), leaves the party and returns to town, where joining
+    the city host's P2P session (the host still in its copy of the quest) fails again (11674, back to the gate).
+    The consoles sort it out themselves; the server gets the usual leave messages.
+  - So a grace period would never help: the server never drops a console the game itself keeps, and the game
+    doesn't reconnect once it gives up. For M4: our NatNeg relay, if it carries hunt traffic, should tolerate at
+    least the same ~15 s.
+  - Seen in passing: with the server gone mid-quest, a hunting console kept hunting (the other, just back from a
+    cut, got 11674). What a console does when its quest ends without a server is still to check.
 - **D5 Locking. Settled:** one lock for the whole `World` (relays look up the layer's players under it and push to
   their mailboxes without waiting); written down where it's declared (`Shared::world`). Revisited the day the
   relay-latency test or production shows contention: per world server first (nothing crosses that boundary but
@@ -124,7 +131,7 @@ player kicked for not being ready, a party broken by its leader before departure
       `hunter_profiles` and `hunter_equipment` store them. A profile notice past the block is refused (the receiving
       console copies it at its offset unchecked). Every recorded profile is accepted and rebuilt byte for byte (all
       recordings use the default hunter: appearance and equipment variety untested).
-- [ ] Disconnect lab test and grace period decision (D4).
+- [x] Disconnect lab test and grace period decision (D4): no grace period.
 - [x] Concurrency model written down (who owns what; no socket written but by its task) (D5): `lib.rs`.
 - [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,
       `s06`, `s07`, `s08`, `s09`). The harness accepts a console's own answer before frames recorded ahead of it (the
@@ -162,4 +169,4 @@ player kicked for not being ready, a party broken by its leader before departure
         the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.
   - [ ] Local Info's city population still says 0/4, whatever the population, the players on a quest (field
         `0x0b`) or the layer data sent; where the console reads it from is open (the decomp: Local Info's screen).
-  - [ ] The disconnect test (D4).
+  - [x] The disconnect test (D4): see D4, settled.
