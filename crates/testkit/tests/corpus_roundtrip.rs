@@ -187,6 +187,12 @@ fn typed_packets_reencode() {
             "ReqLayerMediationUnlock",
             "AnsLayerMediationUnlock",
             "NtcLayerMediationUnlock",
+            "ReqUserSearchHead",
+            "AnsUserSearchHead",
+            "ReqUserSearchData",
+            "AnsUserSearchData",
+            "ReqUserSearchFoot",
+            "AnsUserSearchFoot",
         ];
         let missing: Vec<_> = TYPED
             .iter()

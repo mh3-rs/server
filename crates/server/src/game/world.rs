@@ -409,6 +409,13 @@ impl World {
         }
     }
 
+    /// Every player, on every world server, the earliest arrived first.
+    pub fn everyone(&self) -> Vec<(&str, &Place)> {
+        let mut list: Vec<_> = self.places.iter().map(|(id, p)| (id.as_str(), p)).collect();
+        list.sort_by_key(|(_, p)| p.arrival);
+        list
+    }
+
     pub fn city(&self, id: CityId) -> Option<&City> {
         self.cities.get(&id)
     }

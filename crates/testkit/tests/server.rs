@@ -1218,6 +1218,63 @@ async fn one_player_per_seat() {
     running.stop().await;
 }
 
+/// Tier 3: Player Search (M5): part of a name in any case, or part of a Capcom ID, on every world server; page by page.
+#[tokio::test]
+async fn player_search() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let mut searcher = enter_world(&running).await;
+    let mut ids = Vec::new();
+    let mut others = Vec::new();
+    for _ in 0..2 {
+        let (code, id) = new_hunter(lmp).await;
+        others.push(play(&running, &code).await);
+        ids.push(id);
+    }
+    let head = |capcom_id: &str, name: &'static [u8]| ReqUserSearchHead {
+        capcom_id: capcom_id.to_owned().into(),
+        name: Bytes::from_static(name),
+        search: Default::default(),
+        first: 1,
+        count: 100,
+        fields: vec![1, 2, 3, 4],
+    };
+    // Everyone is named "Aiko": part of it, another case.
+    send(&mut searcher, 70, head("", b"aIK")).await;
+    assert_eq!(expect::<AnsUserSearchHead>(&mut searcher).await.count, 3);
+    send(&mut searcher, 71, ReqUserSearchData { first: 1, count: 2 }).await;
+    assert_eq!(
+        expect::<AnsUserSearchData>(&mut searcher).await.users.len(),
+        2
+    );
+    send(&mut searcher, 72, ReqUserSearchData { first: 3, count: 2 }).await;
+    assert_eq!(
+        expect::<AnsUserSearchData>(&mut searcher).await.users.len(),
+        1
+    );
+    // Part of a Capcom ID.
+    send(&mut searcher, 73, head(&ids[0][1..], b"")).await;
+    assert_eq!(expect::<AnsUserSearchHead>(&mut searcher).await.count, 1);
+    send(
+        &mut searcher,
+        74,
+        ReqUserSearchData {
+            first: 1,
+            count: 10,
+        },
+    )
+    .await;
+    let found = expect::<AnsUserSearchData>(&mut searcher).await.users;
+    assert_eq!(string(found[0].0.get(0x01)), ids[0]);
+    // Neither: nobody.
+    send(&mut searcher, 75, head("", b"")).await;
+    assert_eq!(expect::<AnsUserSearchHead>(&mut searcher).await.count, 0);
+    send(&mut searcher, 76, ReqUserSearchFoot {}).await;
+    expect::<AnsUserSearchFoot>(&mut searcher).await;
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

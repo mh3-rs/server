@@ -216,6 +216,55 @@ impl Fmp {
                 ReqLayerUserSearchFoot::decode(p)?;
                 reply(seq, &AnsLayerUserSearchFoot {})
             }
+            ReqUserSearchHead::ID => {
+                // Player Search (Online menu): everyone on every world server, by part of their Capcom ID or name
+                // (any case), as MH3SP; nothing without either. Kept for the data requests.
+                let r = ReqUserSearchHead::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let contains = |haystack: &[u8], needle: &[u8]| {
+                    haystack
+                        .windows(needle.len())
+                        .any(|w| w.eq_ignore_ascii_case(needle))
+                };
+                self.search = match r.capcom_id.is_empty() && r.name.is_empty() {
+                    true => Vec::new(),
+                    false => world
+                        .everyone()
+                        .into_iter()
+                        .filter(|(id, p)| {
+                            (r.capcom_id.is_empty() || contains(id.as_bytes(), &r.capcom_id))
+                                && (r.name.is_empty() || contains(&p.name, &r.name))
+                        })
+                        .skip(r.first.saturating_sub(1) as usize)
+                        .take(r.count as usize)
+                        .map(|(id, _)| id.to_owned())
+                        .collect(),
+                };
+                reply(
+                    seq,
+                    &AnsUserSearchHead {
+                        first: 0,
+                        count: self.search.len() as u32,
+                    },
+                )
+            }
+            ReqUserSearchData::ID => {
+                // The rows asked for (the console asks 10 at a time).
+                let r = ReqUserSearchData::decode(p)?;
+                let page: Vec<String> = self
+                    .search
+                    .iter()
+                    .skip(r.first.saturating_sub(1) as usize)
+                    .take(r.count as usize)
+                    .cloned()
+                    .collect();
+                let users = found_users(shared, &page);
+                reply(seq, &AnsUserSearchData { first: 0, users })
+            }
+            ReqUserSearchFoot::ID => {
+                ReqUserSearchFoot::decode(p)?;
+                reply(seq, &AnsUserSearchFoot {})
+            }
             ReqUserSearchInfo::ID => {
                 // A player's card, if they're in the world.
                 let r = ReqUserSearchInfo::decode(p)?;

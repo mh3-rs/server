@@ -472,6 +472,12 @@ packets! {
     AnsLayerUserSearchData = 0x64680200 { first: u32, users: Vec<(PatData, OptionalFields)> }
     ReqLayerUserSearchFoot = 0x64690100 {}
     AnsLayerUserSearchFoot = 0x64690200 {}
+    ReqUserSearchHead = 0x66330100 { capcom_id: Bytes, name: Bytes, search: DetailedOptionalFields, first: u32, count: u32, fields: Vec<u8> }
+    AnsUserSearchHead = 0x66330200 { first: u32, count: u32 }
+    ReqUserSearchData = 0x66340100 { first: u32, count: u32 }
+    AnsUserSearchData = 0x66340200 { first: u32, users: Vec<(PatData, OptionalFields)> }
+    ReqUserSearchFoot = 0x66350100 {}
+    AnsUserSearchFoot = 0x66350200 {}
     /// A player's card: profile block, where they are, the ids relayed data is attributed with.
     ReqUserSearchInfo = 0x66360100 { capcom_id: Bytes, info: PatData }
     AnsUserSearchInfo = 0x66360200 { info: PatData, extra: OptionalFields }

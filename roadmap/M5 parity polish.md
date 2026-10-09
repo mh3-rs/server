@@ -118,7 +118,10 @@ console sessions to do: `recordings.md`.
       seat refused (an alert), the city told (`NtcLayerMediationLock/Unlock`), seats freed when their holder leaves;
       `LayerMediationList` lists the real ones (MH3SP's 14 "Test" placeholders: a divergence entry). Test:
       `one_player_per_seat`. To confirm on consoles (`recordings.md`: s13 and the Rust check).
-- [ ] Player Search (`UserSearchHead/Data/Foot`).
+- [x] Player Search (`UserSearchHead/Data/Foot`): every world server, part of a Capcom ID or of a name (any case),
+      as MH3SP; nothing without either; the pages the console asks for (MH3SP sent everything each time). Rows as the
+      layer search's (`found_users`). Test: `player_search`. To confirm on consoles (`recordings.md`: s12 and the
+      Rust check).
 - [ ] Recordings (D1) of the rest, each replaying whole (`recordings.md`).
 - [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
       `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.
