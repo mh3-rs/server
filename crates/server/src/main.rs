@@ -1,6 +1,7 @@
 //! `mh3sp`              run the server
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
 //! `mh3sp announce "<text>"`  an announcement to every player of the running server
+//! `mh3sp stop <delay|cancel>`  stop the running server with warning (`5min`, `1h30m`, `30s`), or not
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
@@ -25,9 +26,16 @@ async fn main() -> Result<()> {
             );
             return Ok(());
         }
+        ["stop", delay] => {
+            println!(
+                "{}",
+                server::health::stop(server::config::health()?, delay)?
+            );
+            return Ok(());
+        }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | maintenance \"<message>\"]"
+            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | maintenance \"<message>\"]"
         ),
     };
 
@@ -41,11 +49,26 @@ async fn main() -> Result<()> {
     let mut config = Config::from_env()?;
     config.maintenance = maintenance;
     let running = server::start(&config).await?;
-    shutdown_signal().await;
+    // A signal (`docker stop`, which waits 10 s) stops with a short warning; a second one, or a `mh3sp stop` coming to
+    // its end, stops now.
+    let stopping = running.stopping();
+    tokio::select! {
+        _ = shutdown_signal() => {
+            running.stop_in(SIGNAL_WARNING);
+            tokio::select! {
+                _ = shutdown_signal() => {}
+                _ = stopping.cancelled() => {}
+            }
+        }
+        _ = stopping.cancelled() => {}
+    }
     tracing::info!("shutting down");
     running.stop().await;
     Ok(())
 }
+
+/// How long a signal's stop warns players (under `docker stop`'s 10 s).
+const SIGNAL_WARNING: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Ctrl-C, or SIGTERM (what `docker stop` sends).
 async fn shutdown_signal() {

@@ -1012,6 +1012,64 @@ async fn announcements_reach_everyone() {
     running.stop().await;
 }
 
+/// Tier 3: `mh3sp stop` warns players, refuses new logins and new quests, reminds them, can be cancelled, and stops
+/// the server at its end.
+#[tokio::test]
+async fn stopping_warns_and_can_be_cancelled() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let health = running.health;
+    let stop = |delay: &'static str| {
+        tokio::task::spawn_blocking(move || server::health::stop(health, delay))
+    };
+    let mut c = enter_world(&running).await;
+    let said = |chat: NtcLayerChat| String::from_utf8(chat.text.to_vec()).unwrap();
+
+    assert_eq!(stop("6s").await.unwrap().unwrap(), "stopping in 6 seconds");
+    assert_eq!(
+        said(expect::<NtcLayerChat>(&mut c).await),
+        "Server stopping in 6 seconds."
+    );
+    // Maintenance: no new login, no new quest.
+    assert_eq!(
+        opn_login(running.opn, b"RMHE08", NATNEG_HOSTNAMES).await.0,
+        2
+    );
+    let create = ReqCircleCreate {
+        info: PatData::new(),
+        extra: Default::default(),
+    };
+    send(&mut c, 30, create).await;
+    assert!(
+        expect_alert(&mut c, AnsCircleCreate::ID)
+            .await
+            .contains("about to stop")
+    );
+    // The 5 s reminder, then cancelled: logins again.
+    let reminder = tokio::time::timeout(Duration::from_secs(3), expect::<NtcLayerChat>(&mut c))
+        .await
+        .unwrap();
+    assert_eq!(said(reminder), "Server stopping in 5 seconds.");
+    assert_eq!(stop("cancel").await.unwrap().unwrap(), "stop cancelled");
+    assert_eq!(
+        said(expect::<NtcLayerChat>(&mut c).await),
+        "Server stop cancelled."
+    );
+    assert_eq!(
+        opn_login(running.opn, b"RMHE08", NATNEG_HOSTNAMES).await.0,
+        5
+    );
+    assert!(stop("cancel").await.unwrap().is_err(), "nothing to cancel");
+    assert!(stop("soon").await.unwrap().is_err(), "not a delay");
+
+    // Carried out: the server stops.
+    stop("1s").await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(3), running.stopping().cancelled())
+        .await
+        .unwrap();
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

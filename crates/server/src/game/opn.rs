@@ -141,9 +141,7 @@ impl Opn {
             (Stage::Refused, ReqMaintenance::ID) => {
                 ReqMaintenance::decode(&req.payload)?;
                 let text = match self.refusal {
-                    Some(Refusal::Maintenance) => {
-                        shared.maintenance().unwrap_or_default().to_owned().into()
-                    }
+                    Some(Refusal::Maintenance) => shared.maintenance().unwrap_or_default().into(),
                     Some(reason) => text(reason.text(), self.language),
                     None => unreachable!("refused without a reason"),
                 };

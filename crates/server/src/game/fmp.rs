@@ -1336,6 +1336,10 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
     match req.id {
         ReqCircleCreate::ID => {
             let r = ReqCircleCreate::decode(p)?;
+            // Stopping (`mh3sp stop`): no new quests.
+            if shared.maintenance().is_some() {
+                return alert(AnsCircleCreate::ID, seq, Text::Stopping);
+            }
             let string = |field| match r.info.get(field) {
                 Some(Item::String(s)) => Some(s.clone()),
                 _ => None,

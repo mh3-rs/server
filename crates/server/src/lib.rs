@@ -21,6 +21,7 @@ pub mod health;
 mod natneg;
 mod net;
 mod relay;
+mod stop;
 mod text;
 mod tls;
 
@@ -65,6 +66,12 @@ struct Shared {
     world: std::sync::Mutex<game::world::World>,
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
+    /// Maintenance: from the start (`mh3sp maintenance`), or while stopping (`mh3sp stop`): its message.
+    maintenance: std::sync::RwLock<Option<String>>,
+    /// A stop under way (`stop.rs`): cancelling it lifts it.
+    stop: std::sync::Mutex<Option<CancellationToken>>,
+    /// Stops the whole server.
+    shutdown: CancellationToken,
 }
 
 impl Shared {
@@ -77,8 +84,12 @@ impl Shared {
         }
     }
 
-    fn maintenance(&self) -> Option<&str> {
-        self.config.maintenance.as_deref()
+    fn maintenance(&self) -> Option<String> {
+        self.maintenance.read().unwrap().clone()
+    }
+
+    fn set_maintenance(&self, message: Option<String>) {
+        *self.maintenance.write().unwrap() = message;
     }
 
     fn configured(&self) -> bool {
@@ -98,9 +109,20 @@ pub struct Running {
     pub natneg: Option<SocketAddr>,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
+    shared: Arc<Shared>,
 }
 
 impl Running {
+    /// Stops in `delay`, warning players (`mh3sp stop`, SIGTERM).
+    pub fn stop_in(&self, delay: Duration) {
+        stop::begin(&self.shared, delay);
+    }
+
+    /// Cancelled when the server stops (a `mh3sp stop` that came to its end).
+    pub fn stopping(&self) -> CancellationToken {
+        self.shutdown.clone()
+    }
+
     /// Stops accepting, closes connections, and waits for every task.
     pub async fn stop(mut self) {
         self.shutdown.cancel();
@@ -164,6 +186,9 @@ pub async fn start(config: &Config) -> Result<Running> {
         players: Players::default(),
         world: Default::default(),
         started: SystemTime::now(),
+        maintenance: std::sync::RwLock::new(config.maintenance.clone()),
+        stop: Default::default(),
+        shutdown: shutdown.clone(),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!(
@@ -236,7 +261,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         .with_context(|| format!("bind health on {}", config.health))?;
     net::announce("health", &listener)?;
     let health = listener.local_addr()?;
-    tasks.spawn(health::serve(listener, shared, shutdown.clone()));
+    tasks.spawn(health::serve(listener, shared.clone(), shutdown.clone()));
 
     info!("server started");
     Ok(Running {
@@ -248,5 +273,6 @@ pub async fn start(config: &Config) -> Result<Running> {
         natneg,
         shutdown,
         tasks,
+        shared,
     })
 }
