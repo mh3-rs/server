@@ -86,9 +86,10 @@ pub const GATES: u16 = 40;
 pub const GATE_CAPACITY: u32 = 100;
 pub const CITIES: u16 = 40;
 pub const CITY_CAPACITY: u32 = 4;
-/// Quests (circles) per city, and players per quest at most.
-pub const CIRCLES: u32 = 4;
+/// Players per quest at most. Quests per city: a player is in one quest at most and a quest ends with its leader,
+/// so a city never has more quests than players.
 pub const CIRCLE_CAPACITY: u32 = 4;
+pub const CIRCLES: u32 = CITY_CAPACITY;
 
 /// Where the players are, and the cities that exist (D3 of M2). Resources exist on demand: a world server or a
 /// gate is just where players are; a city exists from its reservation until its last player leaves. Populations
@@ -361,9 +362,13 @@ impl World {
         list.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
-    /// Creates a circle in the player's city, in its first free slot, and puts the player in it as leader.
+    /// Creates a circle in the player's city, in its first free slot, and puts the player in it as leader. `None` for
+    /// a player outside a city or already in a quest (one quest at a time).
     pub fn create_circle(&mut self, capcom_id: &str, new: NewCircle) -> Option<CircleId> {
         let city = self.city_of(capcom_id)?;
+        if self.places.get(capcom_id)?.circle.is_some() {
+            return None;
+        }
         let index = (1..=CIRCLES).find(|i| !self.circles.contains_key(&(city, *i)))?;
         let mut slots = vec![None; new.capacity.clamp(1, CIRCLE_CAPACITY) as usize];
         slots[0] = Some(capcom_id.to_owned());
@@ -658,6 +663,26 @@ mod tests {
         assert_eq!(world.cities[&id].leader, "BBBBBB");
         world.leave_city("BBBBBB");
         assert!(world.cities.is_empty());
+    }
+
+    #[test]
+    fn one_quest_per_player() {
+        let mut world = world_with(&["AAAAAA"]);
+        world.reserve_city((1, 1, 1), "AAAAAA").unwrap();
+        world
+            .create_city((1, 1, 1), "AAAAAA", OptionalFields::default())
+            .unwrap();
+        let new = || NewCircle {
+            password: None,
+            remarks: None,
+            unk_0e: 0,
+            capacity: 4,
+            quest_id: 1,
+        };
+        assert!(world.create_circle("AAAAAA", new()).is_some());
+        assert!(world.create_circle("AAAAAA", new()).is_none());
+        world.leave_circle("AAAAAA");
+        assert!(world.create_circle("AAAAAA", new()).is_some());
     }
 
     #[test]

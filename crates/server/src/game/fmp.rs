@@ -406,6 +406,9 @@ impl Fmp {
                 };
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
+                if world.circle_of(me).is_some() {
+                    return Err(Fault::Client(anyhow!("a second quest while in one")));
+                }
                 let Some(id) = world.create_circle(me, new) else {
                     return alert(AnsCircleCreate::ID, seq, Text::NoQuestSlot);
                 };
