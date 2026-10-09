@@ -143,8 +143,10 @@ player kicked for not being ready, a party broken by its leader before departure
 - Lab checks, 2026-10-09 (Rust server, two consoles):
   - [x] Password quest with the `****` placeholder (D9): a wrong password refused ("Wrong Password!"), the right
         one joins. The console never needs the real password.
-  - [x] Kicks (D7): none anywhere in the menus, in a city or a quest party, even with the real population sent.
-        The only removal is at departure (players not ready stay behind).
+  - [ ] Kicks (D7): none found in the menus, in a city or a quest party; nothing about one online either. Still
+        open: Local Info never listed the other player (its population says 0/4), so a kick there can't be ruled
+        out until it does. Maybe not a player feature at all (then: the website, see future steps). The only
+        removal seen is at departure (players not ready stay behind).
   - [x] Friend requests across a restart (D2): the game's inbox doesn't outlive the game. Pending requests are now
         delivered at the first world server of each game session, until answered (the `delivered` flag is gone).
   - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
