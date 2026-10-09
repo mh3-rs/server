@@ -1502,10 +1502,12 @@ async fn natneg_received(socket: &tokio::net::UdpSocket) -> Vec<wire::natneg::Re
 }
 
 /// Two fake consoles (a game socket and a NatNeg socket each) negotiate a pair through the server: their sockets,
-/// and the address each was told its peer is at (`CONNECT`).
+/// and the address each was told its peer is at (`CONNECT`). With `symmetric`, the first console's natneg2 `INIT`
+/// comes from another port (a NAT mapping each destination apart).
 async fn negotiate(
     running: &server::Running,
     cookie: u32,
+    symmetric: bool,
 ) -> (
     Vec<(tokio::net::UdpSocket, tokio::net::UdpSocket)>,
     Vec<SocketAddr>,
@@ -1530,13 +1532,20 @@ async fn negotiate(
             tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap(),
         ));
     }
+    let other_mapping = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     for (index, (game, nn)) in consoles.iter().enumerate() {
-        game.send_to(&init(0, index as u8).encode(), natneg)
-            .await
-            .unwrap();
-        nn.send_to(&init(1, index as u8).encode(), natneg)
-            .await
-            .unwrap();
+        let index = index as u8;
+        let to_natneg2 = if symmetric && index == 0 {
+            &other_mapping
+        } else {
+            nn
+        };
+        for (socket, kind) in [(game, 0), (nn, 1), (to_natneg2, 2), (nn, 3)] {
+            socket
+                .send_to(&init(kind, index).encode(), natneg)
+                .await
+                .unwrap();
+        }
     }
     let mut told = Vec::new();
     for (index, (game, nn)) in consoles.iter().enumerate() {
@@ -1546,7 +1555,8 @@ async fn negotiate(
             .iter()
             .filter(|r| matches!(r.body, Body::InitAck(_)))
             .count();
-        assert_eq!(acks, 2, "console {index}: {got:?}");
+        let expected = if symmetric && index == 0 { 3 } else { 4 };
+        assert_eq!(acks, expected, "console {index}: {got:?}");
         let connects: Vec<SocketAddr> = got
             .iter()
             .filter_map(|r| match &r.body {
@@ -1593,7 +1603,7 @@ async fn natneg_pairs_two_consoles() {
     assert!(natneg_received(&stranger).await.is_empty());
 
     let _logged_in = enter_world(&running).await;
-    let (consoles, told) = negotiate(&running, 0x5a8f_90df).await;
+    let (consoles, told) = negotiate(&running, 0x5a8f_90df, false).await;
     for index in 0..2 {
         assert_eq!(
             told[index],
@@ -1633,7 +1643,7 @@ async fn the_relay_forwards_a_pair() {
     config.strategy = server::config::Strategy::Relay;
     let running = server::start(&config).await.unwrap();
     let _logged_in = enter_world(&running).await;
-    let (consoles, told) = negotiate(&running, 0x1234_5678).await;
+    let (consoles, told) = negotiate(&running, 0x1234_5678, false).await;
     assert_eq!(told[0], told[1]);
     assert_eq!(
         told[0].ip().to_string(),
@@ -1667,6 +1677,56 @@ async fn the_relay_forwards_a_pair() {
                 .is_err()
         );
     }
+    running.stop().await;
+}
+
+/// Tier 5, `hybrid`: a pair connects directly; after its failure report, the next pair of those consoles (the
+/// player retrying) goes through the relay. A symmetric NAT is relayed at once.
+#[tokio::test]
+async fn hybrid_relays_after_a_failure() {
+    use wire::natneg::{Body, Port, Record};
+
+    let hybrid = || {
+        let (mut config, db) = config();
+        config.strategy = server::config::Strategy::Hybrid;
+        (config, db)
+    };
+    let relayed = |told: &[SocketAddr]| told[0] == told[1];
+
+    let (config, _db) = hybrid();
+    let running = server::start(&config).await.unwrap();
+    let natneg = SocketAddr::from(([127, 0, 0, 1], running.natneg.unwrap().port()));
+    let _logged_in = enter_world(&running).await;
+    let (consoles, told) = negotiate(&running, 1, false).await;
+    assert!(!relayed(&told), "first try: direct");
+    let failure = Record {
+        cookie: 1,
+        body: Body::Report {
+            port: Port {
+                kind: 0x80,
+                client_index: 0,
+            },
+            result: 0,
+            nat_type: 6,
+            mapping: 0,
+            game: Bytes::from_static(b"mh3uswii"),
+        },
+    };
+    consoles[0]
+        .1
+        .send_to(&failure.encode(), natneg)
+        .await
+        .unwrap();
+    natneg_received(&consoles[0].1).await;
+    let (_, told) = negotiate(&running, 2, false).await;
+    assert!(relayed(&told), "the retry: relayed");
+    running.stop().await;
+
+    let (config, _db) = hybrid();
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 3, true).await;
+    assert!(relayed(&told), "a symmetric NAT: relayed at once");
     running.stop().await;
 }
 

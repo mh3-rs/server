@@ -7,7 +7,7 @@
 //! answered. The negotiations are this task's alone: no lock.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,7 @@ use wire::natneg::{AVAILABLE, Body, Peer, Record, availability_request};
 
 use crate::Shared;
 use crate::config::Strategy;
+use crate::game::players::{Nat, Players};
 use crate::relay::Relays;
 
 /// A negotiation nobody has spoken in for this long is forgotten (the game gives up waiting for `CONNECT` after
@@ -88,7 +89,14 @@ pub async fn serve(
         }
         let now = Instant::now();
         negotiations.retain(|_, n| now - n.last < FORGET_AFTER);
-        for (datagram, to) in handle(&connector, &mut negotiations, record, from, now) {
+        for (datagram, to) in handle(
+            &connector,
+            &shared.players,
+            &mut negotiations,
+            record,
+            from,
+            now,
+        ) {
             send(&socket, &datagram, to.into()).await;
         }
     }
@@ -99,27 +107,37 @@ struct Negotiation {
     clients: [Client; 2],
     /// Once both are in: where each client is told its peer is (the peer's game socket, or the relay).
     told: Option<[SocketAddrV4; 2]>,
+    relayed: bool,
     last: Instant,
 }
 
+/// Where a console's `INIT`s came from, by port type: 0 its game socket (where its peer pings it); 1 its NatNeg
+/// socket, to natneg1; 2 and 3 the same socket, to natneg2 and natneg3.
 #[derive(Clone, Copy, Default)]
-struct Client {
-    /// The game socket's address (the source of its port type 0 `INIT`): where its peer pings it.
-    game: Option<SocketAddrV4>,
-    /// The NatNeg socket's address (the other `INIT`s).
-    natneg: Option<SocketAddrV4>,
-}
+struct Client([Option<SocketAddrV4>; 4]);
 
 impl Client {
+    /// In, once its game socket and its NatNeg socket (to natneg1 and natneg2) are known.
+    fn game(&self) -> Option<SocketAddrV4> {
+        self.0[1].and(self.0[2]).and(self.0[0])
+    }
+
     /// Where to send it a `CONNECT` (the game accepts it on either socket).
     fn reach(&self) -> Option<SocketAddrV4> {
-        self.natneg.or(self.game)
+        self.0[1].or(self.0[0])
+    }
+
+    /// Its NAT maps each destination to another port (a symmetric NAT): seen when natneg2 is on another IP than
+    /// natneg1 (else both are always the same: never a false alarm).
+    fn symmetric(&self) -> bool {
+        matches!(self.0, [_, Some(one), Some(two), _] if one.port() != two.port())
     }
 }
 
 /// What to send, and to whom, for a record from `from`.
 fn handle(
     connector: &Connector,
+    players: &Players,
     negotiations: &mut HashMap<u32, Negotiation>,
     record: Record,
     from: SocketAddrV4,
@@ -129,26 +147,26 @@ fn handle(
     let reply = |body| Record { cookie, body }.encode();
     match record.body {
         Body::Init { port, .. } => {
-            let Some(index) = [0, 1]
-                .into_iter()
-                .find(|&i| i == usize::from(port.client_index))
-            else {
+            let (Some(index), Some(kind)) = (
+                [0, 1]
+                    .into_iter()
+                    .find(|&i| i == usize::from(port.client_index)),
+                [0, 1, 2, 3]
+                    .into_iter()
+                    .find(|&k| k == usize::from(port.kind)),
+            ) else {
                 return vec![];
             };
             let n = negotiations.entry(cookie).or_insert_with(|| Negotiation {
                 clients: Default::default(),
                 told: None,
+                relayed: false,
                 last: now,
             });
             n.last = now;
-            let client = &mut n.clients[index];
-            if port.kind == 0 {
-                client.game = Some(from);
-            } else {
-                client.natneg = Some(from);
-            }
+            n.clients[index].0[kind] = Some(from);
             let mut out = vec![(reply(Body::InitAck(port)), from)];
-            let [Some(first), Some(second)] = n.clients.map(|c| c.game) else {
+            let [Some(first), Some(second)] = n.clients.map(|c| c.game()) else {
                 return out;
             };
             // Both in: this console learns where its peer is (again on each `INIT`, as GameSpy's servers do: a
@@ -156,8 +174,9 @@ fn handle(
             let told = match n.told {
                 Some(told) => told,
                 None => {
-                    let told = connect([first, second], connector);
+                    let (told, relayed) = connect(n.clients, [first, second], connector, players);
                     n.told = Some(told);
+                    n.relayed = relayed;
                     if let Some(to) = n.clients[1 - index].reach() {
                         out.push((reply(Body::Connect(peer(told[1 - index]))), to));
                     }
@@ -178,7 +197,16 @@ fn handle(
             mapping,
             ..
         } => {
-            info!(cookie, success = result == 1, "NatNeg report");
+            let success = result == 1;
+            info!(cookie, success, "NatNeg report");
+            // A direct pair tells how both NATs fare: a failure sends both to the relay next time (which side
+            // can't punch is unknown), the player's retry going through it (the game never retries by itself).
+            if let Some(n) = negotiations.get(&cookie).filter(|n| !n.relayed) {
+                let nat = if success { Nat::Direct } else { Nat::Relay };
+                for game in n.clients.iter().filter_map(Client::game) {
+                    players.learn(IpAddr::V4(*game.ip()), nat);
+                }
+            }
             // The report's first bytes echoed, result cleared (GameSpy's servers' answer).
             let nat = nat_type.to_be_bytes();
             let mapping = mapping.to_be_bytes();
@@ -192,17 +220,36 @@ fn handle(
     }
 }
 
-/// Where each of a pair's consoles (their game sockets) is told its peer is: each other, or the relay.
-fn connect(consoles: [SocketAddrV4; 2], connector: &Connector) -> [SocketAddrV4; 2] {
-    let relay = match connector.strategy {
-        Strategy::Relay => connector.relays.as_ref().and_then(|r| r.open(consoles)),
-        // ponytail: hybrid connects directly until the NAT classification (M4 D3) is in.
-        Strategy::Hybrid | Strategy::P2p => None,
+/// Where each of a pair's consoles (their game sockets) is told its peer is: each other, or the relay; and whether
+/// relayed. `hybrid` relays a pair when either console can't punch: a symmetric NAT seen now, or a failure before.
+fn connect(
+    clients: [Client; 2],
+    consoles: [SocketAddrV4; 2],
+    connector: &Connector,
+    players: &Players,
+) -> ([SocketAddrV4; 2], bool) {
+    let ips = consoles.map(|c| IpAddr::V4(*c.ip()));
+    let needs_relay = match connector.strategy {
+        Strategy::P2p => false,
+        Strategy::Relay => true,
+        Strategy::Hybrid => {
+            for (client, ip) in clients.iter().zip(ips) {
+                if client.symmetric() {
+                    info!("NatNeg: a symmetric NAT, relayed");
+                    players.learn(ip, Nat::Relay);
+                }
+            }
+            ips.iter().any(|&ip| players.nat(ip) == Some(Nat::Relay))
+        }
+    };
+    let relay = match needs_relay {
+        true => connector.relays.as_ref().and_then(|r| r.open(consoles)),
+        false => None,
     };
     debug!(relayed = relay.is_some(), "NatNeg pair complete");
     match relay {
-        Some(relay) => [relay, relay],
-        None => [consoles[1], consoles[0]],
+        Some(relay) => ([relay, relay], true),
+        None => ([consoles[1], consoles[0]], false),
     }
 }
 

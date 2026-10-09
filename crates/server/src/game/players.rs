@@ -4,7 +4,7 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -28,6 +28,18 @@ pub struct Mailbox {
     kick: CancellationToken,
     /// Messages may wait in the database (from the start: they may have come while away).
     mail: Arc<AtomicBool>,
+    /// How its NAT lets it reach other consoles (`hybrid`), learned from its negotiations: 0 not known yet, else
+    /// `Nat as u8 + 1`.
+    nat: Arc<AtomicU8>,
+}
+
+/// How a console reaches the others (M4 D3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nat {
+    /// It punched through to a peer.
+    Direct,
+    /// It can't (a failed negotiation, a symmetric NAT): its pairs go through the relay.
+    Relay,
 }
 
 impl Mailbox {
@@ -42,6 +54,7 @@ impl Mailbox {
                 tx,
                 kick: kick.clone(),
                 mail: Arc::new(AtomicBool::new(true)),
+                nat: Arc::new(AtomicU8::new(0)),
             },
             rx,
             kick,
@@ -100,6 +113,26 @@ impl Players {
     /// started; an index by address if thousands play at once.
     pub fn online(&self, ip: IpAddr) -> bool {
         self.0.iter().any(|m| m.ip == ip)
+    }
+
+    /// How the consoles at `ip` reach others: one at it needing the relay is enough (it's the same NAT).
+    pub fn nat(&self, ip: IpAddr) -> Option<Nat> {
+        let known = self.0.iter().filter(|m| m.ip == ip).filter_map(|m| {
+            match m.nat.load(Ordering::Relaxed) {
+                1 => Some(Nat::Direct),
+                2 => Some(Nat::Relay),
+                _ => None,
+            }
+        });
+        known.max_by_key(|nat| *nat == Nat::Relay)
+    }
+
+    /// Learns how the consoles at `ip` reach others; `Relay` stays (a later direct success doesn't undo it).
+    pub fn learn(&self, ip: IpAddr, nat: Nat) {
+        for m in self.0.iter().filter(|m| m.ip == ip) {
+            let new = nat as u8 + 1;
+            let _ = m.nat.fetch_max(new, Ordering::Relaxed);
+        }
     }
 
     /// Unregisters a player, unless another connection took its Capcom ID since.
