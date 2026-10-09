@@ -1,6 +1,6 @@
 # M2 — FMP, solo
 
-**Status: decisions settled (2026-10-09), ready to start.**
+**Status: done (2026-10-09).**
 
 From the FMP connection on: the console downloads the game's content, shows the world server list, enters a world
 server, a gate, creates a city, creates a quest and starts it, alone. Other players (seeing each other, joining a
@@ -8,11 +8,13 @@ city or a quest) are M3.
 
 ## Exit criteria
 
-1. A Dolphin console goes from the title screen to a gate of Valor1, creates a city, creates a quest and starts
-   it, on the Rust server.
-2. The solo scenarios replay cleanly against the Rust server: `s00`, `s02-login-gate` (and `-2`),
+1. ✓ A Dolphin console goes from the title screen to a gate of Valor1, creates a city, creates a quest and starts
+   it, on the Rust server (2026-10-09, about 55 s of play from OPN to leaving the quest). Server answers over the
+   session: median 0.1 ms, slowest 4.4 ms (quest binaries built on demand, debug build); the waits are the game's
+   own and Dolphin's.
+2. ✓ The solo scenarios replay cleanly against the Rust server: `s00`, `s02-login-gate` (and `-2`),
    `s02-first-login-gate`, `s03-city-quest-solo` (every connection, FMP included).
-3. Tier 3: scripted solo scenarios (gate, city, quest, content downloads) pass.
+3. ✓ Tier 3: scripted solo scenarios (gate, city, quest, content downloads) pass.
 
 ## Protocol: what the console does
 
@@ -116,4 +118,4 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       reservation, the creator's own notifications before its answers, departure, leaving), `cities_are_shared`
       (a reserved city shown full and refused to another player with an alert, then joined; the city survives its
       creator leaving), `content_downloads` (every type `0x01`–`0x0f`: version, head and chunks agree).
-- [ ] Dolphin run (exit criterion 1).
+- [x] Dolphin run (exit criterion 1).
