@@ -353,7 +353,10 @@ fn string(item: Option<&Item>) -> String {
 }
 
 /// LMP's first visit: the support code (issued when `None`), the ticket, and the 6 slots' Capcom IDs.
-async fn first_visit(lmp: SocketAddr, support_code: Option<&str>) -> (String, String, Vec<String>) {
+async fn first_visit(
+    lmp: SocketAddr,
+    support_code: Option<&str>,
+) -> (String, String, Vec<(String, String)>) {
     let mut console = Console::connect(lmp, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     send(
@@ -384,12 +387,21 @@ async fn first_visit(lmp: SocketAddr, support_code: Option<&str>) -> (String, St
     (
         code,
         ticket,
-        slots.iter().map(|u| string(u.get(0x02))).collect(),
+        slots
+            .iter()
+            .map(|u| {
+                (
+                    string(u.get(0x02)),
+                    u.get(0x03).map_or_else(String::new, |n| string(Some(n))),
+                )
+            })
+            .collect(),
     )
 }
 
-/// LMP's second visit: plays `slot` as `name`, returns its Capcom ID.
-async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: &str) -> String {
+/// LMP's second visit: plays `slot` as `name` (none: as the console does for a slot listed with its hunter's
+/// name), returns its Capcom ID.
+async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: Option<&str>) -> String {
     let mut console = Console::connect(lmp, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     send(
@@ -401,7 +413,10 @@ async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: &str) -> S
     )
     .await;
     assert_eq!(expect::<NtcLogin>(&mut console).await.status, 2);
-    let user = PatData::new().with(0x03, Item::String(name.to_owned().into()));
+    let user = match name {
+        Some(name) => PatData::new().with(0x03, Item::String(name.to_owned().into())),
+        None => PatData::new(),
+    };
     send(&mut console, 1, ReqUserObject { unk: 1, slot, user }).await;
     string(expect::<AnsUserObject>(&mut console).await.user.get(0x02))
 }
@@ -483,8 +498,8 @@ async fn consoles_keep_their_hunters() {
     // A first-time console gets a support code and empty slots; its first hunter gets a Capcom ID.
     let (code, ticket, slots) = first_visit(lmp, None).await;
     assert_eq!(code.len(), 11);
-    assert_eq!(slots, vec!["******"; 6]);
-    let capcom_id = second_visit(lmp, &ticket, 2, "Aiko").await;
+    assert!(slots.iter().all(|(id, _)| id == "******"));
+    let capcom_id = second_visit(lmp, &ticket, 2, Some("Aiko")).await;
     assert_eq!(capcom_id.len(), 6);
 
     // A redeemed ticket doesn't work twice: the connection is dropped.
@@ -506,7 +521,7 @@ async fn consoles_keep_their_hunters() {
     // Another console gets another Capcom ID.
     let (other, ticket, _) = first_visit(lmp, None).await;
     assert_ne!(other, code);
-    assert_ne!(second_visit(lmp, &ticket, 2, "Aiko").await, capcom_id);
+    assert_ne!(second_visit(lmp, &ticket, 2, Some("Aiko")).await, capcom_id);
     running.stop().await;
 
     // After a restart, the console finds its hunter in the same slot, with the same Capcom ID.
@@ -514,8 +529,11 @@ async fn consoles_keep_their_hunters() {
     let lmp = running.lmp.unwrap();
     let (again, ticket, slots) = first_visit(lmp, Some(&code)).await;
     assert_eq!(again, code);
-    assert_eq!(slots[1], capcom_id);
-    assert_eq!(second_visit(lmp, &ticket, 2, "Aiko").await, capcom_id);
+    assert_eq!(slots[1], (capcom_id.clone(), "Aiko".to_owned()));
+    // Picking it without a name (it was listed with its hunter's) keeps the name.
+    assert_eq!(second_visit(lmp, &ticket, 2, None).await, capcom_id);
+    let (_, _, slots) = first_visit(lmp, Some(&code)).await;
+    assert_eq!(slots[1], (capcom_id, "Aiko".to_owned()));
     running.stop().await;
 }
 
@@ -584,9 +602,14 @@ async fn fmp_progress() {
 
 /// A new console's whole way in: login, server selection (Valor1), then the world server connection.
 async fn enter_world(running: &server::Running) -> Console {
+    let (code, _, _) = first_visit(running.lmp.unwrap(), None).await;
+    play(running, &code).await
+}
+
+/// A new game of `support_code`'s console, slot 1, up to a world server.
+async fn play(running: &server::Running, support_code: &str) -> Console {
     let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
-    let (code, _, _) = first_visit(lmp, None).await;
-    let ticket = login(lmp, &code, 1).await;
+    let ticket = login(lmp, support_code, 1).await;
     let mut selection = fmp_login(fmp, &ticket).await;
     send(
         &mut selection,
@@ -815,6 +838,50 @@ async fn cities_are_shared() {
     assert_ne!(String::from_utf8(host.capcom_id.to_vec()).unwrap(), a_id);
     send(&mut b, 16, ReqLayerUserList { fields: vec![] }).await;
     assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 1);
+    running.stop().await;
+}
+
+/// Tier 3: the game's inbox lasts one game session, so a friend request not answered yet is delivered at the
+/// first world server of each game, until answered.
+#[tokio::test]
+async fn friend_requests_wait_for_an_answer() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let (code, _, _) = first_visit(lmp, None).await;
+    login(lmp, &code, 1).await;
+    let (_, _, slots) = first_visit(lmp, Some(&code)).await;
+    let to = slots[0].0.clone();
+
+    // Sent while the recipient is away.
+    let mut a = enter_world(&running).await;
+    let request = ReqFriendAdd {
+        capcom_id: to.into(),
+        info: PatData::new(),
+        text: Bytes::from_static(b"hi"),
+    };
+    send(&mut a, 10, request).await;
+    expect::<AnsFriendAdd>(&mut a).await;
+
+    let friend_list = || ReqFriendList {
+        first: 1,
+        count: 10,
+        fields: vec![],
+    };
+    for game in [1, 2] {
+        let mut b = play(&running, &code).await;
+        send(&mut b, 10, friend_list()).await;
+        let seen = drain(&mut b, Duration::from_millis(200)).await;
+        assert_eq!(
+            seen,
+            [AnsFriendList::ID, NtcFriendAccept::ID],
+            "game {game}"
+        );
+        // Once per game: the inbox still has it.
+        send(&mut b, 11, friend_list()).await;
+        let seen = drain(&mut b, Duration::from_millis(200)).await;
+        assert_eq!(seen, [AnsFriendList::ID], "game {game}, again");
+    }
     running.stop().await;
 }
 

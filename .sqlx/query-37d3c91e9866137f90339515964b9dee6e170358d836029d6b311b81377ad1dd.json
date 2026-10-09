@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE friend_requests SET delivered = 1 WHERE to_hunter = ?1 AND delivered = 0\n           RETURNING (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS \"capcom_id!: String\",\n                     (SELECT name FROM hunters WHERE id = from_hunter) AS \"name!: Vec<u8>\", message",
+  "query": "SELECT h.capcom_id, h.name, r.message FROM friend_requests r JOIN hunters h ON h.id = r.from_hunter\n           WHERE r.to_hunter = ?1 ORDER BY r.created_at",
   "describe": {
     "columns": [
       {
-        "name": "capcom_id!: String",
+        "name": "capcom_id",
         "ordinal": 0,
         "type_info": "Text",
         "origin": {
@@ -15,7 +15,7 @@
         }
       },
       {
-        "name": "name!: Vec<u8>",
+        "name": "name",
         "ordinal": 1,
         "type_info": "Blob",
         "origin": {
@@ -41,10 +41,10 @@
       "Right": 1
     },
     "nullable": [
-      true,
-      true,
+      false,
+      false,
       false
     ]
   },
-  "hash": "852bd9a8d45dd6f8257dac19bcdd9a3f6cffec7b439f6ebeb9ebbbf2318509c8"
+  "hash": "37d3c91e9866137f90339515964b9dee6e170358d836029d6b311b81377ad1dd"
 }

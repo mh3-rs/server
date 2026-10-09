@@ -102,6 +102,8 @@ pub struct Session {
     pub world_server: Option<u32>,
     /// The hunter's public profile block, written by the console (`UserBinarySet`).
     pub profile: Profile,
+    /// The pending friend requests were sent this game session (the game's inbox doesn't outlive it).
+    pub requests_sent: bool,
 }
 
 impl Session {
@@ -112,6 +114,7 @@ impl Session {
             name: Bytes::new(),
             world_server: None,
             profile: Profile::default(),
+            requests_sent: false,
         }
     }
 }

@@ -117,14 +117,12 @@ CREATE TABLE friends (
 ) STRICT;
 CREATE INDEX friends_b ON friends (hunter_b);
 
--- Friend requests not answered yet: the game keeps a received one in its inbox, to answer any time later; the
--- server checks an answer against them, and delivers one to an offline player at their next login.
+-- Friend requests not answered yet: the game keeps a received one in its inbox to answer later, but only until it
+-- quits; so the server checks an answer against them, and delivers them all again at each login until answered.
 CREATE TABLE friend_requests (
     from_hunter INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
     to_hunter   INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
     message     BLOB NOT NULL,     -- as the game sends it (may be Shift-JIS)
-    -- Reached the recipient's console (online at once, else at their next login): delivered once.
-    delivered   INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
     created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (from_hunter, to_hunter),
     CHECK (from_hunter <> to_hunter)

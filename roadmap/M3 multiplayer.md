@@ -47,7 +47,7 @@ player kicked for not being ready, a party broken by its leader before departure
 - **D2 Friends and black list storage. Settled:** lists are permanent: SQLite tables `friends` and `blacklist`
   (pairs of hunters, as sketched in `M1 schema.md`). Seen on consoles (`s08-friends`): a friend request is an
   option of a message (`ReqFriendAdd` with a text); the recipient gets it as a message (`NtcFriendAccept`) kept in
-  the game's **message inbox**, answered from there any time later (`ReqFriendAccept`); both get `NtcFriendAdd`
+  the game's **message inbox**, answered from there later, but only until the game quits (lab, 2026-10-09) (`ReqFriendAccept`); both get `NtcFriendAdd`
   and their lists update at once. So the server stores pending requests (SQLite `friend_requests`) until answered,
   and refuses an answer to a request never sent; a request to an offline player waits for their next login. The
   friend list is only asked for when entering a world server, and the protocol has no notification of a deletion:
@@ -115,7 +115,7 @@ player kicked for not being ready, a party broken by its leader before departure
       transfer (D7); `NtcUserBinaryNotice`; players not ready stay behind at departure (`NtcCircleKick`). `s10`
       showed no kick in the menus against MH3SP (whose Local Info said 0/4 players: maybe the reason). A leader whose
       console vanishes is cleaned up, before and after departure (tier 3).
-- [x] Chat (MH3SP's colour by level), tells, friends (mutual, requests stored and delivered once), black list
+- [x] Chat (MH3SP's colour by level), tells, friends (mutual, pending requests delivered at each game session until answered), black list
       (personal; blocked hunters' tells and requests not delivered) (D1, D2).
 - [x] Profile block (D3), the whole block at once instead of stages: every byte mapped from the game's code (its
       fill and sanitiser functions); every write validated against the game's rules (HR, appearance bounds, weapon
@@ -138,10 +138,18 @@ player kicked for not being ready, a party broken by its leader before departure
       them go and keeps playing, then a newcomer finds nothing left. `random_play_leaves_no_trace`: 8 consoles,
       seeded random actions (`SEED=` replays one), vanishing and coming back; the server stays up and nothing is left.
       Found: a ready toggle or party list request racing the quest's end dropped the console; now answered plainly.
-- [ ] Dolphin run with two consoles (exit criterion 1).
-- [ ] Lab checks: with two consoles on the Rust server, does Local Info now show the real population (the Rust
-      server answers `LayerChildInfo` with the real layer, MH3SP a 0/4 placeholder), and does a kick option appear
-      then (none found against MH3SP, `s10`)? Does a friend request survive in the inbox across a game restart
-      (deliver once vs again)? Does
-      a password quest work with the placeholder instead of the password (D9)? A city kick in the menus (D7)?
-      The disconnect test (D4).
+- [x] Dolphin run with two consoles (exit criterion 1), 2026-10-09: both in City 1, in one quest, hunting together
+      (P2P through AltWFC), the leader abandoning (the other stays, sees "left").
+- Lab checks, 2026-10-09 (Rust server, two consoles):
+  - [x] Password quest with the `****` placeholder (D9): a wrong password refused ("Wrong Password!"), the right
+        one joins. The console never needs the real password.
+  - [x] Kicks (D7): none anywhere in the menus, in a city or a quest party, even with the real population sent.
+        The only removal is at departure (players not ready stay behind).
+  - [x] Friend requests across a restart (D2): the game's inbox doesn't outlive the game. Pending requests are now
+        delivered at the first world server of each game session, until answered (the `delivered` flag is gone).
+  - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
+        took that as an empty name: stored it, wiped the hunter's profile, friends and blocks (an empty "from" on
+        the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.
+  - [ ] Local Info's city population still says 0/4, whatever the population, the players on a quest (field
+        `0x0b`) or the layer data sent; where the console reads it from is open (the decomp: Local Info's screen).
+  - [ ] The disconnect test (D4).

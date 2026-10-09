@@ -128,14 +128,15 @@ pub async fn slots(db: &SqlitePool, console: &Console) -> Result<Vec<Slot>> {
     .await?)
 }
 
-/// Plays `slot` as the hunter `name`: the slot's Capcom ID, created for an empty slot (`true`). A used slot takes
-/// the name given: another hunter on the slot overwrites the previous one, the Capcom ID stays.
+/// Plays `slot` as the hunter `name`: the slot's Capcom ID, created for an empty slot (`true`), and the hunter's
+/// name. A used slot takes the name given: another hunter on the slot overwrites the previous one, the Capcom ID
+/// stays. No name (the console sends none when the slot's listed name is its hunter's): the stored one.
 pub async fn use_slot(
     db: &SqlitePool,
     console: &Console,
     slot: u32,
-    name: &[u8],
-) -> Result<(String, bool)> {
+    name: Option<&[u8]>,
+) -> Result<(String, bool, Vec<u8>)> {
     for _ in 0..ATTEMPTS {
         let used = sqlx::query!(
             r#"SELECT id AS "id!", capcom_id, name FROM hunters WHERE console_id = ?1 AND slot = ?2"#,
@@ -145,8 +146,9 @@ pub async fn use_slot(
         .fetch_optional(db)
         .await?;
         if let Some(used) = used {
+            let renamed = name.filter(|name| *name != used.name);
             let mut tx = db.begin().await?;
-            if used.name != name {
+            if renamed.is_some() {
                 // Another hunter on the slot: its profile and social links go (the Capcom ID and its moderation
                 // records stay).
                 sqlx::query!("DELETE FROM hunter_profiles WHERE hunter_id = ?1", used.id)
@@ -171,6 +173,7 @@ pub async fn use_slot(
                 .execute(&mut *tx)
                 .await?;
             }
+            let name = renamed.unwrap_or(&used.name);
             sqlx::query!(
                 "UPDATE hunters SET name = ?2, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?1",
                 used.id,
@@ -179,8 +182,9 @@ pub async fn use_slot(
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
-            return Ok((used.capcom_id, false));
+            return Ok((used.capcom_id, false, name.to_vec()));
         }
+        let name = name.unwrap_or_default();
         let capcom_id = random_id(CAPCOM_ID_LEN);
         let public_id = Uuid::now_v7();
         let public_id = public_id.as_bytes().as_slice();
@@ -197,7 +201,7 @@ pub async fn use_slot(
         .execute(db)
         .await?;
         if created.rows_affected() == 1 {
-            return Ok((capcom_id, true));
+            return Ok((capcom_id, true, name.to_vec()));
         }
     }
     bail!("no free Capcom ID after {ATTEMPTS} attempts")
@@ -287,28 +291,14 @@ pub async fn friends(db: &SqlitePool, hunter: i64) -> Result<Vec<(String, Vec<u8
     .collect())
 }
 
-/// Marks the request `from` sent `to` delivered to the recipient's console.
-pub async fn delivered(db: &SqlitePool, from: i64, to: i64) -> Result<()> {
-    sqlx::query!(
-        "UPDATE friend_requests SET delivered = 1 WHERE from_hunter = ?1 AND to_hunter = ?2",
-        from,
-        to
-    )
-    .execute(db)
-    .await?;
-    Ok(())
-}
-
-/// The friend requests a hunter's console hasn't received yet (sender's Capcom ID and name, message), now marked
-/// delivered.
-pub async fn undelivered_requests(
+/// The friend requests a hunter hasn't answered yet: sender's Capcom ID and name, message.
+pub async fn friend_requests(
     db: &SqlitePool,
     hunter: i64,
 ) -> Result<Vec<(String, Vec<u8>, Vec<u8>)>> {
     Ok(sqlx::query!(
-        r#"UPDATE friend_requests SET delivered = 1 WHERE to_hunter = ?1 AND delivered = 0
-           RETURNING (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS "capcom_id!: String",
-                     (SELECT name FROM hunters WHERE id = from_hunter) AS "name!: Vec<u8>", message"#,
+        r#"SELECT h.capcom_id, h.name, r.message FROM friend_requests r JOIN hunters h ON h.id = r.from_hunter
+           WHERE r.to_hunter = ?1 ORDER BY r.created_at"#,
         hunter
     )
     .fetch_all(db)

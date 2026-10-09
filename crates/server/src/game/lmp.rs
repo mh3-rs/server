@@ -189,13 +189,14 @@ impl Lmp {
                     return Err(Fault::Client(anyhow!("no Capcom ID slot {}", r.slot)));
                 }
                 let name = match r.user.get(0x03) {
-                    Some(Item::String(name)) => name.clone(),
-                    _ => Bytes::new(),
+                    Some(Item::String(name)) => Some(&name[..]),
+                    _ => None,
                 };
                 let console = self.session(req)?.console;
-                let (capcom_id, created) = accounts::use_slot(db(shared)?, &console, r.slot, &name)
-                    .await
-                    .map_err(Fault::Server)?;
+                let (capcom_id, created, name) =
+                    accounts::use_slot(db(shared)?, &console, r.slot, name)
+                        .await
+                        .map_err(Fault::Server)?;
                 Span::current().record("capcom_id", capcom_id.as_str());
                 info!(
                     slot = r.slot,
@@ -209,7 +210,7 @@ impl Lmp {
                 let user = set(r.user, 0x02, Item::String(capcom_id.clone().into()));
                 let session = self.session.as_mut().expect("checked above");
                 session.capcom_id = Some(capcom_id);
-                session.name = name;
+                session.name = name.into();
                 reply(
                     seq,
                     &AnsUserObject {
