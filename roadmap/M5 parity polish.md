@@ -52,10 +52,13 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - **D4 Stopping. Settled (2026-10-09).** `mh3sp stop 5min` (a human-readable delay: `1h`, `30s`…) asks the
   running server, through its internal health port, to stop: at once a broadcast ("Server stopping in 5 minutes."),
   reminders at fixed steps (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay), then the
-  connections closed and the process exits. **Nothing is refused meanwhile** (the user, after first planning a runtime
-  maintenance): play goes on as usual until the end. Maintenance is only a way to start (`mh3sp maintenance`: a
-  placeholder refusing everyone). `mh3sp stop cancel` lifts a stop. SIGTERM (`docker stop`: 10 s by default) runs the
-  same sequence with a 5 s warning; a second one stops at once. Quests in progress are P2P and go on.
+  connections closed and the process exits. Nothing is refused meanwhile, but **departing on a quest in the last
+  15 minutes** (an alert: "the server stops in N minutes"): lab run 15 showed a hunt doesn't survive the stop (the
+  party breaks with the server connection, even on a direct link; the way back to town needs the server: errors on
+  both consoles). Maintenance is only a way to start (`mh3sp maintenance`: a placeholder refusing everyone).
+  `mh3sp stop cancel` lifts a stop. SIGTERM (`docker stop`: 10 s by default) runs the same sequence with a 5 s
+  warning; a second one stops at once. The warnings must reach players in a quest: town chat (`NtcLayerChat`) isn't
+  shown there (run 15), so they get party chat (`NtcCircleChat`, its format from the D1 recording).
 - **D5 Metrics. Settled:** `/metrics` on the health port, a JSON of the metrics (always); `/metrics/prometheus`
   behind a `prometheus` cargo feature. Two images: `1` (without) and `1-prometheus` (with; also `1.0-prometheus`,
   `1.0.0-prometheus`). Players online (per world server), cities, quests, NatNeg negotiations (direct, relayed,
@@ -90,5 +93,9 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
       5 s, a second stops now (test: the whole sequence).
 - [x] Metrics (D5): `metrics.rs`; `GET /metrics` (JSON), `GET /metrics/prometheus` (feature `prometheus`, written by
       hand: no dependency); the Dockerfile's `FEATURES` build argument for the `-prometheus` image.
-- [ ] Lab: the town interval (D7); a quest ending without the server (M3 D4); the mixed city on two machines (M4).
+- [x] Lab, run 15: an announcement shows in town chat (blue, "[MH3SP]", 30-character lines); a stop's warnings
+      don't show in a quest; the server stopping mid-quest breaks the party (the leader sees the other leave at once,
+      the other sees the leader frozen) and both end in a network error on the way back (11674, network instability).
+- [ ] Stopping, from run 15: warnings as party chat to players in a quest; departures refused in the last 15 minutes.
+- [ ] Lab: the town interval (D7); the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).
