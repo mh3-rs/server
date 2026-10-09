@@ -1,6 +1,6 @@
 # M3 — Multiplayer
 
-**Status: decisions settled (2026-10-09) but D7 (kicks: none found in the game; Local Info to fix first).**
+**Status: decisions settled (2026-10-09), all tested on consoles.**
 
 Players see each other: in a gate and a city (arrivals, departures, positions, the game data consoles exchange
 through the server), in a quest party (join, ready, depart, leave, leader changes), and socially (chat, tells,
@@ -89,7 +89,8 @@ player kicked for not being ready, a party broken by its leader before departure
   the busiest second), ~80 bytes each; a full city, ~3/s with bursts around 30. A slow console just reads late
   from the system buffer; the mailbox fills only after ~1,600 + 256 frames unread, about a minute of not reading at
   a full city's busy rate (the line check usually drops it first). Others aren't slowed: senders never wait.
-- **D7 Leaders and parties. Open until tested on a console (D1).** MH3SP's rules. A city's "leader" is the
+- **D7 Leaders and parties. Settled (lab, 2026-10-09): MH3SP's rules; no kick for players in the game (lab
+  checks below).** MH3SP's rules. A city's "leader" is the
   **host of its P2P session**: a console joining asks `LayerHost` who it is and connects to that console directly;
   the protocol has no kick from a city (to check in the game's menus). A **quest's leader can kick** a member:
   `ReqCircleKick` (→ `NtcCircleKick` to the kicked player), and a kick list keeps them out of that quest
@@ -133,7 +134,7 @@ player kicked for not being ready, a party broken by its leader before departure
       recordings use the default hunter: appearance and equipment variety untested).
 - [x] Disconnect lab test and grace period decision (D4): no grace period.
 - [x] Concurrency model written down (who owns what; no socket written but by its task) (D5): `lib.rs`.
-- [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,
+- [x] Replay gate: every multiplayer scenario recorded so far replays whole (`REACHED = "M3"`, was `clean_so_far`: `s04`, `s04-2`, `s05`,
       `s06`, `s07`, `s08`, `s09`). The harness accepts a console's own answer before frames recorded ahead of it (the
       Rust server answers at once; MH3SP was slow), and consoles still wait for every frame recorded before their
       next one.
@@ -150,10 +151,10 @@ player kicked for not being ready, a party broken by its leader before departure
 - Lab checks, 2026-10-09 (Rust server, two consoles):
   - [x] Password quest with the `****` placeholder (D9): a wrong password refused ("Wrong Password!"), the right
         one joins. The console never needs the real password.
-  - [ ] Kicks (D7): none found in the menus, in a city or a quest party; nothing about one online either. Still
-        open: Local Info never listed the other player (its population says 0/4), so a kick there can't be ruled
-        out until it does. Maybe not a player feature at all (then: the website, see future steps). The only
-        removal seen is at departure (players not ready stay behind).
+  - [x] Kicks (D7): none in the game, for players: not in the menus, in a city or a quest party, nor in Local Info
+        once it showed the real population (run 8); nothing online either; the protocol has no city kick (only
+        quest party kick packets, never offered in the menus). The only removal is at departure (players not ready
+        stay behind). Kicks from the website: a future step (global roadmap).
   - [x] Messages and friend requests (D2), runs 2–5: the game's inbox doesn't outlive the game, drops a message
         arriving while a scene loads (sent at the world server, or on entering a gate: lost), and deleting from it
         is local (no packet). A plain message is `ReqTell` → `NtcTell` (what the corpus calls a tell: the same
@@ -167,10 +168,11 @@ player kicked for not being ready, a party broken by its leader before departure
   - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
         took that as an empty name: stored it, wiped the hunter's profile, friends and blocks (an empty "from" on
         the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.
-  - [ ] Local Info's city population said 0/4. Found in the game's code: the screen shows the console's own layer
+  - [x] Local Info's city population said 0/4. Found in the game's code: the screen shows the console's own layer
         record (population `0x06`, capacity `0x09`, then the city's settings), which only `AnsLayerStart`,
         `AnsLayerChildInfo` *echoing the request's 0* and `NtcLayerUserNum` (kind 2) write; MH3SP (and we) answered
         1, so the console kept the login placeholder (0 of 4). Fixed: the request's number echoed, the city's
-        settings sent, `NtcLayerUserNum` to the city on every join and leave. To confirm on the consoles; then
-        look for a player list or kick there (the code drawing the numbers has none; no city kick in the protocol).
+        settings sent, `NtcLayerUserNum` to the city on every join and leave. Confirmed (run 8): 1/4 alone, 2/4 live
+        when the other joins, back live when they leave; the city's setting ("casual play") shown. No player list
+        and no kick on that screen.
   - [x] The disconnect test (D4): see D4, settled.

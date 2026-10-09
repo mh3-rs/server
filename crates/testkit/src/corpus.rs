@@ -25,7 +25,7 @@ use crate::pcap::{self, Packet, Proto};
 
 /// The milestone the Rust server has reached. Every scenario whose `milestone` (in its
 /// `scenario.toml`) is at or before this one must replay cleanly against the Rust server.
-pub const REACHED: &str = "M2";
+pub const REACHED: &str = "M3";
 
 /// The `milestone` field of a scenario's `scenario.toml`.
 pub fn milestone(scenario: &Path) -> Result<String> {
