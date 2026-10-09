@@ -105,15 +105,27 @@ player kicked for not being ready, a party broken by its leader before departure
 
 ## Work (once the decisions are settled)
 
-- [ ] Recordings (D1), imported, masks and divergences.
-- [ ] Layers: `LayerHost`, `LayerUserList*` (search by path), `NtcLayerIn` / `Out`, a city's host path in lists,
-      `NtcLayerHost`; town relays (`NtcLayerUserPosition`, `NtcLayerBinary`, `NtcLayerBinary2`).
-- [ ] Parties: join, user list, host, binaries to all / one, leave, kick, break, host transfer (D7);
-      `NtcUserBinaryNotice`.
-- [ ] Chat, tells, friends, black list (D1, D2).
+- [x] Recordings (D1): `s07-chat`, `s08-friends`, `s09-blacklist` recorded and imported; `s10-party` to record.
+      Divergences: the black list's blank entry gone (a mask to the end of the payload, back in the harness); a
+      blocked hunter's tell not delivered (`[[omit]]`, new: frames the Rust server leaves out on purpose).
+- [x] Layers: `LayerHost`, `LayerUserList*` (search by path), `NtcLayerIn` / `Out` (at gate and city level; a
+      disconnect too; a kicked old connection notifies nobody), a city's host path in lists, `NtcLayerHost`; town
+      relays (`NtcLayerUserPosition`, `NtcLayerBinary`, `NtcLayerBinary2`: the console's empty sender record replaced
+      by the real one); player search (`LayerUserSearch*`), player cards (`UserSearchInfo`), console error reports
+      (`NtcCollectionLog`, logged).
+- [x] Parties: join (full, gone, wrong password), user list, host, binaries to all / one, leave, break, host
+      transfer (D7); `NtcUserBinaryNotice`. Left for `s10`: kicks, the kick list, players not ready at departure.
+- [x] Chat (MH3SP's colour by level), tells, friends (mutual, requests stored and delivered once), black list
+      (personal; blocked hunters' tells and requests not delivered) (D1, D2).
 - [ ] Profile block (D3): validation, `hunter_profiles` (raw block and known fields), the block rebuilt for others.
 - [ ] Disconnect lab test and grace period decision (D4).
 - [ ] Concurrency model written down (who owns what; no socket written but by its task) (D5).
-- [ ] Replay gate: the multiplayer scenarios.
+- [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,
+      `s06`, `s07`, `s08`, `s09`). The harness accepts a console's own answer before frames recorded ahead of it (the
+      Rust server answers at once; MH3SP was slow), and consoles still wait for every frame recorded before their
+      next one.
 - [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test, relay latency.
 - [ ] Dolphin run with two consoles (exit criterion 1).
+- [ ] Lab checks: does a friend request survive in the inbox across a game restart (deliver once vs again)? Does
+      a password quest work with the placeholder instead of the password (D9)? A city kick in the menus (D7)?
+      The disconnect test (D4).
