@@ -12,6 +12,10 @@ use crate::Shared;
 use crate::text::{Language, Text, text};
 
 /// The world servers (MH3SP's): name and type (1 open, 2 rookie, 3 expert, 4 recruiting).
+/// How often a console sends its own position in a layer, in milliseconds (the layer record's field `0x11`, read by
+/// the console on entering a layer: the decomp's `applyLoginRecord`). MH3SP's value; Capcom's is unknown (M5 D7).
+pub const POSITION_INTERVAL: u32 = 500;
+
 pub const SERVERS: [(&str, u64); 12] = [
     ("Valor1", 1),
     ("Valor2", 1),
@@ -776,7 +780,7 @@ pub fn gates(world: &World, server: u32, first: u32, count: u32) -> Vec<(PatData
                 .with(0x01, Item::Long(index))
                 .with(0x05, Item::Word(gate))
                 // Position updates, every 500 ms.
-                .with(0x11, Item::Long(500))
+                .with(0x11, Item::Long(POSITION_INTERVAL))
                 .with(0x12, Item::Byte(1))
                 .with(0x03, Item::String(Bytes::copy_from_slice(name.as_bytes())))
                 .with(0x06, Item::Long(population))
@@ -811,7 +815,7 @@ pub fn cities(
             let record = PatData::new()
                 .with(0x01, Item::Long(index))
                 .with(0x05, Item::Word(index as u16))
-                .with(0x11, Item::Long(500))
+                .with(0x11, Item::Long(POSITION_INTERVAL))
                 .with(0x12, Item::Byte(1))
                 .with(0x03, Item::String(Bytes::copy_from_slice(name.as_bytes())))
                 .with(0x06, Item::Long(population))

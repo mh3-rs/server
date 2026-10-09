@@ -1078,7 +1078,7 @@ fn placeholder_layer() -> PatData {
         .with(0x06, Item::Long(0))
         .with(0x09, Item::Long(4))
         .with(0x10, Item::Byte(1))
-        .with(0x11, Item::Long(500))
+        .with(0x11, Item::Long(world::POSITION_INTERVAL))
         .with(0x12, Item::Byte(1))
 }
 
