@@ -1,6 +1,6 @@
 # M4 — NAT negotiation and relay
 
-**Status: decisions settled (2026-10-09) but D9; lab checks before building (D6, D7, the failure path).**
+**Status: decisions settled (2026-10-09); lab checks before building (D6, D7, the failure path).**
 
 The consoles play towns and hunts peer to peer (UDP, GameSpy GT2); the server only matchmakes. To connect, two
 consoles go through GameSpy's **NAT negotiation** (NatNeg, UDP 27901), done today by AltWFC. M4 brings it into the
@@ -75,15 +75,15 @@ relay must never be the reason a link drops: no idle timeout under a few minutes
 
 ## Decisions
 
-Settled with the user on 2026-10-09 (D9 open).
+Settled with the user on 2026-10-09.
 
 - **D1 Scope. Settled:** NatNeg (UDP 27901), the relay, and the QR availability check (UDP 27900, one fixed answer),
   all in the server: one project, one process. AltWFC keeps NAS only (our own NAS stays a future step).
 - **D2 Strategy. Settled:** `NATNEG_STRATEGY = hybrid | p2p | relay` (configuration), default `hybrid`. `p2p` and
   `relay` force one way for everyone.
-- **D3 Hybrid. Settled: transparent when possible, else on the first failure.** Each player carries
-  `Nat::Unknown | Direct | Relay` (no "hybrid" at that level). With `p2p` or `relay` it's set at login; with
-  `hybrid` it starts `Unknown` and is classified during the player's first negotiation: the `INIT`s arrive before the
+- **D3 Hybrid. Settled: transparent when possible, else on the first failure.** Each player carries an
+  `Option<Nat>`, `Nat` being `Direct | Relay` (no "hybrid" at that level; `None`: not classified yet). With `p2p` or
+  `relay` it's set at login; with `hybrid` it starts `None` and is classified during the player's first negotiation: the `INIT`s arrive before the
   server sends `CONNECT` (the console waits up to 60 s for it), so the server probes them first:
   - *filtering* (one IP is enough): an `ERT_TEST` to the console's NatNeg socket from another port; the game answers
     `ERT_ACK`: no answer means a restricted NAT;
@@ -109,7 +109,8 @@ Settled with the user on 2026-10-09 (D9 open).
 - **D7 Topology. Answered by the decomp, to confirm in the lab:** a full mesh negotiated pair by pair (up to 6 pairs);
   with 3 consoles, one pair blocked (the session's own relay through a member).
 - **D8 Relay address. Settled:** in the configuration: `EXTERNAL_ADDRESS` (the address consoles reach FMP at).
-- **D9 A second address for NAT detection. Open; recommendation:** optional `NATNEG_SECONDARY_ADDRESS`; when set,
+- **D9 A second address for NAT detection. Settled: optional** (deployments rarely have a second IP):
+  `NATNEG_SECONDARY_ADDRESS`; when set,
   natneg2/natneg3 resolve to it and the symmetric-NAT detection is on; without it, hybrid = the filtering probe plus
   the fallback after one failure.
 
@@ -123,7 +124,7 @@ Settled with the user on 2026-10-09 (D9 open).
 - [ ] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
       `REPORT_ACK`, sessions forgotten after a minute; only logged-in consoles (D5).
 - [ ] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
-- [ ] Strategies (D2, D3): `Nat` per player; classification from the `INIT`s (`ERT_TEST` probe; symmetric mapping
+- [ ] Strategies (D2, D3): `Option<Nat>` per player; classification from the `INIT`s (`ERT_TEST` probe; symmetric mapping
       with D9); a pair relayed if either is `Relay`; the failure fallback.
 - [ ] Replay: the harness replays recorded UDP too (NatNeg exchanges; P2P datagrams aren't the server's).
 - [ ] Tier 5: fake consoles through NatNeg and P2P in each strategy; simulated NAT; forced failure → relay on retry;
