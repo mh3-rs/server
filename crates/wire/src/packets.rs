@@ -367,6 +367,12 @@ packets! {
     AnsLayerUserListFoot = 0x64660200 {}
     ReqLayerMediationList = 0x64820100 { mode: u8, max_count: u8, fields: Vec<u8> }
     AnsLayerMediationList = 0x64820200 { mode: u8, items: ShortList }
+    ReqLayerMediationLock = 0x64800100 { slot: u8, items: PatData }
+    AnsLayerMediationLock = 0x64800200 { result: u8 }
+    NtcLayerMediationLock = 0x64801000 { capcom_id: Bytes, slot: u8, items: PatData }
+    ReqLayerMediationUnlock = 0x64810100 { slot: u8, items: PatData }
+    AnsLayerMediationUnlock = 0x64810200 { result: u8 }
+    NtcLayerMediationUnlock = 0x64811000 { capcom_id: Bytes, slot: u8, items: PatData }
     NtcLayerIn = 0x64141000 { capcom_id: Bytes, user: PatData }
     NtcLayerOut = 0x64151000 { capcom_id: Bytes }
     /// The console's position in town; relayed with the sender's Capcom ID in front (a layout per direction).

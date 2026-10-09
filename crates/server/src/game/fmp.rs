@@ -640,14 +640,22 @@ impl Fmp {
                 reply(seq, &AnsLayerCreateFoot { number: r.number })
             }
             ReqLayerMediationList::ID => {
-                // MH3SP's placeholder list (its meaning is unknown): 14 unlocked entries named "Test".
+                // The city's taken seats (1–12) and arm wrestling places (13–14): holder, slot, taken. The
+                // console clears its 32 slots first. (MH3SP: 14 free placeholder entries named "Test".)
                 ReqLayerMediationList::decode(p)?;
-                let items = (1..=14)
-                    .map(|i| {
+                let world = shared.world.lock().unwrap();
+                let seats = world
+                    .city_of(capcom_id(session))
+                    .and_then(|id| world.city(id))
+                    .map(|city| city.seats.clone())
+                    .unwrap_or_default();
+                let items = seats
+                    .into_iter()
+                    .map(|(slot, holder)| {
                         PatData::new()
-                            .with(0x01, Item::String(Bytes::from_static(b"Test")))
-                            .with(0x02, Item::Byte(i))
-                            .with(0x03, Item::Byte(0))
+                            .with(0x01, Item::String(holder.into()))
+                            .with(0x02, Item::Byte(slot))
+                            .with(0x03, Item::Byte(1))
                     })
                     .collect();
                 reply(
@@ -657,6 +665,36 @@ impl Fmp {
                         items: ShortList(items),
                     },
                 )
+            }
+            ReqLayerMediationLock::ID => {
+                // Sitting down (or taking an arm wrestling place): one player per seat; the city sees it. A taken
+                // seat is refused (an alert: the console then doesn't sit). (MH3SP: always yes, nobody told.)
+                let r = ReqLayerMediationLock::decode(p)?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                if !world.take_seat(city, r.slot, me) {
+                    return alert(AnsLayerMediationLock::ID, seq, Text::SeatTaken);
+                }
+                let ntc = frame(seq, &seat_notice(me, r.slot))?;
+                for other in world.others(me) {
+                    shared.players.send(&other, ntc.clone());
+                }
+                reply(seq, &AnsLayerMediationLock { result: 1 })
+            }
+            ReqLayerMediationUnlock::ID => {
+                // Standing up: the seat is free again, the city sees it.
+                let r = ReqLayerMediationUnlock::decode(p)?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                if world.free_seat(city, r.slot, me) {
+                    let ntc = frame(seq, &seat_free_notice(me, r.slot))?;
+                    for other in world.others(me) {
+                        shared.players.send(&other, ntc.clone());
+                    }
+                }
+                reply(seq, &AnsLayerMediationUnlock { result: 1 })
             }
             ReqCircleListLayer::ID => {
                 ReqCircleListLayer::decode(p)?;
@@ -1119,6 +1157,18 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     let others = world.others(me);
     let city = world.city_of(me);
     let was_host = city.is_some_and(|id| world.city_host(id) == Some(me));
+    // Its seats are free again for those still in the city.
+    let freed = match in_city && leaves_city {
+        true => world.release_seats(me),
+        false => Vec::new(),
+    };
+    for slot in freed {
+        if let Ok(ntc) = frame(0, &seat_free_notice(me, slot)) {
+            for other in &others {
+                shared.players.send(other, ntc.clone());
+            }
+        }
+    }
     match how {
         Depart::Up => {
             let place = world.place(me).expect("placed");
@@ -1196,6 +1246,24 @@ fn user_num(
         }
     }
     Ok(())
+}
+
+/// A seat taken (`NtcLayerMediationLock`): its holder, the slot, taken (field 3: 1).
+fn seat_notice(holder: &str, slot: u8) -> NtcLayerMediationLock {
+    NtcLayerMediationLock {
+        capcom_id: Bytes::copy_from_slice(holder.as_bytes()),
+        slot,
+        items: PatData::new().with(0x03, Item::Byte(1)),
+    }
+}
+
+/// A seat freed (`NtcLayerMediationUnlock`).
+fn seat_free_notice(holder: &str, slot: u8) -> NtcLayerMediationUnlock {
+    NtcLayerMediationUnlock {
+        capcom_id: Bytes::copy_from_slice(holder.as_bytes()),
+        slot,
+        items: PatData::new().with(0x03, Item::Byte(0)),
+    }
 }
 
 /// A player arriving (`NtcLayerIn`): Capcom ID, then name and profile block.

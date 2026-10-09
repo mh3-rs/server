@@ -114,7 +114,12 @@ console sessions to do: `recordings.md`.
 
 - [x] `roadmap/unk.md`: renames (no change on the wire); `NtcUserBinaryNotice` with `target` 1 to its one player
       (`profile_notices_reach_their_target`); the join/leave `state` note in the code.
-- [ ] Recordings (D1) and the missing handlers, each replaying whole.
+- [x] Seats and arm wrestling (`LayerMediationLock/Unlock`): one player per seat per city (`City::seats`), a taken
+      seat refused (an alert), the city told (`NtcLayerMediationLock/Unlock`), seats freed when their holder leaves;
+      `LayerMediationList` lists the real ones (MH3SP's 14 "Test" placeholders: a divergence entry). Test:
+      `one_player_per_seat`. To confirm on consoles (`recordings.md`: s13 and the Rust check).
+- [ ] Player Search (`UserSearchHead/Data/Foot`).
+- [ ] Recordings (D1) of the rest, each replaying whole (`recordings.md`).
 - [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
       `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.
       The only change needed: quests naming a small monster data file (`smallmonster_data_file`) instead of listing

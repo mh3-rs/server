@@ -46,6 +46,13 @@ packet = "AnsBlackList"
 offset = 4
 reason = "no blank placeholder entry in the black list (seen on consoles: an empty line)"
 
+# The city's seats (M5): the real ones taken (none in the recordings), not MH3SP's 14 free placeholder entries named
+# "Test". Compared from the list's count on (the mode byte before it is the same).
+[[mask]]
+packet = "AnsLayerMediationList"
+offset = 1
+reason = "the city's seats actually taken, not MH3SP's 14 free placeholders"
+
 # A quest's password (field 0x04 of a quest record, a string): MH3SP sends it in clear to everyone in the city, the
 # Rust server a placeholder (s10's password and the placeholder are both 4 characters).
 [[mask]]

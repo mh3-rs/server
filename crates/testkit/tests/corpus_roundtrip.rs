@@ -181,6 +181,12 @@ fn typed_packets_reencode() {
             "NtcCircleBreak",
             "NtcLayerUserNum",
             "NtcCircleChat",
+            "ReqLayerMediationLock",
+            "AnsLayerMediationLock",
+            "NtcLayerMediationLock",
+            "ReqLayerMediationUnlock",
+            "AnsLayerMediationUnlock",
+            "NtcLayerMediationUnlock",
         ];
         let missing: Vec<_> = TYPED
             .iter()

@@ -1124,6 +1124,100 @@ async fn hunters_get_announcements() {
     running.stop().await;
 }
 
+/// Tier 3: city seats (M5): one player per seat, the others told when it's taken and freed; quitting while seated
+/// frees it.
+#[tokio::test]
+async fn one_player_per_seat() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut a = enter_world(&running).await;
+    let mut b = enter_world(&running).await;
+    for step in 1..=3 {
+        meet(&mut a, &mut b, 1, step).await;
+    }
+    drain(&mut a, Duration::from_millis(200)).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    let sit = |stand: bool| PatData::new().with(0x03, Item::Byte(u8::from(!stand)));
+
+    send(
+        &mut a,
+        60,
+        ReqLayerMediationLock {
+            slot: 3,
+            items: sit(false),
+        },
+    )
+    .await;
+    assert_eq!(expect::<AnsLayerMediationLock>(&mut a).await.result, 1);
+    assert_eq!(expect::<NtcLayerMediationLock>(&mut b).await.slot, 3);
+    send(
+        &mut b,
+        60,
+        ReqLayerMediationLock {
+            slot: 3,
+            items: sit(false),
+        },
+    )
+    .await;
+    assert!(
+        expect_alert(&mut b, AnsLayerMediationLock::ID)
+            .await
+            .contains("already")
+    );
+    send(
+        &mut b,
+        61,
+        ReqLayerMediationList {
+            mode: 1,
+            max_count: 32,
+            fields: vec![1, 2, 3],
+        },
+    )
+    .await;
+    let seats = expect::<AnsLayerMediationList>(&mut b).await.items.0;
+    assert_eq!(seats.len(), 1);
+    assert_eq!(seats[0].get(0x02), Some(&Item::Byte(3)));
+
+    send(
+        &mut a,
+        61,
+        ReqLayerMediationUnlock {
+            slot: 3,
+            items: sit(true),
+        },
+    )
+    .await;
+    expect::<AnsLayerMediationUnlock>(&mut a).await;
+    assert_eq!(expect::<NtcLayerMediationUnlock>(&mut b).await.slot, 3);
+
+    // A sits again and quits: the seat is free for B.
+    send(
+        &mut a,
+        62,
+        ReqLayerMediationLock {
+            slot: 5,
+            items: sit(false),
+        },
+    )
+    .await;
+    expect::<AnsLayerMediationLock>(&mut a).await;
+    expect::<NtcLayerMediationLock>(&mut b).await;
+    drop(a);
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    assert!(seen.contains(&NtcLayerMediationUnlock::ID), "{seen:?}");
+    send(
+        &mut b,
+        62,
+        ReqLayerMediationLock {
+            slot: 5,
+            items: sit(false),
+        },
+    )
+    .await;
+    assert_eq!(expect::<AnsLayerMediationLock>(&mut b).await.result, 1);
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

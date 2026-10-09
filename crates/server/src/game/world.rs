@@ -1,6 +1,6 @@
 //! The world: world servers (game constants, D2 of M1), how consoles find them, and where players are.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
@@ -137,6 +137,8 @@ pub struct City {
     pub reserved_by: Option<String>,
     /// The city's settings (`LayerCreateSet`): shown in the city list.
     pub settings: OptionalFields,
+    /// Seats (1–12) and arm wrestling places (13–14) taken (`LayerMediationLock`), and by whom: one player each.
+    pub seats: BTreeMap<u8, String>,
 }
 
 /// A quest being prepared or played: from its creation until its leader leaves.
@@ -327,6 +329,7 @@ impl World {
             leader: capcom_id.to_owned(),
             reserved_by: Some(capcom_id.to_owned()),
             settings: OptionalFields::default(),
+            seats: BTreeMap::new(),
         };
         self.cities.insert(id, city);
         Ok(())
@@ -382,6 +385,7 @@ impl World {
     /// the city to the earliest player left.
     pub fn leave_city(&mut self, capcom_id: &str) {
         self.leave_circle(capcom_id);
+        self.release_seats(capcom_id);
         let Some(place) = self.places.get_mut(capcom_id) else {
             return;
         };
@@ -403,6 +407,56 @@ impl World {
         for id in ids {
             self.tidy(id);
         }
+    }
+
+    pub fn city(&self, id: CityId) -> Option<&City> {
+        self.cities.get(&id)
+    }
+
+    /// Takes seat `slot` in `city` for `capcom_id`: `false` if someone else has it.
+    pub fn take_seat(&mut self, city: CityId, slot: u8, capcom_id: &str) -> bool {
+        let Some(city) = self.cities.get_mut(&city) else {
+            return false;
+        };
+        match city.seats.get(&slot) {
+            Some(holder) if holder != capcom_id => false,
+            _ => {
+                city.seats.insert(slot, capcom_id.to_owned());
+                true
+            }
+        }
+    }
+
+    /// Frees seat `slot` in `city` if `capcom_id` has it: whether it did.
+    pub fn free_seat(&mut self, city: CityId, slot: u8, capcom_id: &str) -> bool {
+        let seats = self.cities.get_mut(&city).map(|c| &mut c.seats);
+        match seats {
+            Some(seats) if seats.get(&slot).is_some_and(|h| h == capcom_id) => {
+                seats.remove(&slot);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Frees every seat `capcom_id` has (leaving its city): the slots freed.
+    pub fn release_seats(&mut self, capcom_id: &str) -> Vec<u8> {
+        let Some(city) = self.city_of(capcom_id) else {
+            return Vec::new();
+        };
+        let Some(city) = self.cities.get_mut(&city) else {
+            return Vec::new();
+        };
+        let mine: Vec<u8> = city
+            .seats
+            .iter()
+            .filter(|(_, h)| *h == capcom_id)
+            .map(|(&s, _)| s)
+            .collect();
+        for slot in &mine {
+            city.seats.remove(slot);
+        }
+        mine
     }
 
     /// The players at the same place as `capcom_id`, without them.
