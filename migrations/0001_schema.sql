@@ -60,16 +60,50 @@ CREATE TABLE hunters (
 ) STRICT;
 CREATE INDEX hunters_console ON hunters (console_id);
 
--- A hunter's public profile, the 256-byte block the console writes and other consoles draw the hunter from
--- (game/profile.rs). Self-reported: the save is the truth. Kept for the website (hunter pages) and anti-cheat (M6):
--- the raw block as written, and the known fields, parsed and validated. As fields get mapped they become columns;
--- once all are, the raw column goes.
+-- A hunter's public profile, from the 256-byte block the console writes and other consoles draw the hunter from
+-- (game/profile.rs maps every byte and validates it as the game does). Self-reported: the save is the truth. Kept
+-- for the website (hunter pages) and anti-cheat (M6). Where the player is (city settings, server type, in a party)
+-- isn't kept. `unknown_*` and `appearance_*` are save bytes whose meaning isn't known yet, named by their offset.
 CREATE TABLE hunter_profiles (
-    hunter_id   INTEGER PRIMARY KEY REFERENCES hunters (id) ON DELETE CASCADE,
-    raw         BLOB NOT NULL CHECK (length(raw) = 256),
-    hr          INTEGER NOT NULL CHECK (hr BETWEEN 0 AND 999),
-    weapon_type INTEGER NOT NULL CHECK (weapon_type BETWEEN 0 AND 255),
-    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    hunter_id       INTEGER PRIMARY KEY REFERENCES hunters (id) ON DELETE CASCADE,
+    hr              INTEGER NOT NULL CHECK (hr BETWEEN 0 AND 999),
+    weapon_type     INTEGER NOT NULL CHECK (weapon_type BETWEEN 0 AND 8),
+    gender          INTEGER NOT NULL CHECK (gender IN (0, 1)),
+    voice           INTEGER NOT NULL CHECK (voice BETWEEN 0 AND 19),
+    hair_colour     INTEGER NOT NULL,  -- RGBA
+    inner_colour    INTEGER NOT NULL,  -- RGBA
+    appearance_02   INTEGER NOT NULL CHECK (appearance_02 BETWEEN 0 AND 10),
+    appearance_03   INTEGER NOT NULL CHECK (appearance_03 BETWEEN 0 AND 3),
+    appearance_96   INTEGER NOT NULL CHECK (appearance_96 BETWEEN 0 AND 8),
+    appearance_98   INTEGER NOT NULL CHECK (appearance_98 BETWEEN 0 AND 9),
+    appearance_99   INTEGER NOT NULL CHECK (appearance_99 BETWEEN 0 AND 12),
+    poogie_costume  INTEGER NOT NULL CHECK (poogie_costume BETWEEN 0 AND 255),
+    title           INTEGER NOT NULL CHECK (title BETWEEN 0 AND 117),
+    status          INTEGER NOT NULL CHECK (status BETWEEN 0 AND 8),
+    comment         BLOB NOT NULL CHECK (length(comment) <= 85),  -- as the game sends it (may be Shift-JIS)
+    unknown_04      INTEGER NOT NULL CHECK (unknown_04 BETWEEN 0 AND 3),
+    unknown_7c      BLOB NOT NULL CHECK (length(unknown_7c) = 5),
+    unknown_81      BLOB NOT NULL CHECK (length(unknown_81) = 17),
+    unknown_92      INTEGER NOT NULL CHECK (unknown_92 BETWEEN 0 AND 255),
+    unknown_93      INTEGER NOT NULL CHECK (unknown_93 BETWEEN 0 AND 255),
+    unknown_9a      INTEGER NOT NULL CHECK (unknown_9a BETWEEN 0 AND 2),
+    unknown_9b      INTEGER NOT NULL CHECK (unknown_9b BETWEEN 0 AND 100),
+    updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
+-- A hunter's equipment, by slot: 0 weapon, 1 bowgun barrel, 2 bowgun stock, 3 helmet, 4 chest, 5 waist, 6 arms,
+-- 7 legs, 8 talisman. Kinds are the game's equipment classes; item 0 is nothing worn.
+CREATE TABLE hunter_equipment (
+    hunter_id   INTEGER NOT NULL REFERENCES hunter_profiles (hunter_id) ON DELETE CASCADE,
+    slot        INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 8),
+    kind        INTEGER NOT NULL CHECK (kind BETWEEN 0 AND 15),
+    item        INTEGER NOT NULL CHECK (item BETWEEN 0 AND 140),
+    deco_count  INTEGER NOT NULL CHECK (deco_count BETWEEN 0 AND 3),
+    deco_level  INTEGER NOT NULL CHECK (deco_level BETWEEN 0 AND 65535),
+    skill_1     INTEGER NOT NULL CHECK (skill_1 BETWEEN 0 AND 65535),
+    skill_2     INTEGER NOT NULL CHECK (skill_2 BETWEEN 0 AND 65535),
+    skill_3     INTEGER NOT NULL CHECK (skill_3 BETWEEN 0 AND 65535),
+    PRIMARY KEY (hunter_id, slot)
 ) STRICT;
 
 -- Friendships are mutual: one row per pair, the lower hunter id first, so a pair has one order; either side

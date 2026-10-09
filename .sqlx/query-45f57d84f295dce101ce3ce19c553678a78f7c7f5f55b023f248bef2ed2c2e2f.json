@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hunter_equipment (hunter_id, slot, kind, item, deco_count, deco_level, skill_1, skill_2,\n                   skill_3)\n               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)\n               ON CONFLICT (hunter_id, slot) DO UPDATE SET kind = excluded.kind, item = excluded.item,\n                   deco_count = excluded.deco_count, deco_level = excluded.deco_level, skill_1 = excluded.skill_1,\n                   skill_2 = excluded.skill_2, skill_3 = excluded.skill_3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "45f57d84f295dce101ce3ce19c553678a78f7c7f5f55b023f248bef2ed2c2e2f"
+}

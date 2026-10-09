@@ -318,21 +318,77 @@ pub async fn undelivered_requests(
     .collect())
 }
 
-/// Stores a hunter's profile: the raw block and its known fields.
-pub async fn save_profile(db: &SqlitePool, hunter: i64, profile: &Profile) -> Result<()> {
-    let raw = &profile.raw()[..];
+/// Stores a hunter's profile and equipment.
+pub async fn save_profile(db: &SqlitePool, hunter: i64, p: &Profile) -> Result<()> {
+    let [a02, a03, a96, a98, a99] = p.appearance;
+    let [unknown_9a, unknown_9b] = p.unknown_9a;
+    let (comment, unknown_7c, unknown_81) = (&p.comment[..], &p.unknown_7c[..], &p.unknown_81[..]);
+    let mut tx = db.begin().await?;
     sqlx::query!(
-        r#"INSERT INTO hunter_profiles (hunter_id, raw, hr, weapon_type) VALUES (?1, ?2, ?3, ?4)
-           ON CONFLICT (hunter_id) DO UPDATE
-           SET raw = excluded.raw, hr = excluded.hr, weapon_type = excluded.weapon_type,
+        r#"INSERT INTO hunter_profiles (hunter_id, hr, weapon_type, gender, voice, hair_colour, inner_colour,
+               appearance_02, appearance_03, appearance_96, appearance_98, appearance_99, poogie_costume, title,
+               status, comment, unknown_04, unknown_7c, unknown_81, unknown_92, unknown_93, unknown_9a, unknown_9b)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
+               ?22, ?23)
+           ON CONFLICT (hunter_id) DO UPDATE SET hr = excluded.hr, weapon_type = excluded.weapon_type,
+               gender = excluded.gender, voice = excluded.voice, hair_colour = excluded.hair_colour,
+               inner_colour = excluded.inner_colour, appearance_02 = excluded.appearance_02,
+               appearance_03 = excluded.appearance_03, appearance_96 = excluded.appearance_96,
+               appearance_98 = excluded.appearance_98, appearance_99 = excluded.appearance_99,
+               poogie_costume = excluded.poogie_costume, title = excluded.title, status = excluded.status,
+               comment = excluded.comment, unknown_04 = excluded.unknown_04, unknown_7c = excluded.unknown_7c,
+               unknown_81 = excluded.unknown_81, unknown_92 = excluded.unknown_92, unknown_93 = excluded.unknown_93,
+               unknown_9a = excluded.unknown_9a, unknown_9b = excluded.unknown_9b,
                updated_at = CURRENT_TIMESTAMP"#,
         hunter,
-        raw,
-        profile.hr,
-        profile.weapon
+        p.hr,
+        p.weapon,
+        p.gender,
+        p.voice,
+        p.hair_colour,
+        p.inner_colour,
+        a02,
+        a03,
+        a96,
+        a98,
+        a99,
+        p.poogie_costume,
+        p.title,
+        p.status,
+        comment,
+        p.unknown_04,
+        unknown_7c,
+        unknown_81,
+        p.unknown_92,
+        p.unknown_93,
+        unknown_9a,
+        unknown_9b
     )
-    .execute(db)
+    .execute(&mut *tx)
     .await?;
+    for (slot, e) in (0u8..).zip(&p.equipment) {
+        let [skill_1, skill_2, skill_3] = e.skills;
+        sqlx::query!(
+            r#"INSERT INTO hunter_equipment (hunter_id, slot, kind, item, deco_count, deco_level, skill_1, skill_2,
+                   skill_3)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+               ON CONFLICT (hunter_id, slot) DO UPDATE SET kind = excluded.kind, item = excluded.item,
+                   deco_count = excluded.deco_count, deco_level = excluded.deco_level, skill_1 = excluded.skill_1,
+                   skill_2 = excluded.skill_2, skill_3 = excluded.skill_3"#,
+            hunter,
+            slot,
+            e.kind,
+            e.item,
+            e.deco_count,
+            e.deco_level,
+            skill_1,
+            skill_2,
+            skill_3
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 

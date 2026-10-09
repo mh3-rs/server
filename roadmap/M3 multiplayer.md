@@ -63,11 +63,9 @@ player kicked for not being ready, a party broken by its leader before departure
   friend requests); city chat stays visible (they're in the same city). MH3SP's blank placeholder entry in every
   black list shows on the console as an empty line it can't delete: the Rust server sends an empty list (it copied
   the placeholder in M2).
-- **D3 The hunter profile block. Settled:** stored in the database (`hunter_profiles`), as the raw block *and* the
-  known fields, parsed and validated (HR u16 @0, weapon type u8 @5 so far; an invalid update is refused: the previous
-  block kept, one `warn`). The block other consoles receive is rebuilt: the raw bytes with the known fields written
-  over them. As fields get mapped they move from raw to parsed; once all are, the raw column goes (global roadmap,
-  M3).
+- **D3 The hunter profile block. Settled, done:** first planned in stages (raw block plus the known fields, fields
+  moving out of raw as they got mapped); then the game's code mapped every byte, so the block is parsed whole,
+  validated, stored as fields (`hunter_profiles`, `hunter_equipment`) and rebuilt from them; no raw column.
 - **D4 Disconnects. Open, a lab test first.** The Rust server sees a closed socket at once (MH3SP ~30 s later, at
   its next line check). A grace period (keeping a vanished player's place for a few seconds) only helps if the game
   can come back: in the lab a broken connection so far ends on an error screen and back to the title, a new login;
@@ -119,9 +117,13 @@ player kicked for not being ready, a party broken by its leader before departure
       console vanishes is cleaned up, before and after departure (tier 3).
 - [x] Chat (MH3SP's colour by level), tells, friends (mutual, requests stored and delivered once), black list
       (personal; blocked hunters' tells and requests not delivered) (D1, D2).
-- [x] Profile block (D3): `game/profile.rs` validates every write (HR ≤ 999; weapon type ≤ 8, a guess: every
-      recording has 1), an invalid one refused (previous kept, `warn`); `hunter_profiles` stores the raw block and the
-      known fields; others get the rebuilt block. Every recorded profile is accepted and rebuilt byte for byte.
+- [x] Profile block (D3), the whole block at once instead of stages: every byte mapped from the game's code (its
+      fill and sanitiser functions); every write validated against the game's rules (HR, appearance bounds, weapon
+      type agreeing with the weapon, equipment kinds per slot and item ids within the game's tables, the comment's
+      NUL…), an invalid one refused (previous kept, `warn`); the block others get built from the fields;
+      `hunter_profiles` and `hunter_equipment` store them. A profile notice past the block is refused (the receiving
+      console copies it at its offset unchecked). Every recorded profile is accepted and rebuilt byte for byte (all
+      recordings use the default hunter: appearance and equipment variety untested).
 - [ ] Disconnect lab test and grace period decision (D4).
 - [x] Concurrency model written down (who owns what; no socket written but by its task) (D5): `lib.rs`.
 - [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,

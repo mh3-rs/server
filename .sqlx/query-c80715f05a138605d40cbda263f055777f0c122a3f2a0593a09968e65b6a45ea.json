@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO hunter_profiles (hunter_id, hr, weapon_type, gender, voice, hair_colour, inner_colour,\n               appearance_02, appearance_03, appearance_96, appearance_98, appearance_99, poogie_costume, title,\n               status, comment, unknown_04, unknown_7c, unknown_81, unknown_92, unknown_93, unknown_9a, unknown_9b)\n           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,\n               ?22, ?23)\n           ON CONFLICT (hunter_id) DO UPDATE SET hr = excluded.hr, weapon_type = excluded.weapon_type,\n               gender = excluded.gender, voice = excluded.voice, hair_colour = excluded.hair_colour,\n               inner_colour = excluded.inner_colour, appearance_02 = excluded.appearance_02,\n               appearance_03 = excluded.appearance_03, appearance_96 = excluded.appearance_96,\n               appearance_98 = excluded.appearance_98, appearance_99 = excluded.appearance_99,\n               poogie_costume = excluded.poogie_costume, title = excluded.title, status = excluded.status,\n               comment = excluded.comment, unknown_04 = excluded.unknown_04, unknown_7c = excluded.unknown_7c,\n               unknown_81 = excluded.unknown_81, unknown_92 = excluded.unknown_92, unknown_93 = excluded.unknown_93,\n               unknown_9a = excluded.unknown_9a, unknown_9b = excluded.unknown_9b,\n               updated_at = CURRENT_TIMESTAMP",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 23
+    },
+    "nullable": []
+  },
+  "hash": "c80715f05a138605d40cbda263f055777f0c122a3f2a0593a09968e65b6a45ea"
+}

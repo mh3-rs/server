@@ -331,19 +331,31 @@ impl Fmp {
                 reply(seq, &AnsUserStatusSet {})
             }
             ReqUserBinaryNotice::ID => {
-                // The profile changed: the others at the player's place get the part named.
+                // The profile changed: the others at the player's place get the part named, from the validated
+                // block. Never a window past the block: the receiving console copies it at the offset unchecked.
                 let r = ReqUserBinaryNotice::decode(p)?;
                 let me = capcom_id(session);
                 let block = session.profile.bytes();
-                let start = (r.offset as usize).min(block.len());
-                let end = start.saturating_add(r.size as usize).min(block.len());
-                let ntc = NtcUserBinaryNotice {
-                    unk: r.unk,
-                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
-                    offset: r.offset,
-                    data: block.slice(start..end),
-                };
-                relay(shared, me, &ntc, seq)?;
+                let start = r.offset as usize;
+                match start
+                    .checked_add(r.size as usize)
+                    .filter(|&end| end <= block.len())
+                {
+                    Some(end) => {
+                        let ntc = NtcUserBinaryNotice {
+                            unk: r.unk,
+                            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                            offset: r.offset,
+                            data: block.slice(start..end),
+                        };
+                        relay(shared, me, &ntc, seq)?;
+                    }
+                    None => warn!(
+                        offset = r.offset,
+                        size = r.size,
+                        "profile notice past the block refused"
+                    ),
+                }
                 reply(seq, &AnsUserBinaryNotice {})
             }
             ReqLayerChildListHead::ID => {

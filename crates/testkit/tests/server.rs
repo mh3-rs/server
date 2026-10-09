@@ -825,8 +825,8 @@ async fn invalid_profiles_are_refused() {
     let running = server::start(&config).await.unwrap();
     let mut a = enter_world(&running).await;
     let mut b = enter_world(&running).await;
-    // HR 5, weapon type 2; then HR 1000.
-    for (seq, offset, data) in [(10, 0, vec![0, 5, 0, 0, 0, 2]), (11, 0, vec![0x03, 0xe8])] {
+    // HR 5; then HR 1000.
+    for (seq, offset, data) in [(10, 0, vec![0, 5]), (11, 0, vec![0x03, 0xe8])] {
         send(
             &mut a,
             seq,
@@ -859,7 +859,7 @@ async fn invalid_profiles_are_refused() {
             _ => None,
         })
         .collect();
-    assert!(blocks.contains(&vec![0, 5, 0, 0, 0, 2]), "{blocks:?}");
+    assert!(blocks.contains(&vec![0, 5, 0, 0, 0, 1]), "{blocks:?}");
     running.stop().await;
 }
 
