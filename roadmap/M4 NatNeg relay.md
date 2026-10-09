@@ -82,18 +82,17 @@ Settled with the user on 2026-10-09.
 - **D2 Strategy. Settled:** `NATNEG_STRATEGY = hybrid | p2p | relay` (configuration), default `hybrid`. `p2p` and
   `relay` force one way for everyone.
 - **D3 Hybrid. Settled: transparent when possible, else on the first failure.** Each player carries an
-  `Option<Nat>`, `Nat` being `Direct | Relay` (no "hybrid" at that level; `None`: not classified yet). With `p2p` or
-  `relay` it's set at login; with `hybrid` it starts `None` and is classified during the player's first negotiation: the `INIT`s arrive before the
-  server sends `CONNECT` (the console waits up to 60 s for it), so the server probes them first:
-  - *filtering* (one IP is enough): an `ERT_TEST` to the console's NatNeg socket from another port; the game answers
-    `ERT_ACK`: no answer means a restricted NAT;
-  - *symmetric mapping* (needs natneg2/natneg3 on a second IP, D9): different public ports for the `INIT`s sent to
-    natneg1 and natneg2/3.
-  A pair is relayed if either player is `Relay`; the classification is kept for the player's session. When the
-  classification can't tell (one IP, two restricted NATs) the pair tries P2P; a failure (`REPORT` with failure, or
-  11688 in `NtcCollectionLog`) flags the strict side `Relay` (both if unknown), so the player's retry goes through the
-  relay. A second `CONNECT` after a failure is ignored by the game, and nothing retries by itself: the retry is the
-  player's (rejoining the city or quest).
+  `Option<Nat>`, `Nat` being `Direct | Relay` (no "hybrid" at that level; `None`: not known yet), learned from its
+  negotiations; it's a property of the NAT, so it's set on every logged-in player at that IP. `p2p` and `relay` don't
+  use it. A pair is relayed if either console is `Relay`:
+  - *at once*, for a **symmetric NAT**: the console's port type 1 `INIT` (to natneg1) and 2 (to natneg2, same socket)
+    arrive from different ports. Needs natneg2/natneg3 to resolve to another IP than natneg1 (DNS only: with one IP
+    the ports always match, so the check never misfires and needs no setting);
+  - *after a failure*: a direct pair's `REPORT` with failure flags both IPs `Relay` (which side can't punch is
+    unknown): the player's retry (rejoining the city or quest) goes through the relay. A second `CONNECT` is ignored
+    by the game and nothing retries by itself (lab run 9). A success sets `Direct` (never undoes `Relay`).
+  The filtering probe (`ERT_TEST`) was dropped: it can only show that a NAT is open, and an open NAT never needs the
+  relay.
 - **D4 Relay ports. Settled:** one UDP port per pair (forwarding by source: from A to B, from B to A, nothing else),
   from a configured range (`RELAY_PORTS`, e.g. `40000-40999`: 1,000 pairs; a full city or party is 6), freed after
   5 idle minutes (never under the game's 20 s) or when both consoles have left. **The operator opens UDP 27900, 27901
@@ -109,10 +108,8 @@ Settled with the user on 2026-10-09.
 - **D7 Topology. Answered by the decomp, to confirm in the lab:** a full mesh negotiated pair by pair (up to 6 pairs);
   with 3 consoles, one pair blocked (the session's own relay through a member).
 - **D8 Relay address. Settled:** in the configuration: `EXTERNAL_ADDRESS` (the address consoles reach FMP at).
-- **D9 A second address for NAT detection. Settled: optional** (deployments rarely have a second IP):
-  `NATNEG_SECONDARY_ADDRESS`; when set,
-  natneg2/natneg3 resolve to it and the symmetric-NAT detection is on; without it, hybrid = the filtering probe plus
-  the fallback after one failure.
+- **D9 A second address for NAT detection. Settled: optional, DNS only** (deployments rarely have a second IP):
+  pointing natneg2/natneg3 at a second IP of the server turns the symmetric-NAT check on (D3); no setting.
 
 ## Work (once the decisions are settled)
 
@@ -127,8 +124,8 @@ Settled with the user on 2026-10-09.
 - [x] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
       `REPORT_ACK`, sessions forgotten after a minute; only logged-in consoles (D5).
 - [x] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
-- [ ] Strategies (D2, D3): `Option<Nat>` per player; classification from the `INIT`s (`ERT_TEST` probe; symmetric mapping
-      with D9); a pair relayed if either is `Relay`; the failure fallback.
+- [x] Strategies (D2, D3): `Option<Nat>` per player (by IP); the symmetric-NAT check; a pair relayed if either is
+      `Relay`; the failure fallback.
 - [ ] Replay: the harness replays recorded UDP too (NatNeg exchanges; P2P datagrams aren't the server's).
 - [ ] Tier 5: fake consoles through NatNeg and P2P in each strategy; simulated NAT; forced failure → relay on retry;
       relay latency (forwarding p99 under 1 ms on one host).
@@ -140,4 +137,4 @@ Settled with the user on 2026-10-09.
 - [ ] Lab: `hybrid` (after step 4); a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold
       like P2P does).
 - [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range), the configuration
-      (`NATNEG_STRATEGY`, `RELAY_PORTS`, `NATNEG_SECONDARY_ADDRESS`).
+      (`NATNEG_STRATEGY`, `RELAY_PORTS`; natneg2/natneg3's DNS for the symmetric-NAT check).
