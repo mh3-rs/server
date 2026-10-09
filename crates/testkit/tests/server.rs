@@ -698,15 +698,12 @@ async fn solo_city_and_quest() {
     assert_eq!(gone.extra.0, vec![(1, Some(4)), (2, Some(0))]);
     expect::<AnsCircleLeave>(&mut c).await;
 
-    // Back in the gate: city 3 is still there (the player left only the quest), then gone once left.
+    // Back in the gate: city 3 went with its last player (no population, no settings left).
     send(&mut c, 22, ReqLayerUp {}).await;
     expect::<AnsLayerUp>(&mut c).await;
     let cities = children(&mut c, 23, 1, 10).await;
-    assert_eq!(
-        long(cities[2].0.get(0x06)),
-        0,
-        "the city went with its last player"
-    );
+    assert_eq!(long(cities[2].0.get(0x06)), 0);
+    assert!(cities[2].1.0.is_empty(), "city 3 still has its settings");
     send(&mut c, 24, ReqLayerEnd {}).await;
     expect::<AnsLayerEnd>(&mut c).await;
     running.stop().await;

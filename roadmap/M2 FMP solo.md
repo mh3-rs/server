@@ -112,5 +112,8 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       have 9 items in their last arena set's 8-slot pouch, written whole.
 - [x] World model (D3), players registry and mailboxes (D4).
 - [x] Replay gate: the solo scenarios, every connection (`REACHED = M2`: `s00`, the three `s02`, `s03`).
-- [ ] Tier 3 solo scenarios.
+- [x] Tier 3 solo scenarios (`crates/testkit/tests/server.rs`): `solo_city_and_quest` (gate and city lists,
+      reservation, the creator's own notifications before its answers, departure, leaving), `cities_are_shared`
+      (a reserved city shown full and refused to another player with an alert, then joined; the city survives its
+      creator leaving), `content_downloads` (every type `0x01`–`0x0f`: version, head and chunks agree).
 - [ ] Dolphin run (exit criterion 1).
