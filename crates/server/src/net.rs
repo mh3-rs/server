@@ -176,7 +176,7 @@ async fn serve_frames(
                     None => return Ok(()),
                 };
                 debug!(packet = %req.id, seq = req.seq, len = req.payload.len(), "recv");
-                trace!(payload = %hex(&req.payload), "recv payload");
+                trace!(payload = %hex::encode(&req.payload), "recv payload");
                 match req.id {
                     AnsLineCheck::ID => {
                         AnsLineCheck::decode(&req.payload)?;
@@ -207,7 +207,7 @@ fn shut(req: &Frame) -> Handled {
 async fn send(framed: &mut Framed<Box<dyn Io>, FrameCodec>, frames: Vec<Frame>) -> bool {
     for frame in frames {
         debug!(packet = %frame.id, seq = frame.seq, len = frame.payload.len(), "send");
-        trace!(payload = %hex(&frame.payload), "send payload");
+        trace!(payload = %hex::encode(&frame.payload), "send payload");
         if let Err(e) = framed.feed(frame).await {
             debug!(error = %e, "connection lost");
             return false;
@@ -226,8 +226,4 @@ async fn send(framed: &mut Framed<Box<dyn Io>, FrameCodec>, frames: Vec<Frame>) 
 pub fn announce(role: impl fmt::Display, listener: &TcpListener) -> anyhow::Result<()> {
     info!(%role, addr = %listener.local_addr()?, "listening");
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

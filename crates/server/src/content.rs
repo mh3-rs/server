@@ -9,6 +9,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context as _, Result, bail};
+use bytes::{Buf, BufMut};
 use serde_json::Value;
 use tracing::error;
 
@@ -51,7 +52,7 @@ impl Binary {
     fn new(bytes: Vec<u8>) -> Self {
         let hash = openssl::sha::sha256(&bytes);
         Binary {
-            version: u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]),
+            version: (&hash[..]).get_u32(),
             bytes,
         }
     }
@@ -152,10 +153,11 @@ fn jhen_times(day: u64) -> Vec<u8> {
     } else {
         day - in_cycle + JHEN_CYCLE
     };
-    [start, start + JHEN_START, start + JHEN_END]
-        .iter()
-        .flat_map(|d| ((d * DAY) as u32).to_be_bytes())
-        .collect()
+    let mut out = Vec::new();
+    for d in [start, start + JHEN_START, start + JHEN_END] {
+        out.put_u32((d * DAY) as u32);
+    }
+    out
 }
 
 fn jhen_active(day: u64) -> bool {
@@ -206,8 +208,8 @@ fn trading_post(ctx: &Context) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for entry in &days[(ctx.day() % days.len() as u64) as usize] {
         for [item, qty] in entry.iter().chain([&[0, 0]]) {
-            out.extend_from_slice(&item.to_be_bytes());
-            out.extend_from_slice(&qty.to_be_bytes());
+            out.put_u16(*item);
+            out.put_u16(*qty);
         }
     }
     Ok(out)
@@ -231,13 +233,13 @@ fn server_types(started: SystemTime, language: Language) -> Vec<u8> {
             168,
         );
     }
-    out.extend_from_slice(&0u32.to_be_bytes());
+    out.put_u32(0);
     // The server's start, as the reference of the day/night cycle.
     let started = started
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as u32);
-    out.extend_from_slice(&started.to_be_bytes());
-    out.extend_from_slice(&TICKS_PER_CYCLE.to_be_bytes());
+    out.put_u32(started);
+    out.put_u32(TICKS_PER_CYCLE);
     for i in 0..32 {
         pad(&mut out, &text(Text::CitySeeking(i), language), 48);
         // Unknown flags (MH3SP's values).
@@ -247,8 +249,8 @@ fn server_types(started: SystemTime, language: Language) -> Vec<u8> {
         pad(&mut out, &text(Text::CityHrLimit(i), language), 30);
         // Enabled; restricted by HR.
         out.extend_from_slice(&[1, 0]);
-        out.extend_from_slice(&min.to_be_bytes());
-        out.extend_from_slice(&max.to_be_bytes());
+        out.put_u16(*min);
+        out.put_u16(*max);
     }
     for i in 0..64 {
         pad(&mut out, &text(Text::CityGoal(i), language), 30);
@@ -256,12 +258,12 @@ fn server_types(started: SystemTime, language: Language) -> Vec<u8> {
         out.extend_from_slice(&[1, 0, 0, 0, 0, 0]);
     }
     for (min, max) in SERVER_TYPE_HR {
-        out.extend_from_slice(&min.to_be_bytes());
-        out.extend_from_slice(&max.to_be_bytes());
+        out.put_u16(min);
+        out.put_u16(max);
     }
     // 8 timeouts, 30 s each, in frames (30 per second).
     for _ in 0..8 {
-        out.extend_from_slice(&(30u16 * 30).to_be_bytes());
+        out.put_u16(30 * 30);
     }
     out
 }
@@ -290,14 +292,10 @@ mod tests {
     fn jhen_mohran_cycle() {
         // Day 0 of a cycle: fog today, Jhen Mohran tomorrow until day 3.
         let t = jhen_times(14 * 1000);
-        let day =
-            |i: usize| u32::from_be_bytes(t[i * 4..i * 4 + 4].try_into().unwrap()) as u64 / DAY;
+        let day = |i: usize| (&t[i * 4..]).get_u32() as u64 / DAY;
         assert_eq!((day(0), day(1), day(2)), (14000, 14001, 14003));
         // Day 5: the next cycle.
-        assert_eq!(
-            u32::from_be_bytes(jhen_times(14005)[..4].try_into().unwrap()) as u64 / DAY,
-            14014
-        );
+        assert_eq!((&jhen_times(14005)[..]).get_u32() as u64 / DAY, 14014);
         assert!(
             !jhen_active(14000) && jhen_active(14001) && jhen_active(14002) && !jhen_active(14003)
         );

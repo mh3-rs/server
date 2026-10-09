@@ -3,7 +3,7 @@
 //!
 //! Strings are bytes, never UTF-8: names and texts can be Shift-JIS.
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
@@ -134,24 +134,20 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
 
-    fn array<const N: usize>(&mut self) -> Result<[u8; N], DecodeError> {
-        Ok(self.bytes(N)?.try_into().unwrap())
-    }
-
     pub fn u8(&mut self) -> Result<u8, DecodeError> {
-        Ok(self.array::<1>()?[0])
+        Ok(self.bytes(1)?.get_u8())
     }
 
     pub fn u16(&mut self) -> Result<u16, DecodeError> {
-        Ok(u16::from_be_bytes(self.array()?))
+        Ok(self.bytes(2)?.get_u16())
     }
 
     pub fn u32(&mut self) -> Result<u32, DecodeError> {
-        Ok(u32::from_be_bytes(self.array()?))
+        Ok(self.bytes(4)?.get_u32())
     }
 
     pub fn u64(&mut self) -> Result<u64, DecodeError> {
-        Ok(u64::from_be_bytes(self.array()?))
+        Ok(self.bytes(8)?.get_u64())
     }
 
     /// `u8` length, then bytes.

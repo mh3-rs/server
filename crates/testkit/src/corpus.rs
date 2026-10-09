@@ -154,7 +154,7 @@ pub fn split(console: &str, packets: &[Packet], t0: u64) -> Result<ConsoleRecord
                         seq: frame.seq,
                         id: format!("{:08x}", frame.id.0),
                         name: frame.id.name().unwrap_or("Unknown").to_owned(),
-                        payload: hex(&frame.payload),
+                        payload: hex::encode(&frame.payload),
                     });
                 }
             }
@@ -165,7 +165,7 @@ pub fn split(console: &str, packets: &[Packet], t0: u64) -> Result<ConsoleRecord
                     dir,
                     local: local.port(),
                     remote: remote.to_string(),
-                    payload: hex(p.payload),
+                    payload: hex::encode(p.payload),
                 });
             }
         }
@@ -281,18 +281,6 @@ fn jsonl<T: Serialize>(items: &[T]) -> Result<String> {
         out.push('\n');
     }
     Ok(out)
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-pub fn unhex(s: &str) -> Result<Vec<u8>> {
-    ensure!(s.len().is_multiple_of(2), "odd hex length");
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).with_context(|| format!("bad hex at {i}")))
-        .collect()
 }
 
 #[cfg(test)]

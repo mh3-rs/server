@@ -85,8 +85,7 @@ impl Masks {
                 );
             }
             if let Some(pattern) = &m.pattern {
-                crate::corpus::unhex(pattern)
-                    .with_context(|| format!("mask on {}: pattern", m.packet))?;
+                hex::decode(pattern).with_context(|| format!("mask on {}: pattern", m.packet))?;
             }
         }
         Ok(Self(masks, omits))
@@ -181,7 +180,7 @@ pub fn matches(
         match &m.pattern {
             None => ranges.push((m, m.offset)),
             Some(pattern) => {
-                let pattern = crate::corpus::unhex(pattern).expect("checked at load");
+                let pattern = hex::decode(pattern).expect("checked at load");
                 let at = expected.windows(pattern.len()).enumerate();
                 ranges.extend(
                     at.filter(|(_, w)| *w == pattern)

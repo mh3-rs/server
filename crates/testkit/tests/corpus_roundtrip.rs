@@ -37,7 +37,7 @@ fn every_stream_reencodes_byte_for_byte() {
                         let frame = Frame {
                             seq: f.seq,
                             id: PacketId(u32::from_str_radix(&f.id, 16).unwrap()),
-                            payload: Bytes::from(corpus::unhex(&f.payload).unwrap()),
+                            payload: Bytes::from(hex::decode(&f.payload).unwrap()),
                         };
                         FrameCodec.encode(frame, &mut out).unwrap();
                     }
@@ -93,7 +93,7 @@ fn real_pat_data_records_reencode() {
                 if !matches!(f.name.as_str(), "AnsConnection" | "ReqCircleCreate") {
                     continue;
                 }
-                let payload = corpus::unhex(&f.payload).unwrap();
+                let payload = hex::decode(&f.payload).unwrap();
                 let mut reader = Reader::new(&payload);
                 let data = reader.pat_data().unwrap();
                 if f.name == "AnsConnection" {
@@ -130,7 +130,7 @@ fn typed_packets_reencode() {
         for rec in corpus::load(&scenario).unwrap() {
             for c in &rec.connections {
                 for f in &c.frames {
-                    let payload = corpus::unhex(&f.payload).unwrap();
+                    let payload = hex::decode(&f.payload).unwrap();
                     let id = PacketId(u32::from_str_radix(&f.id, 16).unwrap());
                     let Some(result) = reencode(id, &payload) else {
                         continue;

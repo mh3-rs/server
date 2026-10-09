@@ -164,7 +164,7 @@ fn print_report(scenario: &Path, reports: &[ConnectionReport]) -> bool {
 
 /// `payload differs at byte 2 (13 bytes): expected …4142… got …5859…`
 fn payload_diff(expected_hex: &str, got: &[u8]) -> String {
-    let expected = testkit::corpus::unhex(expected_hex).unwrap_or_default();
+    let expected = hex::decode(expected_hex).unwrap_or_default();
     if expected == got {
         return "same payload, different seq".to_owned();
     }
@@ -173,7 +173,7 @@ fn payload_diff(expected_hex: &str, got: &[u8]) -> String {
         .zip(got)
         .position(|(a, b)| a != b)
         .unwrap_or(expected.len().min(got.len()));
-    let window = |b: &[u8]| testkit::corpus::hex(&b[at.min(b.len())..(at + 12).min(b.len())]);
+    let window = |b: &[u8]| hex::encode(&b[at.min(b.len())..(at + 12).min(b.len())]);
     let lens = if expected.len() == got.len() {
         format!("{} bytes", got.len())
     } else {
@@ -214,7 +214,7 @@ fn diff(a: &str, b: &str) -> Result<()> {
                 &d.a[start.min(d.a.len())..end.min(d.a.len())],
                 &d.b[start.min(d.b.len())..end.min(d.b.len())],
             );
-            let (hx, hy) = (testkit::corpus::hex(x), testkit::corpus::hex(y));
+            let (hx, hy) = (hex::encode(x), hex::encode(y));
             println!(
                 "    [{start}..{end}) {hx} \"{}\" | {hy} \"{}\"",
                 ascii(x),

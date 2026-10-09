@@ -7,6 +7,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
+use bytes::BufMut;
 use serde::Deserialize;
 
 use super::pad;
@@ -238,15 +239,15 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
     let u = &quest.unknown;
     let mut d = Vec::with_capacity(QUEST_SIZE + 0x400);
     pad(&mut d, &q.name, 0x28);
-    d.extend_from_slice(&0u32.to_be_bytes());
-    d.extend_from_slice(&q.quest_id.to_be_bytes());
+    d.put_u32(0);
+    d.put_u16(q.quest_id);
     pad(&mut d, &q.description, 80);
-    d.extend_from_slice(&[0; 0xC]);
+    d.put_bytes(0, 0xC);
     d.extend_from_slice(&[q.quest_rank, q.location]);
     pad(&mut d, &o.subquest_1.description, 0x29);
     pad(&mut d, &o.subquest_2.description, 0x29);
     pad(&mut d, &q.success_message, 0x5C);
-    d.extend_from_slice(&q.time_limit.to_be_bytes());
+    d.put_i16(q.time_limit);
     pad(
         &mut d,
         q.failure_message
@@ -254,13 +255,13 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
             .unwrap_or("Reward hits 0, or time\nexpires."),
         0x5C,
     );
-    d.extend_from_slice(&q.hrp_restriction.to_be_bytes());
+    d.put_i16(q.hrp_restriction);
     pad(&mut d, &q.client, 0x28);
-    d.extend_from_slice(&u.unk_int0.to_be_bytes());
-    d.extend_from_slice(&u.unk_short0.to_be_bytes());
+    d.put_u32(u.unk_int0);
+    d.put_u16(u.unk_short0);
     d.push(u.unk_byte0);
     pad(&mut d, &q.details, 0x100);
-    d.extend_from_slice(&[0; 0x3D]);
+    d.put_bytes(0, 0x3D);
     d.extend_from_slice(&[
         u.unk_bytes0_0,
         u.unk_bytes0_1,
@@ -273,11 +274,11 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
         u.unk_bytes2_0,
         u.unk_bytes2_1,
     ]);
-    d.extend_from_slice(&q.flags().to_be_bytes());
+    d.put_u32(q.flags());
     let m = &quest.large_monsters;
     for monster in [&m.monster_1, &m.monster_2, &m.monster_3] {
         match monster.kind {
-            0 => d.extend_from_slice(&[0; 8]),
+            0 => d.put_bytes(0, 8),
             _ => d.extend_from_slice(&[
                 monster.kind,
                 monster.starting_area,
@@ -290,7 +291,7 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
             ]),
         }
     }
-    d.extend_from_slice(&q.summon.to_be_bytes());
+    d.put_u32(q.summon);
     for objective in [&o.main_quest, &o.subquest_1, &o.subquest_2] {
         properties(&mut d, objective);
     }
@@ -305,16 +306,16 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
         o.subquest_1.hrp_reward,
         o.subquest_2.hrp_reward,
     ] {
-        d.extend_from_slice(&v.to_be_bytes());
+        d.put_u32(v);
     }
     d.extend_from_slice(&[u.unk_4, q.resources, u.unk_5, u.unk_6]);
     for v in [u.unk_short1, q.supply_set_number, u.unk_short2, u.unk_7] {
-        d.extend_from_slice(&v.to_be_bytes());
+        d.put_u16(v);
     }
     d.extend_from_slice(&[u.unk_byte1, u.unk_byte2]);
-    d.extend_from_slice(&q.starting_position.to_be_bytes());
+    d.put_i16(q.starting_position);
     d.extend_from_slice(&[u.unk_byte3, u.unk_byte4]);
-    d.extend_from_slice(&0x04b8u16.to_be_bytes());
+    d.put_u16(0x04b8);
     d.extend_from_slice(&[u.unk_byte7, u.unk_byte8]);
     for v in [
         q.general_enemy_level,
@@ -325,9 +326,9 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
         q.wave_2_transition_target,
         q.wave_2_transition_quantity,
     ] {
-        d.extend_from_slice(&v.to_be_bytes());
+        d.put_i16(v);
     }
-    d.extend_from_slice(&u.unk_12.to_be_bytes());
+    d.put_u32(u.unk_12);
     // The objectives again, each with its rewards; a sub-quest has one reward row, then an empty one.
     properties(&mut d, &o.main_quest);
     rewards(&mut d, &o.main_quest.rewards_row_1);
@@ -336,9 +337,9 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
         properties(&mut d, sub);
         match sub.kind {
             Some(_) => rewards(&mut d, &sub.rewards_row_1),
-            None => d.extend_from_slice(&[0; 44]),
+            None => d.put_bytes(0, 44),
         }
-        d.extend_from_slice(&[0; 44]);
+        d.put_bytes(0, 44);
     }
     ensure!(
         d.len() == QUEST_SIZE,
@@ -348,7 +349,7 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
     );
 
     let small = small_monsters(quest)?;
-    d.extend_from_slice(&((QUEST_SIZE + 4 + small.len()) as u32).to_be_bytes());
+    d.put_u32((QUEST_SIZE + 4 + small.len()) as u32);
     d.extend_from_slice(&small);
     if let Some(sets) = &quest.arena_equipment {
         ensure!(
@@ -365,11 +366,11 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
 fn properties(d: &mut Vec<u8>, o: &Objective) {
     match o.kind {
         Some(kind) => {
-            d.extend_from_slice(&kind.to_be_bytes());
-            d.extend_from_slice(&o.objective_type.to_be_bytes());
-            d.extend_from_slice(&o.objective_num.to_be_bytes());
+            d.put_u32(kind);
+            d.put_i16(o.objective_type);
+            d.put_i16(o.objective_num);
         }
-        None => d.extend_from_slice(&[0; 8]),
+        None => d.put_bytes(0, 8),
     }
 }
 
@@ -378,10 +379,10 @@ fn rewards(d: &mut Vec<u8>, row: &[(i16, u8, u8)]) {
     for slot in 0..11 {
         match row.get(slot) {
             Some(&(item, amount, percent)) => {
-                d.extend_from_slice(&item.to_be_bytes());
+                d.put_i16(item);
                 d.extend_from_slice(&[amount, percent]);
             }
-            None => d.extend_from_slice(&[0; 4]),
+            None => d.put_bytes(0, 4),
         }
     }
 }
@@ -402,14 +403,14 @@ fn small_monsters(quest: &Quest) -> Result<Vec<u8>> {
     ensure!(waves <= 3, "quest {}: {waves} waves (3 at most)", q.name);
     let mut d = Vec::new();
     for v in [0x0C, 0x0C + 8 * areas as u32] {
-        d.extend_from_slice(&v.to_be_bytes());
+        d.put_u32(v);
     }
     let third: u32 = if waves < 3 {
         0xCCCC_CCCC
     } else {
         0x0C + 16 * areas as u32
     };
-    d.extend_from_slice(&third.to_be_bytes());
+    d.put_u32(third);
     let mut records = Vec::new();
     let mut offset = 0x0C + 8 * entries.len();
     for (entry, monsters) in entries.iter().enumerate() {
@@ -423,7 +424,7 @@ fn small_monsters(quest: &Quest) -> Result<Vec<u8>> {
                     m.room
                 );
             }
-            block.extend_from_slice(&m.kind.to_be_bytes());
+            block.put_u32(m.kind);
             block.extend_from_slice(&[
                 0,
                 0,
@@ -434,19 +435,19 @@ fn small_monsters(quest: &Quest) -> Result<Vec<u8>> {
                 m.unk1,
                 m.variant,
             ]);
-            block.extend_from_slice(&0u32.to_be_bytes());
+            block.put_u32(0);
             for p in [m.pos_x, m.pos_y, m.pos_z] {
-                block.extend_from_slice(&(p as f32).to_be_bytes());
+                block.put_f32(p as f32);
             }
             for r in [m.rot_x, m.rot_y, m.rot_z] {
-                block.extend_from_slice(&((180.05 * r) as i32).to_be_bytes());
+                block.put_i32((180.05 * r) as i32);
             }
-            block.extend_from_slice(&0xFF00_0000u32.to_be_bytes());
-            block.extend_from_slice(&0u32.to_be_bytes());
+            block.put_u32(0xFF00_0000);
+            block.put_u32(0);
         }
-        block.extend_from_slice(&[0; 0x30]);
-        d.extend_from_slice(&(offset as u32).to_be_bytes());
-        d.extend_from_slice(&(block.len() as u32).to_be_bytes());
+        block.put_bytes(0, 0x30);
+        d.put_u32(offset as u32);
+        d.put_u32(block.len() as u32);
         offset += block.len();
         records.extend_from_slice(&block);
     }
@@ -470,7 +471,7 @@ fn arena(d: &mut Vec<u8>, sets: &[ArenaSet]) -> Result<()> {
     );
     let slot = |d: &mut Vec<u8>, class: u16, id: u16, slots: u16| {
         d.extend_from_slice(&[slots as u8, class as u8]);
-        d.extend_from_slice(&id.to_be_bytes());
+        d.put_u16(id);
     };
     let weapon = |d: &mut Vec<u8>, w: &[u16]| -> Result<()> {
         ensure!(
@@ -485,7 +486,7 @@ fn arena(d: &mut Vec<u8>, sets: &[ArenaSet]) -> Result<()> {
         for w in [w2, w3] {
             match w {
                 Some(w) => weapon(d, w)?,
-                None => d.extend_from_slice(&[0xFF; 4]),
+                None => d.put_bytes(0xFF, 4),
             }
         }
         for (class, id) in [
@@ -502,8 +503,8 @@ fn arena(d: &mut Vec<u8>, sets: &[ArenaSet]) -> Result<()> {
         for (list, size) in [(items, 24), (pouch, 8)] {
             for i in 0..size.max(list.len()) {
                 let (item, qty) = list.get(i).copied().unwrap_or((0, 0));
-                d.extend_from_slice(&item.to_be_bytes());
-                d.extend_from_slice(&qty.to_be_bytes());
+                d.put_u16(item);
+                d.put_u16(qty);
             }
         }
     }

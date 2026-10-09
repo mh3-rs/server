@@ -4,6 +4,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 use anyhow::{Context, Result, bail, ensure};
+use bytes::Buf;
 
 const GLOBAL_HEADER_LEN: usize = 24;
 const RECORD_HEADER_LEN: usize = 16;
@@ -37,12 +38,12 @@ pub struct Capture<'a> {
 
 pub fn parse(data: &[u8]) -> Result<Capture<'_>> {
     ensure!(data.len() >= GLOBAL_HEADER_LEN, "truncated pcap header");
-    let magic = u32::from_le_bytes(data[0..4].try_into()?);
+    let magic = (&data[0..]).get_u32_le();
     ensure!(
         magic == MAGIC_LE_MICROS,
         "unsupported pcap magic {magic:#010x}"
     );
-    let linktype = u32::from_le_bytes(data[20..24].try_into()?);
+    let linktype = (&data[20..]).get_u32_le();
     ensure!(
         linktype == LINKTYPE_ETHERNET,
         "unsupported link type {linktype}"
@@ -54,8 +55,9 @@ pub fn parse(data: &[u8]) -> Result<Capture<'_>> {
         let header = data
             .get(off..off + RECORD_HEADER_LEN)
             .context("truncated pcap record header")?;
-        let le = |i: usize| u32::from_le_bytes(header[i..i + 4].try_into().unwrap());
-        let (secs, micros, incl_len) = (le(0), le(4), le(8) as usize);
+        let mut header = header;
+        let (secs, micros) = (header.get_u32_le(), header.get_u32_le());
+        let incl_len = header.get_u32_le() as usize;
         let end = off + RECORD_HEADER_LEN + incl_len;
         let record = data.get(off..end).context("truncated pcap record")?;
         let ts_us = u64::from(secs) * 1_000_000 + u64::from(micros);
@@ -81,16 +83,16 @@ fn parse_ethernet(ts_us: u64, record: &[u8]) -> Result<Option<Packet<'_>>> {
     let ip = &frame[14..];
     ensure!(ip.len() >= 20 && ip[0] >> 4 == 4, "bad IPv4 header");
     let ihl = usize::from(ip[0] & 0x0f) * 4;
-    let total = usize::from(u16::from_be_bytes([ip[2], ip[3]]));
+    let total = usize::from((&ip[2..]).get_u16());
     let ip = ip.get(..total).context("truncated IPv4 packet")?;
     let src = Ipv4Addr::from(<[u8; 4]>::try_from(&ip[12..16])?);
     let dst = Ipv4Addr::from(<[u8; 4]>::try_from(&ip[16..20])?);
     let l4 = ip.get(ihl..).context("bad IPv4 header length")?;
     ensure!(l4.len() >= 8, "truncated transport header");
-    let ports = (
-        u16::from_be_bytes([l4[0], l4[1]]),
-        u16::from_be_bytes([l4[2], l4[3]]),
-    );
+    let ports = {
+        let mut l4 = l4;
+        (l4.get_u16(), l4.get_u16())
+    };
     let (proto, payload) = match ip[9] {
         6 => {
             let data_off = usize::from(l4.get(12).context("truncated TCP header")? >> 4) * 4;
@@ -126,15 +128,18 @@ pub fn write<'a>(header: &[u8], packets: impl IntoIterator<Item = &'a Packet<'a>
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use bytes::BufMut;
+
     use super::*;
 
     /// Builds a pcap with one Ethernet/IPv4 record per `(ts_us, proto, src, dst, payload)`.
     pub(crate) fn build(packets: &[(u64, Proto, &str, &str, &[u8])]) -> Vec<u8> {
-        let mut out = MAGIC_LE_MICROS.to_le_bytes().to_vec();
-        out.extend_from_slice(&[2, 0, 4, 0]); // version 2.4
-        out.extend_from_slice(&[0; 8]); // timezone, accuracy
-        out.extend_from_slice(&65535u32.to_le_bytes());
-        out.extend_from_slice(&LINKTYPE_ETHERNET.to_le_bytes());
+        let mut out = Vec::new();
+        out.put_u32_le(MAGIC_LE_MICROS);
+        out.put_slice(&[2, 0, 4, 0]); // version 2.4
+        out.put_bytes(0, 8); // timezone, accuracy
+        out.put_u32_le(65535);
+        out.put_u32_le(LINKTYPE_ETHERNET);
         for &(ts, proto, src, dst, payload) in packets {
             let src: SocketAddrV4 = src.parse().unwrap();
             let dst: SocketAddrV4 = dst.parse().unwrap();
@@ -142,7 +147,7 @@ pub(crate) mod tests {
             let total = (20 + l4_len + payload.len()) as u16;
             let mut frame = vec![0u8; 12];
             frame.extend_from_slice(&[0x08, 0x00, 0x45, 0]);
-            frame.extend_from_slice(&total.to_be_bytes());
+            frame.put_u16(total);
             frame.extend_from_slice(&[
                 0,
                 0,
@@ -155,18 +160,18 @@ pub(crate) mod tests {
             ]);
             frame.extend_from_slice(&src.ip().octets());
             frame.extend_from_slice(&dst.ip().octets());
-            frame.extend_from_slice(&src.port().to_be_bytes());
-            frame.extend_from_slice(&dst.port().to_be_bytes());
+            frame.put_u16(src.port());
+            frame.put_u16(dst.port());
             if proto == Proto::Tcp {
                 frame.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0x50, 0x18, 0, 0, 0, 0, 0, 0]);
             } else {
-                frame.extend_from_slice(&(8 + payload.len() as u16).to_be_bytes());
+                frame.put_u16(8 + payload.len() as u16);
                 frame.extend_from_slice(&[0, 0]);
             }
             frame.extend_from_slice(payload);
             let len = frame.len() as u32;
             for v in [(ts / 1_000_000) as u32, (ts % 1_000_000) as u32, len, len] {
-                out.extend_from_slice(&v.to_le_bytes());
+                out.put_u32_le(v);
             }
             out.extend_from_slice(&frame);
         }

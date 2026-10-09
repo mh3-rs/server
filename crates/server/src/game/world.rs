@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 use wire::{Item, OptionalFields, PatData};
 
 use super::Fault;
@@ -723,26 +723,22 @@ pub fn path(server: u32, gate: Option<u16>, city: Option<u16>) -> [u8; 14] {
         (None, None) => 1,
     };
     let mut path = [0; 14];
-    path[..4].copy_from_slice(&depth.to_be_bytes());
-    path[4..8].copy_from_slice(&server.to_be_bytes());
-    path[8..10].copy_from_slice(&1u16.to_be_bytes());
-    path[10..12].copy_from_slice(&gate.unwrap_or(0).to_be_bytes());
-    path[12..14].copy_from_slice(&city.unwrap_or(0).to_be_bytes());
+    let mut out = &mut path[..];
+    out.put_u32(depth);
+    out.put_u32(server);
+    out.put_u16(1);
+    out.put_u16(gate.unwrap_or(0));
+    out.put_u16(city.unwrap_or(0));
     path
 }
 
 /// A path's world server, gate and city (0 parts are absent).
 pub fn parse_path(path: &[u8]) -> Option<(u32, Option<u16>, Option<u16>)> {
-    if path.len() < 8 {
-        return None;
-    }
-    let server = u32::from_be_bytes(path[4..8].try_into().ok()?);
-    let part = |at: usize| {
-        path.get(at..at + 2)
-            .map(|b| u16::from_be_bytes([b[0], b[1]]))
-            .filter(|v| *v != 0)
-    };
-    Some((server, part(10), part(12)))
+    let mut path = path.get(4..)?;
+    let server = path.try_get_u32().ok()?;
+    let mut part = || path.try_get_u16().ok().filter(|v| *v != 0);
+    let (_, gate, city) = (part(), part(), part());
+    Some((server, gate, city))
 }
 
 fn state(population: u32, capacity: u32, reserved: bool) -> u8 {

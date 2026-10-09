@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 use server::Config;
 use testkit::client::{Console, Received};
 use testkit::corpus;
@@ -154,10 +154,8 @@ fn recorded_at(scenario: &Path) -> Option<i64> {
         .flat_map(|r| r.connections.iter().flat_map(|c| &c.frames))
         .filter(|f| f.name == "AnsServerTime")
         .min_by_key(|f| f.t)?;
-    let payload = corpus::unhex(&frame.payload).unwrap();
-    Some(i64::from(u32::from_be_bytes(
-        payload[..4].try_into().unwrap(),
-    )))
+    let payload = hex::decode(&frame.payload).unwrap();
+    Some(i64::from((&payload[..]).get_u32()))
 }
 
 async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
@@ -553,9 +551,9 @@ async fn fmp_progress() {
         {
             let detail = r.mismatches.first().map_or(String::new(), |m| match &m.got {
                 replay::Got::Frame(f) => {
-                    let expected = corpus::unhex(&m.expected.payload).unwrap();
+                    let expected = hex::decode(&m.expected.payload).unwrap();
                     let at = expected.iter().zip(f.payload.iter()).position(|(a, b)| a != b).unwrap_or(expected.len().min(f.payload.len()));
-                    let around = |b: &[u8]| corpus::hex(&b[at.saturating_sub(8).min(b.len())..(at + 16).min(b.len())]);
+                    let around = |b: &[u8]| hex::encode(&b[at.saturating_sub(8).min(b.len())..(at + 16).min(b.len())]);
                     format!(
                         "{} (got {}): first difference at {at} of {}/{}: expected …{}… got …{}…",
                         m.expected.name, f.id, expected.len(), f.payload.len(), around(&expected), around(&f.payload)
@@ -570,7 +568,7 @@ async fn fmp_progress() {
                 println!(
                     "EXPECTED {}\nGOT      {}",
                     m.expected.payload,
-                    corpus::hex(&f.payload)
+                    hex::encode(&f.payload)
                 );
             }
             println!(
@@ -976,8 +974,9 @@ async fn relay_latency() {
         for sender in 0..consoles.len() {
             // A position as the console sends it (an lp2 of 37 bytes), the round and sender in its first bytes.
             let mut position = vec![0u8; 37];
-            position[..4].copy_from_slice(&round.to_be_bytes());
-            position[4] = sender as u8;
+            let mut at = &mut position[..];
+            at.put_u32(round);
+            at.put_u8(sender as u8);
             let mut data = vec![0, 37];
             data.extend_from_slice(&position);
             let sent = Instant::now();

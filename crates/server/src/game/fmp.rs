@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 use tracing::{Span, info, trace, warn};
 use wire::packets::*;
 use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
@@ -1125,8 +1125,8 @@ fn layer_in(world: &World, me: &str, seq: u16) -> Result<Frame, Fault> {
 /// Two numbers the game uses to tell players apart in relayed town data: stable per Capcom ID.
 fn search_ids(capcom_id: &str) -> (u32, u32) {
     let hash = openssl::sha::sha256(capcom_id.as_bytes());
-    let number = |i: usize| u32::from_be_bytes([hash[i], hash[i + 1], hash[i + 2], hash[i + 3]]);
-    (number(0), number(4))
+    let mut hash = &hash[..];
+    (hash.get_u32(), hash.get_u32())
 }
 
 /// Players found by a search, as the lists show them: Capcom ID, name, where they are; then weapon type and whether

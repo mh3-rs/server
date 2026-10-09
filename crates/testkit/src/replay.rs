@@ -330,7 +330,7 @@ async fn run(
             if let Some(turn) = step.turn {
                 wait_turns(&mut console, turn, shared).await?;
             }
-            let mut payload = corpus::unhex(&step.record.payload)?;
+            let mut payload = hex::decode(&step.record.payload)?;
             shared.bindings.lock().unwrap().apply(&mut payload);
             let frame = Frame {
                 seq: step.record.seq,
@@ -377,7 +377,7 @@ async fn run(
                 let record = steps[p].record;
                 frame.id.0 == id_of(record)
                     && frame.seq == record.seq
-                    && corpus::unhex(&record.payload).is_ok_and(|recorded| {
+                    && hex::decode(&record.payload).is_ok_and(|recorded| {
                         let mut bindings = shared.bindings.lock().unwrap();
                         masks::matches(
                             shared.masks,

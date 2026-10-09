@@ -4,7 +4,7 @@
 //! fields written over them. As fields get mapped they move from raw to parsed (global roadmap, M3).
 
 use anyhow::{Result, bail};
-use bytes::Bytes;
+use bytes::{Buf, BufMut, Bytes};
 
 /// The size of the block.
 pub const SIZE: usize = 0x100;
@@ -37,7 +37,7 @@ impl Default for Profile {
 impl Profile {
     /// Parses and validates a whole block.
     pub fn parse(raw: &[u8; SIZE]) -> Result<Profile> {
-        let hr = u16::from_be_bytes([raw[0], raw[1]]);
+        let hr = (&raw[0..]).get_u16();
         let weapon = raw[5];
         if hr > MAX_HR {
             bail!("hunter rank {hr} over {MAX_HR}");
@@ -74,7 +74,7 @@ impl Profile {
 
     fn bytes_array(&self) -> [u8; SIZE] {
         let mut block = *self.raw;
-        block[0..2].copy_from_slice(&self.hr.to_be_bytes());
+        (&mut block[0..]).put_u16(self.hr);
         block[5] = self.weapon;
         block
     }
@@ -98,7 +98,7 @@ mod tests {
             (1, 1, 0xff)
         );
         // Invalid: refused, the caller keeps the previous profile.
-        assert!(profile.write(0, &1000u16.to_be_bytes()).is_err());
+        assert!(profile.write(0, &[0x03, 0xe8]).is_err());
         assert!(profile.write(5, &[MAX_WEAPON + 1]).is_err());
         assert!(profile.write(250, &[0; 7]).is_err());
         assert!(profile.write(usize::MAX, &[0]).is_err());
@@ -123,16 +123,14 @@ mod tests {
                     if frame["id"] != "66310100" {
                         continue;
                     }
-                    let hex = frame["payload"].as_str().unwrap();
-                    let p: Vec<u8> = (0..hex.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-                        .collect();
-                    let offset = u32::from_be_bytes(p[0..4].try_into().unwrap()) as usize;
-                    let len = usize::from(u16::from_be_bytes([p[4], p[5]]));
+                    let p = hex::decode(frame["payload"].as_str().unwrap()).unwrap();
+                    let mut p = &p[..];
+                    let offset = p.get_u32() as usize;
+                    let len = usize::from(p.get_u16());
+                    let p = &p[..len];
                     let mut raw = *profile.raw;
-                    raw[offset..offset + len].copy_from_slice(&p[6..6 + len]);
-                    profile = profile.write(offset, &p[6..6 + len]).unwrap();
+                    raw[offset..offset + len].copy_from_slice(p);
+                    profile = profile.write(offset, p).unwrap();
                     assert_eq!(profile.bytes()[..], raw[..]);
                     writes += 1;
                 }

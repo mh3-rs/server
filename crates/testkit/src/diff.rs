@@ -31,7 +31,7 @@ pub fn diff(a: &Path, b: &Path) -> Result<Vec<Difference>> {
             let connection = format!("{}-{:02}-{}", ra.console, n + 1, ca.role);
             let (fa, fb) = (significant(&ca.frames), significant(&cb.frames));
             for (index, (x, y)) in fa.iter().zip(&fb).enumerate() {
-                let (pa, pb) = (corpus::unhex(&x.payload)?, corpus::unhex(&y.payload)?);
+                let (pa, pb) = (hex::decode(&x.payload)?, hex::decode(&y.payload)?);
                 if x.id != y.id {
                     out.push(Difference {
                         connection: connection.clone(),

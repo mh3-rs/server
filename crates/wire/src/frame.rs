@@ -35,7 +35,7 @@ impl Decoder for FrameCodec {
         if src.len() < HEADER_LEN {
             return Ok(None);
         }
-        let size = u16::from_be_bytes([src[0], src[1]]) as usize;
+        let size = (&src[..]).get_u16() as usize;
         if src.len() < HEADER_LEN + size {
             src.reserve(HEADER_LEN + size - src.len());
             return Ok(None);
