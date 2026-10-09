@@ -44,7 +44,7 @@ player kicked for not being ready, a party broken by its leader before departure
   received request to answer later?), `s09-blacklist`, `s10-party` (the leader kicks a member, then lifts the kick
   list; a password-protected quest joined with the wrong then the right password; start with a player not ready; a
   leader leaving before departure). Also look for a city kick in the game's menus.
-- **D2 Friends and black list storage.** Lists are permanent: SQLite tables `friends` and `blacklist` (pairs of
+- **D2 Friends and black list storage. Settled:** lists are permanent: SQLite tables `friends` and `blacklist` (pairs of
   hunters, as sketched in `M1 schema.md`). A friend request reaches the recipient as a message (`NtcFriendAccept`,
   built like a tell), answered with `ReqFriendAccept`; the protocol has no "pending requests" list. Whatever the
   console does with it, the server must remember a request until it's answered (else a console could accept a
