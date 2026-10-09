@@ -8,7 +8,7 @@ When a packet layout or a game behaviour is in doubt, check the reverse-engineer
 
 | Source | Use |
 |---|---|
-| [MH3SP](https://github.com/sepalani/MH3SP) (`../mh3sp`, branch `dev`, corpus recorded at `f53b06c`) | The reference server (Python): `mh/pat.py`, `fmp_server.py`, `mh/pat_item.py`, `mh/constants.py`, `mh/database.py`, `mh/quest_utils.py`, `mh/time_utils.py`; event content in `event/` (`CONTENT_DIR` in dev and tests) |
+| [MH3SP](https://github.com/sepalani/MH3SP) (`../mh3sp`, branch `dev`, corpus recorded at `f53b06c`) | The reference server (Python): `mh/pat.py`, `fmp_server.py`, `mh/pat_item.py`, `mh/constants.py`, `mh/database.py`, `mh/quest_utils.py`, `mh/time_utils.py`; event content in `event/` (`CONTENT_DIR` in tests and CI). The lab's server reads the live branch's content instead: `../mh3sp-live`, a worktree of `event-quest-rotation-full` at `7e21e0a` (M5 D2) |
 | [mhtri-decomp](https://github.com/InusualZ/mhtri-decomp) | Matching decompilation of the game (US, `RMHE08`): ground truth for client behaviour (`src/Network`, `src/DWCi/DWCi_NatNeg.c`) |
 | [MHTrIDA](https://github.com/sepalani/MHTrIDA) (`../mh3sp/lab/mhtrida`) | Packet table with Japanese names (`server/doc/PAT.MD`), error codes (`server/ERROR.md`), save format, quest files, PAL/US/JP symbol maps, Wireshark dissector |
 | [MHTriServer](https://github.com/InusualZ/MHTriServer) (`../mh3sp/lab/mhtriserver`) | Another server (C#): one typed class per packet |
@@ -34,6 +34,6 @@ the user runs it), `server.sh` (Python MH3SP); `tools/oracle.sh` restarts Python
 - `scripts/ci-tests.sh` must pass before a commit, chained with `&&`, never `;`:
   `scripts/ci-tests.sh > /tmp/ci.log 2>&1 && git add -A && git commit …`. After changing a query or the schema,
   `scripts/sqlx-prepare.sh`.
-- Commits end with the `Co-Authored-By` and `Claude-Session` lines; the user pushes.
+- The user pushes.
 - Settled decisions go into the roadmap (the milestone's file, lasting ones in `architecture.md`); pending console
   sessions into `roadmap/recordings.md`.
