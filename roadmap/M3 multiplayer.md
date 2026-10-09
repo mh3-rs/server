@@ -123,7 +123,7 @@ player kicked for not being ready, a party broken by its leader before departure
       recording has 1), an invalid one refused (previous kept, `warn`); `hunter_profiles` stores the raw block and the
       known fields; others get the rebuilt block. Every recorded profile is accepted and rebuilt byte for byte.
 - [ ] Disconnect lab test and grace period decision (D4).
-- [ ] Concurrency model written down (who owns what; no socket written but by its task) (D5).
+- [x] Concurrency model written down (who owns what; no socket written but by its task) (D5): `lib.rs`.
 - [x] Replay gate: every multiplayer scenario recorded so far replays whole (`clean_so_far`: `s04`, `s04-2`, `s05`,
       `s06`, `s07`, `s08`, `s09`). The harness accepts a console's own answer before frames recorded ahead of it (the
       Rust server answers at once; MH3SP was slow), and consoles still wait for every frame recorded before their

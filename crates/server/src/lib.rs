@@ -1,4 +1,16 @@
 //! The mh3sp server. [`start`] brings every role up; the binary and the tests both use it.
+//!
+//! Concurrency, who owns what:
+//! - **A connection** is one task (`net`): it alone reads and writes its socket, and owns its `Session` (the
+//!   logged-in console, its hunter and profile). Between two connections a session sits in `Shared::tickets`,
+//!   moved out by the next connection (never shared).
+//! - **Frames for another player** go through that player's mailbox (`game::players`): a bounded channel its task
+//!   drains to its socket. Senders never wait: a full mailbox drops its player (a memory guard).
+//! - **The world** (who is where, cities, quests) is one `std::sync::Mutex` (`Shared::world`), held for a lookup
+//!   and mailbox pushes, never across an `.await`. Never a tokio mutex: nothing awaits while holding state.
+//! - **The registry** of logged-in players (`Shared::players`, a `DashMap`) maps Capcom IDs to mailboxes.
+//! - **The database** is the only state outside the process; handlers `.await` it without holding any lock.
+//!   Slow work (argon2) runs on `spawn_blocking`.
 
 mod accounts;
 pub mod config;
