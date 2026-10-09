@@ -553,3 +553,279 @@ async fn fmp_progress() {
         }
     }
 }
+
+/// A new console's whole way in: login, server selection (Valor1), then the world server connection.
+async fn enter_world(running: &server::Running) -> Console {
+    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (code, _, _) = first_visit(lmp, None).await;
+    let ticket = login(lmp, &code, 1).await;
+    let mut selection = fmp_login(fmp, &ticket).await;
+    send(
+        &mut selection,
+        1,
+        ReqFmpInfo2 {
+            index: 1,
+            fields: vec![2, 3],
+        },
+    )
+    .await;
+    expect::<AnsFmpInfo2>(&mut selection).await;
+    send(&mut selection, 2, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut selection).await;
+    fmp_login(fmp, &ticket).await
+}
+
+/// The records of a layer list (gates or cities), `count` from `first`.
+async fn children(
+    console: &mut Console,
+    seq: u16,
+    first: u32,
+    count: u32,
+) -> Vec<(PatData, wire::OptionalFields)> {
+    send(console, seq, ReqLayerChildListData { first, count }).await;
+    expect::<AnsLayerChildListData>(console).await.children
+}
+
+fn long(item: Option<&Item>) -> u32 {
+    match item {
+        Some(Item::Long(v)) => *v,
+        other => panic!("not a long: {other:?}"),
+    }
+}
+
+/// The next frame: an alert answering `answer` (its id with kind byte 0x01), and its text.
+async fn expect_alert(console: &mut Console, answer: wire::PacketId) -> String {
+    match console.recv(Duration::from_secs(5)).await.unwrap() {
+        Received::Frame(f) if f.id.0 == answer.0 | 0x01 => {
+            let mut r = wire::Reader::new(&f.payload);
+            assert_eq!(r.u32().unwrap(), 1);
+            String::from_utf8(r.lp2_string().unwrap().to_vec()).unwrap()
+        }
+        other => panic!("expected an alert for {answer}, got {other:?}"),
+    }
+}
+
+/// Tier 3, solo: a gate, a city, a quest, as one console sees them.
+#[tokio::test]
+async fn solo_city_and_quest() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut c = enter_world(&running).await;
+
+    // Gate 1: the gate list counts the player there; its player list has the hunter.
+    send(
+        &mut c,
+        10,
+        ReqLayerDown {
+            layer: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    expect::<AnsLayerDown>(&mut c).await;
+    send(&mut c, 11, ReqLayerUp {}).await;
+    expect::<AnsLayerUp>(&mut c).await;
+    let gates = children(&mut c, 12, 1, 40).await;
+    assert_eq!(gates.len(), 40);
+    // Back at the server level: nobody in gate 1 any more (state 1, empty).
+    assert_eq!(long(gates[0].0.get(0x06)), 0);
+    send(
+        &mut c,
+        13,
+        ReqLayerDown {
+            layer: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    expect::<AnsLayerDown>(&mut c).await;
+    send(&mut c, 14, ReqLayerUserList { fields: vec![] }).await;
+    let users = expect::<AnsLayerUserList>(&mut c).await.users;
+    assert_eq!(users.len(), 1);
+    assert_eq!(string(users[0].get(0x02)), "Aiko");
+
+    // City 3: reserved (shown full) between head and foot, then joinable with the player in it.
+    send(&mut c, 15, ReqLayerCreateHead { number: 3 }).await;
+    expect::<AnsLayerCreateHead>(&mut c).await;
+    let settings = wire::OptionalFields(vec![(1, Some(0xffff_ffff)), (4, Some(0))]);
+    send(
+        &mut c,
+        16,
+        ReqLayerCreateSet {
+            number: 3,
+            layer: PatData::new(),
+            extra: settings.clone(),
+        },
+    )
+    .await;
+    expect::<AnsLayerCreateSet>(&mut c).await;
+    send(&mut c, 17, ReqLayerCreateFoot { number: 3, unk: 0 }).await;
+    expect::<AnsLayerCreateFoot>(&mut c).await;
+
+    // A quest: the creator gets the city's notification before its answer.
+    let info = PatData::new()
+        .with(0x09, Item::Long(4))
+        .with(0x0e, Item::Byte(1));
+    send(
+        &mut c,
+        18,
+        ReqCircleCreate {
+            info,
+            extra: wire::OptionalFields(vec![(1, Some(4)), (2, Some(10000))]),
+        },
+    )
+    .await;
+    let change = expect::<NtcCircleListLayerChange>(&mut c).await;
+    assert_eq!(change.circle, 1);
+    assert_eq!(change.extra.0, vec![(1, Some(4)), (2, Some(10000))]);
+    assert_eq!(expect::<AnsCircleCreate>(&mut c).await.circle, 1);
+    send(
+        &mut c,
+        19,
+        ReqCircleMatchOptionSet {
+            options: PatData::new().with(0x03, Item::Byte(1)),
+        },
+    )
+    .await;
+    expect::<AnsCircleMatchOptionSet>(&mut c).await;
+    send(&mut c, 20, ReqCircleMatchStart {}).await;
+    let start = expect::<NtcCircleMatchStart>(&mut c).await;
+    // One player departs: count 1, then index 1 and the Capcom ID.
+    assert_eq!(&start.data[..5], &[0, 0, 0, 1, 1]);
+    expect::<AnsCircleMatchStart>(&mut c).await;
+    send(&mut c, 21, ReqCircleLeave { circle: 1 }).await;
+    let gone = expect::<NtcCircleListLayerChange>(&mut c).await;
+    assert_eq!(gone.extra.0, vec![(1, Some(4)), (2, Some(0))]);
+    expect::<AnsCircleLeave>(&mut c).await;
+
+    // Back in the gate: city 3 is still there (the player left only the quest), then gone once left.
+    send(&mut c, 22, ReqLayerUp {}).await;
+    expect::<AnsLayerUp>(&mut c).await;
+    let cities = children(&mut c, 23, 1, 10).await;
+    assert_eq!(
+        long(cities[2].0.get(0x06)),
+        0,
+        "the city went with its last player"
+    );
+    send(&mut c, 24, ReqLayerEnd {}).await;
+    expect::<AnsLayerEnd>(&mut c).await;
+    running.stop().await;
+}
+
+/// Tier 3, two consoles in a gate: a city taken is refused, then joined; leadership passes on.
+#[tokio::test]
+async fn cities_are_shared() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut a = enter_world(&running).await;
+    let mut b = enter_world(&running).await;
+    for (c, seq) in [(&mut a, 10), (&mut b, 10)] {
+        send(
+            c,
+            seq,
+            ReqLayerDown {
+                layer: 2,
+                info: PatData::new(),
+            },
+        )
+        .await;
+        expect::<AnsLayerDown>(c).await;
+    }
+    send(&mut a, 11, ReqLayerCreateHead { number: 1 }).await;
+    expect::<AnsLayerCreateHead>(&mut a).await;
+    // Reserved: shown full to the other player, who can't create it.
+    let cities = children(&mut b, 11, 1, 1).await;
+    assert!(matches!(cities[0].0.get(0x10), Some(Item::Byte(2))));
+    send(&mut b, 12, ReqLayerCreateHead { number: 1 }).await;
+    assert!(
+        expect_alert(&mut b, AnsLayerCreateHead::ID)
+            .await
+            .contains("already exists")
+    );
+    send(
+        &mut a,
+        12,
+        ReqLayerCreateSet {
+            number: 1,
+            layer: PatData::new(),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    expect::<AnsLayerCreateSet>(&mut a).await;
+    send(&mut a, 13, ReqLayerCreateFoot { number: 1, unk: 0 }).await;
+    expect::<AnsLayerCreateFoot>(&mut a).await;
+
+    // Created: joinable (state 3) with one player; the other joins it.
+    let cities = children(&mut b, 13, 1, 1).await;
+    assert_eq!(
+        (long(cities[0].0.get(0x06)), cities[0].0.get(0x10)),
+        (1, Some(&Item::Byte(3)))
+    );
+    send(
+        &mut b,
+        14,
+        ReqLayerDown {
+            layer: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    expect::<AnsLayerDown>(&mut b).await;
+    send(&mut b, 15, ReqLayerUserList { fields: vec![] }).await;
+    assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 2);
+
+    // The creator leaves the game: the city stays, with the other player in it.
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    send(&mut b, 16, ReqLayerUserList { fields: vec![] }).await;
+    assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 1);
+    running.stop().await;
+}
+
+/// Tier 3: every content download is consistent (version, head, chunks), quests included.
+#[tokio::test]
+async fn content_downloads() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut c = enter_world(&running).await;
+    for kind in 0x01..=0x0f {
+        send(&mut c, 1, ReqBinaryVersion { kind }).await;
+        let version = expect::<AnsBinaryVersion>(&mut c).await.version;
+        send(&mut c, 2, ReqBinaryHead { kind }).await;
+        let head = expect::<AnsBinaryHead>(&mut c).await;
+        assert_eq!(head.version, version, "type {kind:#x}");
+        // In two chunks, as consoles do for large ones.
+        let half = head.size / 2;
+        let mut bytes = Vec::new();
+        for (offset, size) in [(0, half), (half, head.size - half)] {
+            send(
+                &mut c,
+                3,
+                ReqBinaryData {
+                    kind,
+                    version,
+                    offset,
+                    size,
+                },
+            )
+            .await;
+            let data = expect::<AnsBinaryData>(&mut c).await;
+            assert_eq!(
+                (data.version, data.offset, data.chunk.len() as u32),
+                (version, offset, size)
+            );
+            bytes.extend_from_slice(&data.chunk);
+        }
+        send(&mut c, 4, ReqBinaryFoot { kind }).await;
+        expect::<AnsBinaryFoot>(&mut c).await;
+        assert_eq!(bytes.len() as u32, head.size);
+    }
+    // A type the server doesn't know drops the connection.
+    send(&mut c, 5, ReqBinaryHead { kind: 0x7f }).await;
+    assert!(matches!(
+        c.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
