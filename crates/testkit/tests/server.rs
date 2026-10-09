@@ -199,7 +199,7 @@ fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
 }
 
 /// Whole scenarios of the milestone in progress (M3) that replay cleanly already; replaced by `REACHED` once M3 is.
-const CLEAN_SO_FAR: [&str; 7] = [
+const CLEAN_SO_FAR: [&str; 8] = [
     "s04-city-join",
     "s04-city-join-2",
     "s05-quest-party",
@@ -207,6 +207,7 @@ const CLEAN_SO_FAR: [&str; 7] = [
     "s07-chat",
     "s08-friends",
     "s09-blacklist",
+    "s10-party",
 ];
 
 #[tokio::test]
@@ -562,6 +563,16 @@ async fn fmp_progress() {
                 }
                 other => format!("{} {other:?}", m.expected.name),
             });
+            if std::env::var_os("FULL").is_some()
+                && let Some(m) = r.mismatches.first()
+                && let replay::Got::Frame(f) = &m.got
+            {
+                println!(
+                    "EXPECTED {}\nGOT      {}",
+                    m.expected.payload,
+                    corpus::hex(&f.payload)
+                );
+            }
             println!(
                 "{} {}: {}/{} {detail}",
                 scenario.file_name().unwrap().to_string_lossy(),

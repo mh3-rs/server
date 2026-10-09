@@ -702,7 +702,29 @@ impl Fmp {
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                // Members not ready stay behind: removed from the party (MH3SP's rule, M3 D7).
+                let mut out = Vec::new();
+                let behind: Vec<String> = world
+                    .circle_members(id)
+                    .into_iter()
+                    .filter(|(_, _, _, ready)| !ready)
+                    .map(|(_, m, _, _)| m)
+                    .collect();
+                // Departed first: the list changes sent with the removals already show the quest closed (MH3SP's order).
                 let ready = world.depart(id);
+                for member in &behind {
+                    shared.players.send(
+                        member,
+                        frame(
+                            seq,
+                            &NtcCircleKick {
+                                unk: 0,
+                                text: Bytes::new(),
+                            },
+                        )?,
+                    );
+                    quit_quest(shared, &mut world, member, me, seq, &mut out)?;
+                }
                 info!(circle = id.1, players = ready.len(), "quest departs");
                 // The players departing: count, then per player its index, Capcom ID, a flag and an unknown 21.
                 let mut data = Vec::new();
@@ -724,8 +746,10 @@ impl Fmp {
                         rest: Rest(Bytes::from_static(&[0, 0, 0, 1])),
                     },
                 )?;
-                let mut out = Vec::new();
                 notify(shared, me, &members, &ntc, &mut out);
+                if !behind.is_empty() {
+                    list_change(shared, &world, me, id, seq, &mut out)?;
+                }
                 out.push(frame(seq, &AnsCircleMatchStart {})?);
                 Ok(out)
             }
@@ -775,7 +799,7 @@ impl Fmp {
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let mut out = Vec::new();
-                quit_quest(shared, &mut world, me, &session.name, seq, &mut out)?;
+                quit_quest(shared, &mut world, me, me, seq, &mut out)?;
                 out.push(frame(seq, &AnsCircleLeave { circle: r.circle })?);
                 Ok(out)
             }
@@ -1024,7 +1048,7 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     let leaves_city =
         matches!(how, Depart::World) || world.place(me).is_some_and(|p| p.city.is_some());
     if in_city && leaves_city {
-        let _ = quit_quest(shared, world, me, &Bytes::new(), 0, &mut ignored);
+        let _ = quit_quest(shared, world, me, me, 0, &mut ignored);
     }
     let others = world.others(me);
     let city = world.city_of(me);
@@ -1358,18 +1382,18 @@ async fn check_password(typed: Bytes, hash: String) -> Result<bool, Fault> {
     .map_err(|e| Fault::Server(e.into()))
 }
 
-/// The player leaves its quest, if in one: the city sees the quest change; the other members learn who left
-/// (`NtcCircleLeave`), and the new leader of a departed quest (`NtcCircleHost`) or that the party broke
-/// (`NtcCircleBreak`).
+/// `leaver` leaves its quest, if in one (on `requester`'s request: its own copies go in `out`, in order; others'
+/// to their mailboxes): the city sees the quest change; the other members learn who left (`NtcCircleLeave`), and the
+/// new leader of a departed quest (`NtcCircleHost`) or that the party broke (`NtcCircleBreak`).
 fn quit_quest(
     shared: &Shared,
     world: &mut World,
-    me: &str,
-    _name: &Bytes,
+    leaver: &str,
+    requester: &str,
     seq: u16,
     out: &mut Vec<Frame>,
 ) -> Result<(), Fault> {
-    let Some(leaving) = world.leave_circle(me) else {
+    let Some(leaving) = world.leave_circle(leaver) else {
         return Ok(());
     };
     info!(circle = leaving.id.1, "left quest");
@@ -1377,14 +1401,12 @@ fn quit_quest(
         seq,
         &NtcCircleLeave {
             circle: leaving.id.1,
-            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+            capcom_id: Bytes::copy_from_slice(leaver.as_bytes()),
             player: leaving.index,
             unk: 0,
         },
     )?;
-    for other in &leaving.others {
-        shared.players.send(other, left.clone());
-    }
+    notify(shared, requester, &leaving.others, &left, out);
     if let Some((index, leader)) = &leaving.new_leader {
         let name = world
             .players_under(leaving.id.0.0, Some(leaving.id.0.1), Some(leaving.id.0.2))
@@ -1401,17 +1423,13 @@ fn quit_quest(
                 name,
             },
         )?;
-        for other in &leaving.others {
-            shared.players.send(other, host.clone());
-        }
+        notify(shared, requester, &leaving.others, &host, out);
     }
     if leaving.broken {
         let broken = frame(seq, &NtcCircleBreak { unk: 0 })?;
-        for other in &leaving.others {
-            shared.players.send(other, broken.clone());
-        }
+        notify(shared, requester, &leaving.others, &broken, out);
     }
-    list_change(shared, world, me, leaving.id, seq, out)
+    list_change(shared, world, requester, leaving.id, seq, out)
 }
 
 /// A text message's sender info: the console's fields with the sender filled in, and an unknown 20.

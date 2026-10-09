@@ -140,6 +140,8 @@ pub struct Circle {
     slots: Vec<Option<String>>,
     /// The password's argon2 hash (PHC string), until departure (M3 D9): the password itself is never kept.
     password_hash: Option<String>,
+    /// Whether the quest was created with a password: lists keep showing it after the hash is dropped.
+    has_password: bool,
     remarks: Option<Bytes>,
     /// Unknown (from `CircleCreate`).
     unk_0e: u8,
@@ -469,6 +471,7 @@ impl World {
         let circle = Circle {
             leader: capcom_id.to_owned(),
             slots,
+            has_password: new.password_hash.is_some(),
             password_hash: new.password_hash,
             remarks: new.remarks,
             unk_0e: new.unk_0e,
@@ -627,7 +630,7 @@ impl World {
                 OptionalFields(vec![(1, Some(CIRCLE_CAPACITY)), (2, Some(0))]),
             );
         };
-        if circle.password_hash.is_some() {
+        if circle.has_password {
             // The flag, and a placeholder where MH3SP put the password itself: it never leaves the server (M3 D9;
             // whether the console needs field 0x04 at all is to test).
             info = info

@@ -46,6 +46,36 @@ packet = "AnsBlackList"
 offset = 4
 reason = "no blank placeholder entry in the black list (seen on consoles: an empty line)"
 
+# A quest's password (field 0x04 of a quest record, a string): MH3SP sends it in clear to everyone in the city, the
+# Rust server a placeholder (s10's password and the placeholder are both 4 characters).
+[[mask]]
+packet = "NtcCircleListLayerChange"
+pattern = "04050004"
+offset = 4
+len = 4
+reason = "a quest's password never leaves the server (M3 D9): a placeholder where MH3SP sent it in clear"
+
+[[mask]]
+packet = "AnsCircleInfo"
+pattern = "04050004"
+offset = 4
+len = 4
+reason = "a quest's password never leaves the server (M3 D9): a placeholder where MH3SP sent it in clear"
+
+[[mask]]
+packet = "AnsCircleListLayer"
+pattern = "04050004"
+offset = 4
+len = 4
+reason = "a quest's password never leaves the server (M3 D9): a placeholder where MH3SP sent it in clear"
+
+[[mask]]
+packet = "NtcCircleInfoSet"
+pattern = "04050004"
+offset = 4
+len = 4
+reason = "a quest's password never leaves the server (M3 D9): a placeholder where MH3SP sent it in clear"
+
 # Frames the Rust server doesn't send, on purpose: [[omit]] names the scenario, the connection, the packet and its
 # sequence number, with a reason.
 
@@ -57,3 +87,13 @@ connection = "dev1-05-fmp"
 packet = "NtcTell"
 seq = 2810
 reason = "blocked hunters' tells aren't delivered (M3 D2)"
+
+# s10: dev2 ends its session half a minute after its party was cancelled; MH3SP still had it in the quest (it doesn't
+# clear members' quest when a party breaks) and "leaves" it again on the way out: a list change about a quest that
+# no longer exists.
+[[omit]]
+scenario = "s10-party"
+connection = "dev2-05-fmp"
+packet = "NtcCircleListLayerChange"
+seq = 0
+reason = "MH3SP's stale quest after a party breaks (a member leaving it again later)"

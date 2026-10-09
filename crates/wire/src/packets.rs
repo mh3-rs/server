@@ -471,6 +471,8 @@ packets! {
     NtcCollectionLog = 0x60501000 { log: PatData }
     /// Never recorded: a party broken by its leader leaving before departure (MH3SP's layout: an unknown u32).
     NtcCircleBreak = 0x65051000 { unk: u32 }
+    /// A member removed from the party (at departure, not ready): an unknown byte and an empty text.
+    NtcCircleKick = 0x65351000 { unk: u8, text: Bytes }
 }
 
 #[cfg(test)]
