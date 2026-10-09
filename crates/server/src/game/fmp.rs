@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
 use tracing::{Span, info, trace};
 use wire::packets::*;
-use wire::{Frame, Item, PatData, PatWrite, Reader};
+use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
 
 use super::players::Mailbox;
 use super::world::{CircleId, NewCircle, World};
@@ -27,6 +27,8 @@ pub struct Fmp {
     login: Option<(Session, String)>,
     /// Content being downloaded, by type: every chunk of a download comes from the same bytes.
     downloads: HashMap<u8, Binary>,
+    /// The players found by the last layer search (`LayerUserListHead`), read by `LayerUserListData`.
+    search: Vec<String>,
 }
 
 impl Fmp {
@@ -35,6 +37,7 @@ impl Fmp {
             mailbox,
             login: None,
             downloads: HashMap::new(),
+            search: Vec::new(),
         }
     }
 
@@ -160,11 +163,14 @@ impl Fmp {
             ReqLayerEnd::ID => {
                 // Back to the title, or to the server selection.
                 ReqLayerEnd::decode(p)?;
-                shared
-                    .world
-                    .lock()
-                    .unwrap()
-                    .leave(capcom_id(session), self.mailbox.conn);
+                let mut world = shared.world.lock().unwrap();
+                depart(
+                    shared,
+                    &mut world,
+                    capcom_id(session),
+                    self.mailbox.conn,
+                    Depart::World,
+                );
                 reply(seq, &AnsLayerEnd {})
             }
             ReqLayerUserList::ID => {
@@ -273,6 +279,10 @@ impl Fmp {
                     (None, _) if (1..=world::GATES).contains(&r.layer) => {
                         world.place(me).expect("located").gate = Some(r.layer);
                         info!(gate = r.layer, "entered gate");
+                        let ntc = layer_in(&world, me, seq)?;
+                        for other in world.others(me) {
+                            shared.players.send(&other, ntc.clone());
+                        }
                     }
                     (Some(gate), None) => {
                         if let Err(refusal) = world.join_city((server, gate, r.layer), me) {
@@ -286,16 +296,154 @@ impl Fmp {
             }
             ReqLayerUp::ID => {
                 ReqLayerUp::decode(p)?;
-                let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
-                if let Some(place) = world.place(me) {
-                    if place.city.is_some() {
-                        world.leave_city(me);
-                    } else {
-                        place.gate = None;
-                    }
-                }
+                depart(
+                    shared,
+                    &mut world,
+                    capcom_id(session),
+                    self.mailbox.conn,
+                    Depart::Up,
+                );
                 reply(seq, &AnsLayerUp {})
+            }
+            ReqLayerHost::ID => {
+                // A console entering a city asks who hosts its P2P session; the others learn of the arrival.
+                let r = ReqLayerHost::decode(p)?;
+                let me = capcom_id(session);
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                let host = world
+                    .city_host(city)
+                    .ok_or_else(|| Fault::Client(anyhow!("a city without a host")))?;
+                let host_name = world
+                    .players_at(city.0, Some(city.1), Some(city.2))
+                    .into_iter()
+                    .find(|(id, _)| *id == host)
+                    .map(|(_, p)| p.name.clone())
+                    .unwrap_or_default();
+                let answer = frame(
+                    seq,
+                    &AnsLayerHost {
+                        layer: r.layer,
+                        capcom_id: Bytes::copy_from_slice(host.as_bytes()),
+                        name: host_name,
+                    },
+                )?;
+                let ntc = layer_in(&world, me, seq)?;
+                for other in world.others(me) {
+                    shared.players.send(&other, ntc.clone());
+                }
+                Ok(vec![answer])
+            }
+            ReqLayerUserListHead::ID => {
+                // The players at a layer (the console looks for a city's host this way): kept for the data request.
+                let r = ReqLayerUserListHead::decode(p)?;
+                let (server, gate, city) = world::parse_path(&r.layer)
+                    .ok_or_else(|| Fault::Client(anyhow!("malformed layer path")))?;
+                let world = shared.world.lock().unwrap();
+                self.search = world
+                    .players_at(server, gate, city)
+                    .into_iter()
+                    .skip(r.first.saturating_sub(1) as usize)
+                    .take(r.count as usize)
+                    .map(|(id, _)| id.to_owned())
+                    .collect();
+                reply(
+                    seq,
+                    &AnsLayerUserListHead {
+                        first: r.first,
+                        count: self.search.len() as u32,
+                    },
+                )
+            }
+            ReqLayerUserListData::ID => {
+                ReqLayerUserListData::decode(p)?;
+                let mut world = shared.world.lock().unwrap();
+                let mut users = Vec::new();
+                for id in &self.search {
+                    let Some(place) = world.place(id) else {
+                        continue;
+                    };
+                    let record = PatData::new()
+                        .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
+                        .with(0x02, Item::String(place.name.clone()))
+                        .with(
+                            0x03,
+                            Item::Binary(Bytes::copy_from_slice(&world::path(
+                                place.server,
+                                place.gate,
+                                place.city,
+                            ))),
+                        );
+                    // Weapon type and whether on a quest (0 in town, 1 on a quest); HR.
+                    let in_quest = u32::from(place.circle.is_some());
+                    let weapon = u32::from(place.profile[5]);
+                    let hr = u32::from(u16::from_be_bytes([place.profile[0], place.profile[1]]));
+                    let extra = OptionalFields(vec![
+                        (1, Some(weapon << 24 | in_quest)),
+                        (2, Some(hr << 16)),
+                    ]);
+                    users.push((record, extra));
+                }
+                reply(seq, &AnsLayerUserListData { unk: 1, users })
+            }
+            ReqLayerUserListFoot::ID => {
+                ReqLayerUserListFoot::decode(p)?;
+                reply(seq, &AnsLayerUserListFoot {})
+            }
+            NtcLayerUserPosition::ID => {
+                // A position in town: to the others there, with the sender's Capcom ID in front.
+                let r = NtcLayerUserPosition::decode(p)?;
+                let me = capcom_id(session);
+                let mut data = Vec::new();
+                data.put_lp2_string(me.as_bytes())?;
+                data.extend_from_slice(&r.data.0);
+                relay(
+                    shared,
+                    me,
+                    &NtcLayerUserPosition {
+                        data: Rest(data.into()),
+                    },
+                    seq,
+                )
+            }
+            NtcLayerBinary::ID => {
+                // Game data for the layer: relayed with the sender's Capcom ID and name in front.
+                let r = NtcLayerBinary::decode(p)?;
+                let me = capcom_id(session);
+                let mut data = Vec::new();
+                data.put_lp2_string(me.as_bytes())?;
+                data.put_pat_data(&sender(me, &session.name, true))?;
+                data.extend_from_slice(without_sender(&r.data.0)?);
+                relay(
+                    shared,
+                    me,
+                    &NtcLayerBinary {
+                        data: Rest(data.into()),
+                    },
+                    seq,
+                )
+            }
+            NtcLayerBinary2::ID => {
+                // Game data for one player of the layer (the P2P connection offers): to them only.
+                let r = NtcLayerBinary2::decode(p)?;
+                let me = capcom_id(session);
+                let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
+                if !shared.world.lock().unwrap().others(me).contains(&partner) {
+                    return Ok(vec![]);
+                }
+                let mut data = Vec::new();
+                data.put_pat_data(&sender(me, &session.name, false))?;
+                data.extend_from_slice(without_sender(&r.data.0)?);
+                let ntc = frame(
+                    seq,
+                    &NtcLayerBinary2 {
+                        capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                        data: Rest(data.into()),
+                    },
+                )?;
+                shared.players.send(&partner, ntc);
+                Ok(vec![])
             }
             ReqLayerCreateHead::ID => {
                 let r = ReqLayerCreateHead::decode(p)?;
@@ -661,12 +809,16 @@ impl Fmp {
 
     fn unregister(&self, shared: &Shared, session: &Session) {
         if let Some(capcom_id) = &session.capcom_id {
+            let mut world = shared.world.lock().unwrap();
+            depart(
+                shared,
+                &mut world,
+                capcom_id,
+                self.mailbox.conn,
+                Depart::World,
+            );
+            drop(world);
             shared.players.unregister(capcom_id, self.mailbox.conn);
-            shared
-                .world
-                .lock()
-                .unwrap()
-                .leave(capcom_id, self.mailbox.conn);
         }
     }
 }
@@ -692,6 +844,116 @@ fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<F
             false => shared.players.send(player, ntc.clone()),
         }
     }
+}
+
+enum Depart {
+    /// One level up (a city to its gate, a gate to its world server).
+    Up,
+    /// Out of the world.
+    World,
+}
+
+/// A player leaves a layer: those left there learn of it (`NtcLayerOut`); a city host leaving hands the city's P2P
+/// session to the earliest player left (`NtcLayerHost`). Nothing if another connection holds the player's place.
+fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) {
+    if !world.placed_by(me, conn) {
+        return;
+    }
+    let others = world.others(me);
+    let city = world.city_of(me);
+    let was_host = city.is_some_and(|id| world.city_host(id) == Some(me));
+    match how {
+        Depart::Up => {
+            let place = world.place(me).expect("placed");
+            if place.city.is_some() {
+                world.leave_city(me);
+            } else {
+                place.gate = None;
+            }
+        }
+        Depart::World => world.leave(me, conn),
+    }
+    if let Ok(out) = frame(
+        0,
+        &NtcLayerOut {
+            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+        },
+    ) {
+        for other in &others {
+            shared.players.send(other, out.clone());
+        }
+    }
+    if let Some(id) = city.filter(|_| was_host)
+        && let Some(host) = world.city_host(id)
+    {
+        let name = world
+            .players_at(id.0, Some(id.1), Some(id.2))
+            .into_iter()
+            .find(|(p, _)| *p == host)
+            .map(|(_, p)| p.name.clone())
+            .unwrap_or_default();
+        // An unknown 8 bytes first (MH3SP's zeros).
+        let ntc = NtcLayerHost {
+            layer: Bytes::from_static(&[0; 8]),
+            capcom_id: Bytes::copy_from_slice(host.as_bytes()),
+            name,
+        };
+        if let Ok(ntc) = frame(0, &ntc) {
+            for other in &others {
+                shared.players.send(other, ntc.clone());
+            }
+        }
+    }
+}
+
+/// A player arriving (`NtcLayerIn`): Capcom ID, then name and profile block.
+fn layer_in(world: &World, me: &str, seq: u16) -> Result<Frame, Fault> {
+    let place = world
+        .neighbours(me)
+        .into_iter()
+        .find(|(id, _)| *id == me)
+        .map(|(_, p)| p);
+    let place = place.ok_or_else(|| Fault::Server(anyhow!("arriving player not placed")))?;
+    let user = PatData::new()
+        .with(0x01, Item::String(Bytes::copy_from_slice(me.as_bytes())))
+        .with(0x02, Item::String(place.name.clone()))
+        .with(
+            0x07,
+            Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
+        );
+    frame(
+        seq,
+        &NtcLayerIn {
+            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+            user,
+        },
+    )
+}
+
+/// Who sent relayed game data: an unknown long (MH3SP's 0x12345678, only to the whole layer), Capcom ID, name.
+fn sender(me: &str, name: &Bytes, with_long: bool) -> PatData {
+    let data = match with_long {
+        true => PatData::new().with(0x01, Item::Long(0x1234_5678)),
+        false => PatData::new(),
+    };
+    data.with(0x02, Item::String(Bytes::copy_from_slice(me.as_bytes())))
+        .with(0x03, Item::String(name.clone()))
+}
+
+/// Relayed game data as a console sends it starts with an empty sender record, which the server fills in: the rest.
+fn without_sender(data: &[u8]) -> Result<&[u8], Fault> {
+    let mut reader = Reader::new(data);
+    reader.pat_data()?;
+    Ok(reader.rest())
+}
+
+/// Sends a relayed packet to the others at the sender's place.
+fn relay<P: Packet>(shared: &Shared, me: &str, packet: &P, seq: u16) -> Handled {
+    let ntc = frame(seq, packet)?;
+    for other in shared.world.lock().unwrap().others(me) {
+        shared.players.send(&other, ntc.clone());
+    }
+    Ok(vec![])
 }
 
 /// Tells everyone in the city (the requester included) how circle `id` looks now.

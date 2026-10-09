@@ -226,6 +226,11 @@ impl World {
         }
     }
 
+    /// Whether this connection placed the player (a newer login may have replaced the place).
+    pub fn placed_by(&self, capcom_id: &str, conn: u64) -> bool {
+        self.places.get(capcom_id).is_some_and(|p| p.conn == conn)
+    }
+
     pub fn place(&mut self, capcom_id: &str) -> Option<&mut Place> {
         self.places.get_mut(capcom_id)
     }
@@ -343,6 +348,41 @@ impl World {
         for id in ids {
             self.tidy(id);
         }
+    }
+
+    /// The players at the same place as `capcom_id`, without them.
+    pub fn others(&self, capcom_id: &str) -> Vec<String> {
+        self.neighbours(capcom_id)
+            .into_iter()
+            .filter(|(id, _)| *id != capcom_id)
+            .map(|(id, _)| id.to_owned())
+            .collect()
+    }
+
+    /// The players at a place given by its parts (the layer search), the earliest first.
+    pub fn players_at(
+        &self,
+        server: u32,
+        gate: Option<u16>,
+        city: Option<u16>,
+    ) -> Vec<(&str, &Place)> {
+        let mut list: Vec<_> = self
+            .places
+            .iter()
+            .filter(|(_, p)| p.server == server && p.gate == gate && p.city == city)
+            .map(|(id, p)| (id.as_str(), p))
+            .collect();
+        list.sort_by_key(|(_, p)| p.arrival);
+        list
+    }
+
+    /// The host of a city (its leader), while they're in it.
+    pub fn city_host(&self, id: CityId) -> Option<&str> {
+        let leader = self.cities.get(&id)?.leader.as_str();
+        self.city_players(id)
+            .iter()
+            .any(|p| p == leader)
+            .then_some(leader)
     }
 
     /// Where the player's city is, if in one.
@@ -544,6 +584,36 @@ impl World {
 }
 
 /// A layer's state in lists: 1 empty, 2 full (or reserved), 3 joinable.
+/// A layer's path as consoles address it: depth (1 world server, 2 gate, 3 city), world server, 1, gate, city.
+pub fn path(server: u32, gate: Option<u16>, city: Option<u16>) -> [u8; 14] {
+    let depth: u32 = match (gate, city) {
+        (_, Some(_)) => 3,
+        (Some(_), None) => 2,
+        (None, None) => 1,
+    };
+    let mut path = [0; 14];
+    path[..4].copy_from_slice(&depth.to_be_bytes());
+    path[4..8].copy_from_slice(&server.to_be_bytes());
+    path[8..10].copy_from_slice(&1u16.to_be_bytes());
+    path[10..12].copy_from_slice(&gate.unwrap_or(0).to_be_bytes());
+    path[12..14].copy_from_slice(&city.unwrap_or(0).to_be_bytes());
+    path
+}
+
+/// A path's world server, gate and city (0 parts are absent).
+pub fn parse_path(path: &[u8]) -> Option<(u32, Option<u16>, Option<u16>)> {
+    if path.len() < 8 {
+        return None;
+    }
+    let server = u32::from_be_bytes(path[4..8].try_into().ok()?);
+    let part = |at: usize| {
+        path.get(at..at + 2)
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+            .filter(|v| *v != 0)
+    };
+    Some((server, part(10), part(12)))
+}
+
 fn state(population: u32, capacity: u32, reserved: bool) -> u8 {
     match population {
         _ if reserved => 2,
@@ -620,6 +690,18 @@ pub fn cities(
                 // Depth: cities are layer 3.
                 .with(0x15, Item::Byte(3))
                 .with(0x16, Item::String(Bytes::from(path.into_bytes())));
+            // An occupied city shows where its host is.
+            let record = match world.city_host(id) {
+                Some(_) => record.with(
+                    0x02,
+                    Item::Binary(Bytes::copy_from_slice(&self::path(
+                        server,
+                        Some(gate),
+                        Some(index as u16),
+                    ))),
+                ),
+                None => record,
+            };
             (record, city.map(|c| c.settings.clone()).unwrap_or_default())
         })
         .collect()
