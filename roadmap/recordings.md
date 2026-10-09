@@ -36,10 +36,6 @@ console), and only if the chat menu offers a recipient. If no menu offers it, `L
 
 - Seats on the Rust server: s13's steps; dev2 is refused dev1's seat; quitting while seated frees it.
 - Player search on the Rust server: s12's steps 1–3 (dev1 is no longer among its own results, D9).
-- Jumps on the Rust server (M5 D10–D13): s15's steps, each pick now a jump: Change Gates to City Gate 2, Warp to
-  dev2's city from the friends list and from the card; then dev2 in another world server (Greed1) and dev1 warps
-  there from the friends list (the reconnection); last, dev2's city full (four players can't be had: skip) or
-  reserved (dev2 creating another city while dev1 warps).
 
 ### The hour-long session (M5 exit criterion 4)
 
@@ -62,3 +58,7 @@ punch), the others direct; a city and a quest with all three. Shows a relayed an
   same way (the empty message, error `0x80060002`, no jump request): MH3SP's paths start with the depth where the
   console wants its version constant (M5 D11). The friends list warps through `ReqUserSearchInfo`, like the card. No
   menu found that searches cities. Built after it: the jumps (M5 D10–D13).
+- 2026-10-09, jumps on the Rust server (M5 D10–D13): Change Gates to City Gate 2, the friends list's warp and the
+  card's "Warp to" into dev2's city, and the friends list's warp to dev2 on another world server (Greed1: the
+  reconnection and the ticket) all land where they should; no error or warning in the server's log. Not tried: a jump
+  refused (a full or reserved city).

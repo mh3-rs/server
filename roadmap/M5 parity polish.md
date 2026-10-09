@@ -160,8 +160,8 @@ chat menu offers it; `NtcLayerTellLow` never. The console sessions to do: `recor
       `Shared::jumps`, a minute); Change Gates' rows and the card's item 4 with the console's version constant
       (ConnectionData item 3, required at the FMP login); a jump leaves and arrives as walking does (`enter_gate`,
       `enter_city`, `depart`). Tests: `jumps_within_a_world_server`, `jumps_to_another_world_server`; s15 replays
-      (its divergences: the jump paths; a friend request delivered at the next position, M3 D2). To see on consoles
-      (`recordings.md`: the Rust check).
+      (its divergences: the jump paths; a friend request delivered at the next position, M3 D2). Seen on consoles
+      (2026-10-09): every jump, to another world server too.
 - [ ] Recordings (D1) of the rest, each replaying whole (`recordings.md`).
 - [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
       `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.
