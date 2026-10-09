@@ -24,5 +24,16 @@ the user runs it), `server.sh` (Python MH3SP); `tools/oracle.sh` restarts Python
   `CONTENT_DIR`.
 - Logs are anonymous (IDs only, no names, no IP addresses); secrets (support codes, PAT tickets, `SECRET`) are
   never logged.
-- `scripts/ci-tests.sh` must pass before a commit; after changing a query or the schema, `scripts/sqlx-prepare.sh`.
+- YAGNI, and code written once: no stand-ins to replace later, no single-implementation traits. A feature deferred
+  hides behind a function with its final signature (architecture decision 10).
+- Byte work with the `bytes` (`Buf`/`BufMut`) and `hex` crates, never hand-rolled.
+- `Option<T>` rather than an `Unknown` enum variant.
+- Before 1.0.0, one schema file (`migrations/0001_schema.sql`) rewritten in place; `scripts/dev.sh --reset` after
+  changing it.
+- No internal primary keys in users' hands (UUID public ids); support codes stored only as HMAC-SHA256 with `SECRET`.
+- `scripts/ci-tests.sh` must pass before a commit, chained with `&&`, never `;`:
+  `scripts/ci-tests.sh > /tmp/ci.log 2>&1 && git add -A && git commit …`. After changing a query or the schema,
+  `scripts/sqlx-prepare.sh`.
 - Commits end with the `Co-Authored-By` and `Claude-Session` lines; the user pushes.
+- Settled decisions go into the roadmap (the milestone's file, lasting ones in `architecture.md`); pending console
+  sessions into `roadmap/recordings.md`.
