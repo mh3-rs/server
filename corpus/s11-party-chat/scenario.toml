@@ -1,0 +1,14 @@
+description = "Chat in a quest party: dev1 creates a city and a quest, dev2 joins; before departure both chat ('party 1', 'party 2'): plain city chat (NtcLayerChat), shown to both; in the hunt both chat ('hunt 1', 'hunt 2'), shown to both in each player's colour (dev1 red, dev2 blue) but never through the server: chat in a hunt is console to console (the decomp: NtcCircleChat only without a P2P session). dev1 abandons."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev1: create a quest; dev2: join it",
+  "dev1: chat 'party 1'; dev2: chat 'party 2'",
+  "both: ready, depart; dev1: chat 'hunt 1'; dev2: chat 'hunt 2'",
+  "dev1: abandon; both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"
