@@ -728,6 +728,9 @@ async fn cities_are_shared() {
         .await;
         expect::<AnsLayerDown>(c).await;
     }
+    // A, already in the gate, sees B arrive.
+    let arrived = expect::<NtcLayerIn>(&mut a).await;
+    assert_eq!(string(arrived.user.get(0x02)), "Aiko");
     send(&mut a, 11, ReqLayerCreateHead { number: 1 }).await;
     expect::<AnsLayerCreateHead>(&mut a).await;
     // Reserved: shown full to the other player, who can't create it.
@@ -772,9 +775,16 @@ async fn cities_are_shared() {
     send(&mut b, 15, ReqLayerUserList { fields: vec![] }).await;
     assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 2);
 
-    // The creator leaves the game: the city stays, with the other player in it.
+    // The creator leaves the game: B sees them go and becomes the city's host; the city stays.
+    send(&mut a, 14, ReqLayerUserList { fields: vec![] }).await;
+    let a_id = string(expect::<AnsLayerUserList>(&mut a).await.users[0].get(0x01));
     drop(a);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        String::from_utf8(expect::<NtcLayerOut>(&mut b).await.capcom_id.to_vec()).unwrap(),
+        a_id
+    );
+    let host = expect::<NtcLayerHost>(&mut b).await;
+    assert_ne!(String::from_utf8(host.capcom_id.to_vec()).unwrap(), a_id);
     send(&mut b, 16, ReqLayerUserList { fields: vec![] }).await;
     assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 1);
     running.stop().await;
