@@ -398,6 +398,31 @@ packets! {
     AnsBlackList = 0x66620200 { unk: u32, users: Vec<PatData> }
     /// The game's own integrity report (anti-cheat, M6).
     NtcCheatCheck = 0x60801000 { data: Rest }
+
+    // FMP: chat and messages.
+    /// City chat (`info`: colour, time, sender's Capcom ID and name, filled in by the server when relayed).
+    NtcLayerChat = 0x64721000 { unk: u8, info: PatData, text: Bytes }
+    /// A message to one player (`capcom_id`: the recipient; the server fills in the sender in `info`).
+    ReqTell = 0x66110100 { capcom_id: Bytes, info: PatData, text: Bytes }
+    AnsTell = 0x66110200 {}
+    NtcTell = 0x66111000 { capcom_id: Bytes, info: PatData, text: Bytes }
+    // FMP: friends and black list.
+    /// A message to a player carrying a friend request.
+    ReqFriendAdd = 0x66500100 { capcom_id: Bytes, info: PatData, text: Bytes }
+    AnsFriendAdd = 0x66500200 {}
+    /// A friend request, as a message kept in the recipient's inbox.
+    NtcFriendAccept = 0x66511000 { capcom_id: Bytes, info: PatData, text: Bytes }
+    /// The answer to a friend request (1 accepted).
+    ReqFriendAccept = 0x66510100 { capcom_id: Bytes, accepted: u8 }
+    AnsFriendAccept = 0x66510200 {}
+    /// A new friend, to both players (`friend`: index, Capcom ID, name).
+    NtcFriendAdd = 0x66501000 { capcom_id: Bytes, friend: PatData, accepted: u8 }
+    ReqFriendDelete = 0x66530100 { capcom_id: Bytes }
+    AnsFriendDelete = 0x66530200 {}
+    ReqBlackAdd = 0x66600100 { capcom_id: Bytes, info: PatData }
+    AnsBlackAdd = 0x66600200 {}
+    ReqBlackDelete = 0x66610100 { capcom_id: Bytes }
+    AnsBlackDelete = 0x66610200 {}
 }
 
 #[cfg(test)]
