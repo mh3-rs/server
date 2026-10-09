@@ -78,7 +78,8 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
       (`profile_notices_reach_their_target`); the join/leave `state` note in the code.
 - [ ] Recordings (D1) and the missing handlers, each replaying whole.
 - [ ] Content (D2): the generator's rework, the live branch's quests byte-identical.
-- [ ] Announcements (D3): the endpoint, `mh3sp announce`, a test.
+- [x] Announcements (D3): `POST /announce` on the health port, `mh3sp announce "<text>"`; every logged-in player,
+      from "[MH3SP]", 30-character lines (tests: the cutting; two consoles at different places). To see on a console.
 - [ ] Graceful shutdown (D4).
 - [ ] Metrics (D5).
 - [ ] Lab: the town interval (D7); a quest ending without the server (M3 D4); the mixed city on two machines (M4).

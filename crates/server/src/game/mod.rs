@@ -15,8 +15,8 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use bytes::Bytes;
 use sqlx::SqlitePool;
-use wire::packets::{AnsServerTime, Packet, ReqConnection};
-use wire::{DecodeError, EncodeError, Frame, PacketId, PatWrite};
+use wire::packets::{AnsServerTime, NtcLayerChat, Packet, ReqConnection};
+use wire::{DecodeError, EncodeError, Frame, Item, PacketId, PatData, PatWrite};
 
 use crate::Shared;
 use crate::accounts::Console;
@@ -155,6 +155,43 @@ pub fn frame<P: Packet>(seq: u16, packet: &P) -> Result<Frame, Fault> {
     })
 }
 
+/// An announcement to players (M5 D3), as MH3SP sends them: city chat from a made-up sender, the text in lines of at
+/// most 30 characters (the chat's width), cut between words (a longer word is cut).
+pub fn announcement(text: &str) -> Vec<Frame> {
+    const WIDTH: usize = 30;
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        let mut word: Vec<char> = word.chars().collect();
+        while !word.is_empty() {
+            let line_len = lines.last().map(|l| l.chars().count());
+            match line_len {
+                Some(n) if n + 1 + word.len() <= WIDTH => {
+                    let line = lines.last_mut().expect("a line");
+                    line.push(' ');
+                    line.extend(word.drain(..));
+                }
+                _ => lines.push(word.drain(..word.len().min(WIDTH)).collect()),
+            }
+        }
+    }
+    let info = PatData::new()
+        .with(0x01, Item::Long(0x00ff_fff0))
+        .with(0x02, Item::Long(0))
+        .with(0x03, Item::String(Bytes::from_static(b"000000")))
+        .with(0x04, Item::String(Bytes::from_static(b"[MH3SP]")));
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let chat = NtcLayerChat {
+                channel: 1,
+                info: info.clone(),
+                text: line.into(),
+            };
+            frame(0, &chat).ok()
+        })
+        .collect()
+}
+
 pub fn reply<P: Packet>(seq: u16, packet: &P) -> Handled {
     Ok(vec![frame(seq, packet)?])
 }
@@ -199,4 +236,33 @@ fn req_connection() -> Result<Frame, Fault> {
 /// Whether a console may play here. Everyone until the website's access modes (M8).
 pub async fn allowed(_db: &SqlitePool, _support_code: Option<&[u8]>) -> sqlx::Result<bool> {
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn announcements_fit_the_chat() {
+        let lines = |text: &str| -> Vec<String> {
+            announcement(text)
+                .iter()
+                .map(|f| {
+                    String::from_utf8(NtcLayerChat::decode(&f.payload).unwrap().text.to_vec())
+                        .unwrap()
+                })
+                .collect()
+        };
+        assert_eq!(
+            lines("The server restarts in 5 minutes, finish your quests please"),
+            [
+                "The server restarts in 5",
+                "minutes, finish your quests",
+                "please"
+            ]
+        );
+        // A word longer than a line is cut.
+        assert_eq!(lines(&"x".repeat(35)), ["x".repeat(30), "x".repeat(5)]);
+        assert!(lines("   ").is_empty());
+    }
 }

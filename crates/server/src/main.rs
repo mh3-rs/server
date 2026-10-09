@@ -1,5 +1,6 @@
 //! `mh3sp`              run the server
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
+//! `mh3sp announce "<text>"`  an announcement to every player of the running server
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
@@ -17,8 +18,17 @@ async fn main() -> Result<()> {
     let maintenance = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => None,
         ["healthcheck"] => return server::health::check(server::config::health()?),
+        ["announce", text] => {
+            println!(
+                "{}",
+                server::health::announce(server::config::health()?, text)?
+            );
+            return Ok(());
+        }
         ["maintenance", message] => Some(message.to_owned()),
-        _ => anyhow::bail!("usage: mh3sp [healthcheck | maintenance \"<message>\"]"),
+        _ => anyhow::bail!(
+            "usage: mh3sp [healthcheck | announce \"<text>\" | maintenance \"<message>\"]"
+        ),
     };
 
     tracing_subscriber::fmt()

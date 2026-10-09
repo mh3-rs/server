@@ -8,6 +8,8 @@
 //!   A database outage doesn't make the server unhealthy: players already in town or on a quest
 //!   don't need it, a restart would drop them, and the pool reconnects by itself. It only means
 //!   "don't send new players here".
+//! - `POST /announce` (body: the text): an announcement to every logged-in player (`mh3sp announce`). This port is
+//!   for the operator: never expose it.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream as StdTcpStream};
@@ -19,7 +21,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::Shared;
 
@@ -47,20 +49,40 @@ async fn answer(mut stream: TcpStream, shared: &Shared) -> Result<()> {
     let mut buf = [0u8; 512];
     let n = tokio::time::timeout(CHECK_TIMEOUT, stream.read(&mut buf)).await??;
     let request = std::str::from_utf8(&buf[..n]).unwrap_or_default();
-    let path = request.split_whitespace().nth(1).unwrap_or_default();
-    let (status, body) = match path {
-        "/health/live" => match shared.maintenance().is_some() || shared.db.pool().is_some() {
-            true => ("200 OK", "live\n".to_owned()),
-            false => (
-                "503 Service Unavailable",
-                "database: not opened yet\n".to_owned(),
-            ),
+    let mut words = request.split_whitespace();
+    let (method, path) = (
+        words.next().unwrap_or_default(),
+        words.next().unwrap_or_default(),
+    );
+    let content = request
+        .split_once("\r\n\r\n")
+        .map_or("", |(_, body)| body)
+        .trim();
+    let (status, body) = match (method, path) {
+        ("POST", "/announce") => match content {
+            "" => ("400 Bad Request", "no text\n".to_owned()),
+            // The whole request must fit the one read.
+            _ if n == buf.len() => ("413 Content Too Large", "too long\n".to_owned()),
+            text => {
+                let players = shared.players.broadcast(&crate::game::announcement(text));
+                info!(players, %text, "announcement");
+                ("200 OK", format!("sent to {players} players\n"))
+            }
         },
-        "/health/ready" => match not_ready(shared).await {
-            None => ("200 OK", "ready\n".to_owned()),
-            Some(reasons) => ("503 Service Unavailable", reasons),
+        (_, path) => match path {
+            "/health/live" => match shared.maintenance().is_some() || shared.db.pool().is_some() {
+                true => ("200 OK", "live\n".to_owned()),
+                false => (
+                    "503 Service Unavailable",
+                    "database: not opened yet\n".to_owned(),
+                ),
+            },
+            "/health/ready" => match not_ready(shared).await {
+                None => ("200 OK", "ready\n".to_owned()),
+                Some(reasons) => ("503 Service Unavailable", reasons),
+            },
+            _ => ("404 Not Found", "not found\n".to_owned()),
         },
-        _ => ("404 Not Found", "not found\n".to_owned()),
     };
     let response = format!(
         "HTTP/1.0 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}",
@@ -88,6 +110,34 @@ async fn not_ready(shared: &Shared) -> Option<String> {
 
 /// `mh3sp healthcheck`: asks a running server whether it is live. Blocking, no runtime needed.
 pub fn check(addr: SocketAddr) -> Result<()> {
+    let response = request(addr, "GET /health/live HTTP/1.0\r\n\r\n")?;
+    match response.split_whitespace().nth(1) {
+        Some("200") => Ok(()),
+        _ => bail!(
+            "not live: {}",
+            response.lines().next().unwrap_or("no answer")
+        ),
+    }
+}
+
+/// `mh3sp announce "<text>"`: an announcement to every player of a running server; what it answered.
+pub fn announce(addr: SocketAddr, text: &str) -> Result<String> {
+    let response = request(
+        addr,
+        &format!(
+            "POST /announce HTTP/1.0\r\nContent-Length: {}\r\n\r\n{text}",
+            text.len()
+        ),
+    )?;
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    match head.split_whitespace().nth(1) {
+        Some("200") => Ok(body.trim().to_owned()),
+        _ => bail!("refused: {}", body.trim()),
+    }
+}
+
+/// One request to a running server's health port; its whole response. Blocking, no runtime needed.
+fn request(addr: SocketAddr, request: &str) -> Result<String> {
     // A server bound to 0.0.0.0 is reached through loopback.
     let addr = match addr.ip().is_unspecified() {
         true => SocketAddr::from(([127, 0, 0, 1], addr.port())),
@@ -96,14 +146,8 @@ pub fn check(addr: SocketAddr) -> Result<()> {
     let mut stream = StdTcpStream::connect_timeout(&addr, CHECK_TIMEOUT)
         .with_context(|| format!("connect {addr}"))?;
     stream.set_read_timeout(Some(CHECK_TIMEOUT))?;
-    stream.write_all(b"GET /health/live HTTP/1.0\r\n\r\n")?;
+    stream.write_all(request.as_bytes())?;
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
-    match response.split_whitespace().nth(1) {
-        Some("200") => Ok(()),
-        _ => bail!(
-            "not live: {}",
-            response.lines().next().unwrap_or("no answer")
-        ),
-    }
+    Ok(response)
 }

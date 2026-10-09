@@ -982,6 +982,36 @@ async fn profile_notices_reach_their_target() {
     running.stop().await;
 }
 
+/// Tier 3: `mh3sp announce` reaches every logged-in player, wherever they are, from "[MH3SP]".
+#[tokio::test]
+async fn announcements_reach_everyone() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut in_world = enter_world(&running).await;
+    let mut in_gate = enter_world(&running).await;
+    let info = PatData::new();
+    send(&mut in_gate, 10, ReqLayerDown { layer: 1, info }).await;
+    drain(&mut in_gate, Duration::from_millis(100)).await;
+    let health = running.health;
+    let answer = tokio::task::spawn_blocking(move || {
+        server::health::announce(health, "Maintenance tonight")
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(answer, "sent to 2 players");
+    for c in [&mut in_world, &mut in_gate] {
+        let chat = expect::<NtcLayerChat>(c).await;
+        assert_eq!(string(chat.info.get(0x04)), "[MH3SP]");
+        assert_eq!(&chat.text[..], b"Maintenance tonight");
+    }
+    let empty = tokio::task::spawn_blocking(move || server::health::announce(health, " "))
+        .await
+        .unwrap();
+    assert!(empty.is_err());
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

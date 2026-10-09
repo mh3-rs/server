@@ -109,6 +109,16 @@ impl Players {
         }
     }
 
+    /// Sends frames to every logged-in player: how many.
+    pub fn broadcast(&self, frames: &[Frame]) -> usize {
+        for mailbox in self.0.iter() {
+            for frame in frames {
+                mailbox.send(frame.clone());
+            }
+        }
+        self.0.len()
+    }
+
     /// Whether a logged-in player connects from `ip`. ponytail: a scan of every player, per NAT negotiation
     /// started; an index by address if thousands play at once.
     pub fn online(&self, ip: IpAddr) -> bool {

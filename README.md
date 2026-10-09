@@ -35,13 +35,19 @@ on):
 | 27900 | UDP | the game's availability check |
 | 27901 | UDP | NAT negotiation |
 | 40000–40999 | UDP | the relay (`RELAY_PORTS`) |
-| 8280 | TCP | health (`/health/live`, `/health/ready`): keep it internal |
+| 8280 | TCP | health (`/health/live`, `/health/ready`) and operator commands (`announce`): keep it internal |
 
 ### DNS
 
 The game looks up `natneg1`, `natneg2` and `natneg3` under the NAT negotiation domain: point all three at the
 server. Optionally, point `natneg2` and `natneg3` at a **second** IP of the same server: NAT negotiation then spots
 symmetric NATs and sends their pairs straight to the relay, instead of after one failed attempt (no setting needed).
+
+### Announcements
+
+`mh3sp announce "Maintenance tonight at 22:00"` sends a message to every logged-in player, shown in their chat from
+"[MH3SP]" (cut in lines of 30 characters). It talks to the running server through its health port (8280), which must
+stay internal: anyone reaching it could announce.
 
 ### Docker
 
