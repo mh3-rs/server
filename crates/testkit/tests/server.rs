@@ -1110,6 +1110,272 @@ async fn party(running: &server::Running, gate: u16, depart: bool) -> (Console, 
     (a, b)
 }
 
+/// The step `step` of two consoles meeting, A leading: 1 the gate, 2 A's city, 3 B in it, 4 A's quest, 5 B in it,
+/// 6 both ready, 7 departure (0, entering the world, is done by the caller).
+async fn meet(a: &mut Console, b: &mut Console, gate: u16, step: u16) {
+    let seq = 10 + step;
+    match step {
+        1 => {
+            for c in [&mut *a, &mut *b] {
+                let info = PatData::new();
+                send(c, seq, ReqLayerDown { layer: gate, info }).await;
+            }
+        }
+        2 => {
+            send(a, 20, ReqLayerCreateHead { number: 1 }).await;
+            let set = ReqLayerCreateSet {
+                number: 1,
+                layer: PatData::new(),
+                extra: Default::default(),
+            };
+            send(a, 21, set).await;
+            send(a, 22, ReqLayerCreateFoot { number: 1, unk: 0 }).await;
+        }
+        3 => {
+            let info = PatData::new();
+            send(b, seq, ReqLayerDown { layer: 1, info }).await;
+        }
+        4 => {
+            let info = PatData::new().with(0x09, Item::Long(4));
+            let extra = Default::default();
+            send(a, seq, ReqCircleCreate { info, extra }).await;
+        }
+        5 => {
+            let info = PatData::new();
+            send(b, seq, ReqCircleJoin { circle: 1, info }).await;
+        }
+        6 => {
+            for c in [&mut *a, &mut *b] {
+                let options = PatData::new().with(0x03, Item::Byte(1));
+                send(c, seq, ReqCircleMatchOptionSet { options }).await;
+            }
+        }
+        7 => send(a, seq, ReqCircleMatchStart {}).await,
+        _ => unreachable!(),
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+/// Tier 3: either console vanishing at any step of meeting leaves nothing behind. The other keeps playing; once
+/// both are gone, a newcomer finds the gate and city empty and creates the same city and quest.
+#[tokio::test]
+async fn a_disconnect_at_every_step_leaves_no_trace() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // Each case on its own gate, all at once (logins are slow: a pause before each connection's first frame).
+    let cases = (0..=7).flat_map(|steps| [(steps, true), (steps, false)]);
+    let runs = cases
+        .zip(1..)
+        .map(|((steps, a_vanishes), gate)| vanish(&running, gate, steps, a_vanishes));
+    futures_util::future::join_all(runs).await;
+    running.stop().await;
+}
+
+async fn vanish(running: &server::Running, gate: u16, steps: u16, a_vanishes: bool) {
+    let at = format!(
+        "{} vanishing after step {steps}",
+        if a_vanishes { "A" } else { "B" }
+    );
+    let mut a = enter_world(running).await;
+    let mut b = enter_world(running).await;
+    for step in 1..=steps {
+        meet(&mut a, &mut b, gate, step).await;
+    }
+    let (gone, mut stays) = if a_vanishes { (a, b) } else { (b, a) };
+    drop(gone);
+    let seen = drain(&mut stays, Duration::from_millis(200)).await;
+    // Seen go: from the city once both are in it (step 3), from the quest once both are in it (step 5).
+    for (from, expected) in [(3, NtcLayerOut::ID), (5, NtcCircleLeave::ID)] {
+        if steps >= from {
+            assert!(seen.contains(&expected), "{at}: no {expected} in {seen:?}");
+        }
+    }
+    if steps > 0 {
+        send(&mut stays, 40, ReqLayerUserList { fields: vec![] }).await;
+        let users = expect::<AnsLayerUserList>(&mut stays).await.users;
+        assert_eq!(users.len(), 1, "{at}: the one left sees others");
+    }
+    drop(stays);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    nothing_left(running, gate, &at).await;
+}
+
+/// Nobody left in `gate`, nor in its city 1: a newcomer creates that city and its quest 1.
+async fn nothing_left(running: &server::Running, gate: u16, at: &str) {
+    let mut c = enter_world(running).await;
+    let gates = children(&mut c, 10, u32::from(gate), 1).await;
+    assert_eq!(long(gates[0].0.get(0x06)), 0, "{at}: gate population");
+    let info = PatData::new();
+    send(&mut c, 11, ReqLayerDown { layer: gate, info }).await;
+    expect::<AnsLayerDown>(&mut c).await;
+    let cities = children(&mut c, 12, 1, 1).await;
+    assert_eq!(long(cities[0].0.get(0x06)), 0, "{at}: city population");
+    assert_eq!(
+        cities[0].0.get(0x10),
+        Some(&Item::Byte(1)),
+        "{at}: city state"
+    );
+    meet(&mut c, &mut enter_world(running).await, gate, 2).await;
+    let seen = drain(&mut c, Duration::from_millis(100)).await;
+    assert!(
+        seen.contains(&AnsLayerCreateFoot::ID),
+        "{at}: city: {seen:?}"
+    );
+    let info = PatData::new();
+    let extra = Default::default();
+    send(&mut c, 30, ReqCircleCreate { info, extra }).await;
+    expect::<NtcCircleListLayerChange>(&mut c).await;
+    assert_eq!(
+        expect::<AnsCircleCreate>(&mut c).await.circle,
+        1,
+        "{at}: quest"
+    );
+}
+
+/// Tier 3, stress: consoles doing random things (seeded: a failure replays) in two gates, some vanishing and coming
+/// back. Whatever they did, the server stays up and, once they're all gone, nothing is left behind.
+#[tokio::test]
+async fn random_play_leaves_no_trace() {
+    const CONSOLES: u64 = 8;
+    const ACTIONS: usize = 40;
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let seed = std::env::var("SEED").map_or(0x5eed, |s| s.parse().unwrap());
+    eprintln!("SEED={seed}");
+    let players = (0..CONSOLES).map(|i| {
+        random_play(
+            &running,
+            seed ^ (i + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15),
+            ACTIONS,
+        )
+    });
+    let dropped: usize = futures_util::future::join_all(players)
+        .await
+        .into_iter()
+        .sum();
+    eprintln!("{dropped} connections dropped by the server");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for gate in [1, 2] {
+        nothing_left(
+            &running,
+            gate,
+            &format!("gate {gate} after random play (SEED={seed})"),
+        )
+        .await;
+    }
+    running.stop().await;
+}
+
+/// One console's random play: how many times the server dropped it.
+async fn random_play(running: &server::Running, mut seed: u64, actions: usize) -> usize {
+    let mut random = move |n: u64| {
+        // xorshift64
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed % n
+    };
+    let mut c = enter_world(running).await;
+    let mut dropped = 0;
+    for seq in 100..100 + actions as u16 {
+        let n = random(3) as u16 + 1;
+        let frames: Vec<Frame> = match random(12) {
+            0 => vec![request(
+                seq,
+                ReqLayerDown {
+                    layer: n.min(2),
+                    info: PatData::new(),
+                },
+            )],
+            1 => vec![request(seq, ReqLayerUp {})],
+            2 => vec![
+                request(seq, ReqLayerCreateHead { number: n }),
+                request(
+                    seq,
+                    ReqLayerCreateSet {
+                        number: n,
+                        layer: PatData::new(),
+                        extra: Default::default(),
+                    },
+                ),
+                request(seq, ReqLayerCreateFoot { number: n, unk: 0 }),
+            ],
+            3 => vec![request(
+                seq,
+                ReqLayerDown {
+                    layer: n,
+                    info: PatData::new(),
+                },
+            )],
+            4 => vec![request(
+                seq,
+                ReqCircleCreate {
+                    info: PatData::new().with(0x09, Item::Long(4)),
+                    extra: Default::default(),
+                },
+            )],
+            5 => vec![request(
+                seq,
+                ReqCircleJoin {
+                    circle: n.into(),
+                    info: PatData::new(),
+                },
+            )],
+            6 => vec![request(seq, ReqCircleLeave { circle: n.into() })],
+            7 => vec![request(
+                seq,
+                ReqCircleMatchOptionSet {
+                    options: PatData::new().with(0x03, Item::Byte(1)),
+                },
+            )],
+            8 => vec![request(seq, ReqCircleMatchStart {})],
+            9 => vec![request(
+                seq,
+                NtcLayerUserPosition {
+                    data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
+                },
+            )],
+            10 => vec![request(seq, ReqLayerEnd {})],
+            _ => {
+                // Vanishes, comes back.
+                c = enter_world(running).await;
+                continue;
+            }
+        };
+        let mut closed = false;
+        for frame in frames {
+            closed |= c.send(frame).await.is_err();
+        }
+        let window = Duration::from_millis(random(15) + 1);
+        loop {
+            match c.recv(window).await {
+                Ok(Received::Frame(_)) => continue,
+                Ok(Received::Timeout) => break,
+                Ok(Received::Closed) | Err(_) => {
+                    closed = true;
+                    break;
+                }
+            }
+        }
+        if closed {
+            dropped += 1;
+            c = enter_world(running).await;
+        }
+    }
+    dropped
+}
+
+fn request<P: Packet>(seq: u16, packet: P) -> Frame {
+    let mut payload = Vec::new();
+    packet.encode(&mut payload).unwrap();
+    Frame {
+        seq,
+        id: P::ID,
+        payload: payload.into(),
+    }
+}
+
 /// Tier 3: a quest leader whose console vanishes (a crash, a lost connection) leaves cleanly: before departure the
 /// party is cancelled for the others, after departure the next member leads it; the city gets a new host.
 #[tokio::test]

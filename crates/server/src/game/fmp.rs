@@ -639,7 +639,10 @@ impl Fmp {
                 let r = ReqCircleMatchOptionSet::decode(p)?;
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
-                let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                // A race, not a fault: the quest just broke, or departed without the player.
+                let Some(id) = world.circle_of(me) else {
+                    return reply(seq, &AnsCircleMatchOptionSet {});
+                };
                 world.set_standby(me, matches!(r.options.get(0x03), Some(Item::Byte(1))));
                 let circle = world.circle(id).expect("circle of the player");
                 let options = set(
@@ -821,8 +824,11 @@ impl Fmp {
                 ReqCircleUserList::decode(p)?;
                 let world = shared.world.lock().unwrap();
                 let me = capcom_id(session);
-                let id = world.circle_of(me).ok_or_else(not_in_circle)?;
-                let users = world.circle_members(id);
+                // Out of a quest that just ended: nobody.
+                let users = world
+                    .circle_of(me)
+                    .map(|id| world.circle_members(id))
+                    .unwrap_or_default();
                 drop(world);
                 let users = users
                     .into_iter()

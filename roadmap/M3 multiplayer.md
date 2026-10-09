@@ -131,7 +131,11 @@ player kicked for not being ready, a party broken by its leader before departure
 - [x] Tier 3, relay latency (`relay_latency`): 4 consoles in one city, 50 rounds of positions from each, timed from
       send to each receiver (600 deliveries): p99 must stay under 2 ms. Measured (debug build, one Mac): median
       ~0.13 ms, p99 ~0.3 ms, max ~0.6 ms; MH3SP: 50–80 ms.
-- [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test.
+- [x] Tier 3: 2–4 consoles, disconnect at every step, stress test. `a_disconnect_at_every_step_leaves_no_trace`:
+      two consoles meeting (gate, city, quest, ready, departure), either vanishing after any step; the other sees
+      them go and keeps playing, then a newcomer finds nothing left. `random_play_leaves_no_trace`: 8 consoles,
+      seeded random actions (`SEED=` replays one), vanishing and coming back; the server stays up and nothing is left.
+      Found: a ready toggle or party list request racing the quest's end dropped the console; now answered plainly.
 - [ ] Dolphin run with two consoles (exit criterion 1).
 - [ ] Lab checks: with two consoles on the Rust server, does Local Info now show the real population (the Rust
       server answers `LayerChildInfo` with the real layer, MH3SP a 0/4 placeholder), and does a kick option appear
