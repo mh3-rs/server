@@ -13,7 +13,9 @@ use serde::Deserialize;
 pub struct Mask {
     pub packet: String,
     pub offset: usize,
-    pub len: usize,
+    /// Absent: to the end of the payload, whose length may then differ (a divergence where the Rust server sends
+    /// other records than the recording).
+    pub len: Option<usize>,
     pub var: Option<String>,
     pub payload_len: Option<usize>,
     /// Hex bytes.
@@ -54,6 +56,12 @@ impl Masks {
             masks.extend(more);
         }
         for m in &masks {
+            if m.len.is_none() && (m.var.is_some() || m.pattern.is_some()) {
+                anyhow::bail!(
+                    "mask on {}: without a len, neither var nor pattern",
+                    m.packet
+                );
+            }
             if let Some(pattern) = &m.pattern {
                 crate::corpus::unhex(pattern)
                     .with_context(|| format!("mask on {}: pattern", m.packet))?;
@@ -124,12 +132,20 @@ pub fn matches(
 ) -> bool {
     let mut expected = recorded.to_vec();
     bindings.apply(&mut expected);
+    let mut live = live;
+    // Masks to the end: only what comes before them is compared.
+    for m in masks.of(packet, recorded.len()).filter(|m| m.len.is_none()) {
+        if m.offset <= expected.len() && m.offset <= live.len() {
+            expected.truncate(m.offset);
+            live = &live[..m.offset];
+        }
+    }
     if expected.len() != live.len() {
         return false;
     }
     let mut learned = Vec::new();
     let mut ranges = Vec::new();
-    for m in masks.of(packet, recorded.len()) {
+    for m in masks.of(packet, recorded.len()).filter(|m| m.len.is_some()) {
         match &m.pattern {
             None => ranges.push((m, m.offset)),
             Some(pattern) => {
@@ -143,7 +159,7 @@ pub fn matches(
         }
     }
     for (m, start) in ranges {
-        let range = start..start + m.len;
+        let range = start..start + m.len.expect("filtered");
         if range.end > live.len() {
             continue;
         }
@@ -170,7 +186,7 @@ mod tests {
             Mask {
                 packet: "AnsTicket".into(),
                 offset: 2,
-                len: 3,
+                len: Some(3),
                 var: Some("pat_ticket".into()),
                 payload_len: None,
                 pattern: None,
@@ -179,7 +195,7 @@ mod tests {
             Mask {
                 packet: "AnsServerTime".into(),
                 offset: 0,
-                len: 2,
+                len: Some(2),
                 var: None,
                 payload_len: None,
                 pattern: None,
@@ -188,7 +204,7 @@ mod tests {
             Mask {
                 packet: "AnsFmpInfo".into(),
                 offset: 2,
-                len: 2,
+                len: Some(2),
                 var: None,
                 payload_len: None,
                 pattern: Some("0302200a".into()),
@@ -267,6 +283,35 @@ mod tests {
             "AnsServerTime",
             b"\x01\x02",
             b"\x01\x02\x03"
+        ));
+    }
+
+    #[test]
+    fn a_mask_to_the_end_compares_what_comes_before() {
+        let masks = Masks(vec![Mask {
+            packet: "AnsBlackList".into(),
+            offset: 4,
+            len: None,
+            var: None,
+            payload_len: None,
+            pattern: None,
+            reason: Some("test".into()),
+        }]);
+        let mut b = Bindings::default();
+        let recorded = b"\0\0\0\0\0\0\0\x01blank record";
+        assert!(matches(
+            &masks,
+            &mut b,
+            "AnsBlackList",
+            recorded,
+            b"\0\0\0\0\0\0\0\0"
+        ));
+        assert!(!matches(
+            &masks,
+            &mut b,
+            "AnsBlackList",
+            recorded,
+            b"\0\0\0\x01\0\0\0\0"
         ));
     }
 

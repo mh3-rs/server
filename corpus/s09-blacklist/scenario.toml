@@ -1,0 +1,14 @@
+description = "Black list: dev1 creates a city, dev2 joins; the game offers blocking from a received message, so dev2 sends dev1 a tell ('1') and dev1 blocks dev2 from it; dev2's next tell ('test') still reaches dev1 (MH3SP doesn't filter, and neither does the console); blocking again is refused by the game itself ('already in your block list', no packet); dev1 unblocks dev2. Both lists show MH3SP's blank placeholder entry, which the console can't delete (no packet sent)."
+steps = [
+  "dev1: Online, slot 1, Valor1, gate 1, create a city",
+  "dev2: Online, slot 1, Valor1, gate 1, join dev1's city",
+  "dev2: tell to dev1 '1'",
+  "dev1: block dev2 from the received message",
+  "dev2: tell to dev1 'test' (delivered)",
+  "dev1: unblock dev2; both: return to title",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M3"

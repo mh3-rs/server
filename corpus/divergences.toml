@@ -37,3 +37,11 @@ packet = "AnsBinaryData"
 offset = 0
 len = 4
 reason = "content versions derive from the bytes (M2 D2)"
+
+# The black list: MH3SP answers one blank entry (shown by consoles as an empty line they can't delete), the Rust
+# server the actual list (empty until M3). The payload is an unknown u32, then the record count and the records:
+# compared up to the count.
+[[mask]]
+packet = "AnsBlackList"
+offset = 4
+reason = "no blank placeholder entry in the black list (seen on consoles: an empty line)"

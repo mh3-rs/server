@@ -197,18 +197,13 @@ impl Fmp {
                 )
             }
             ReqBlackList::ID => {
-                // The black list comes with M3. MH3SP answers one blank entry rather than none: kept, the console
-                // is known to accept it.
+                // The black list comes with M3. (MH3SP answers a blank entry: consoles show it as an empty line.)
                 ReqBlackList::decode(p)?;
-                let blank = PatData::new()
-                    .with(0x01, Item::Long(0))
-                    .with(0x02, Item::String(Bytes::new()))
-                    .with(0x03, Item::String(Bytes::new()));
                 reply(
                     seq,
                     &AnsBlackList {
                         unk: 0,
-                        users: vec![blank],
+                        users: vec![],
                     },
                 )
             }

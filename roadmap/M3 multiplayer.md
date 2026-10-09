@@ -56,6 +56,13 @@ player kicked for not being ready, a party broken by its leader before departure
   has one order, primary key on the pair; a deletion by either side removes the row, so the friendship ends for both
   (MH3SP removes it from the deleter's list only). A hunter replaced on its slot drops its friendships (M1 schema).
   **Open:** whether to tell the other player with a message from "system".
+  **The black list is personal** (`s09-blacklist`): `blacklist (blocker, blocked)` referencing `hunters`,
+  `UNIQUE (blocker, blocked)` ((a, b) and (b, a) are separate rows), only the blocker removes their row. The game
+  offers blocking from a received message, keeps its own copy of the list (it refuses a duplicate itself), and
+  filters nothing: the server refuses to deliver to a blocker what their blocked hunters send them (tells, messages,
+  friend requests); city chat stays visible (they're in the same city). MH3SP's blank placeholder entry in every
+  black list shows on the console as an empty line it can't delete: the Rust server sends an empty list (it copied
+  the placeholder in M2).
 - **D3 The hunter profile block. Settled:** stored in the database (`hunter_profiles`), as the raw block *and* the
   known fields, parsed and validated (HR u16 @0, weapon type u8 @5 so far; an invalid update is refused: the previous
   block kept, one `warn`). The block other consoles receive is rebuilt: the raw bytes with the known fields written
