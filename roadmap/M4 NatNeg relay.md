@@ -1,6 +1,6 @@
 # M4 — NAT negotiation and relay
 
-**Status: draft (2026-10-09), decisions to settle.**
+**Status: decisions settled (2026-10-09) but D9; lab checks before building (D6, D7, the failure path).**
 
 The consoles play towns and hunts peer to peer (UDP, GameSpy GT2); the server only matchmakes. To connect, two
 consoles go through GameSpy's **NAT negotiation** (NatNeg, UDP 27901), done today by AltWFC. M4 brings it into the
@@ -75,40 +75,43 @@ relay must never be the reason a link drops: no idle timeout under a few minutes
 
 ## Decisions
 
-### Open (recommendation first)
+Settled with the user on 2026-10-09 (D9 open).
 
-- **D1 Scope.** NatNeg (UDP 27901) and the relay; **also the QR availability check** (UDP 27900, one fixed answer:
-  a few lines), so AltWFC is left with NAS only (our own NAS stays a future step). Alternative: NatNeg only, QR stays
-  with AltWFC.
-- **D2 Strategies and default.** `NATNEG_STRATEGY = p2p | relay | hybrid` (environment variable), default
-  **`hybrid`**: P2P first, the relay for a console known to fail. `relay` for players on a network known to block P2P
-  (or a whole deployment), `p2p` for a LAN or a test.
-- **D3 Hybrid: when to use the relay.** The choice can only be made **when sending the first `CONNECT`** (a second
-  one is ignored, and nothing retries). So: (a) remember failures — a `REPORT` with failure, or the game's 11688
-  in `NtcCollectionLog` — **per console** (by Capcom ID, in memory, 30 minutes renewed on each failure): its next
-  negotiation, i.e. the player's retry, goes through the relay; (b) optionally, decide upfront from the `INIT`s
-  (symmetric NAT spotted → relay at once), which needs natneg2/natneg3 on a second IP (D9). Injecting pings mid-attempt
-  is possible but blind and blocked by restrictive NATs: no.
-- **D4 Relay ports.** One UDP port **per pair** of consoles: each console sees its peer at `relay:port`, the relay
-  forwards by source (from A to B, from B to A, nothing else). A console's datagrams for different peers leave one game
-  socket, so one port per peer is the only way to tell them apart. Ports from a configured range
-  (`RELAY_PORTS=40000-40999`: 1,000 pairs; a full city is 6 pairs), published by Docker as a range; freed when the pair
-  is idle for 5 minutes (never sooner than the game's own 20 s) or both consoles leave the server.
-- **D5 Who may use NatNeg and the relay.** Only consoles logged in to FMP: an `INIT`'s source IP must be the IP of a
-  logged-in player (their FMP connection's); anything else is ignored. The relay forwards only between the two
-  addresses the negotiation registered, so it's never an open relay. Per console: at most 8 relayed pairs, at most
-  ~20 kB/s (100 × the measured rate). Over a limit: dropped, one `warn`.
-- **D6 Addresses in the PAT connection offers. Answered (decomp):** GT2 uses NatNeg's address; the offers' IP:port
-  only serve a same-LAN shortcut the game skips. No rewriting: NatNeg handing out relay addresses is enough. The
-  relay learns each console's address from its first ping on the relay port (not from `INIT`: a symmetric NAT maps
-  each destination differently), and forwards pings and game traffic through the same port.
-- **D7 Topology. Answered (decomp):** a full mesh, pair by pair: up to 6 relayed pairs per city or party. To see with
-  3 consoles (`lab/p3`, `p4` profiles exist), with one pair blocked (the session's own relay through a member).
-- **D9 natneg1/2/3.** The game sends `INIT`s to three hostnames. One IP for all three works (what AltWFC does);
-  a second IP for natneg2/natneg3 enables the upfront symmetric-NAT detection (D3 b). Recommendation: one IP now, the
-  detection later if hybrid's "fail once, then relay" proves annoying.
-- **D8 The relay's address.** `EXTERNAL_ADDRESS` (already the address consoles reach FMP at): one public IPv4. The
-  relay and NatNeg listen on all interfaces, like the TCP roles.
+- **D1 Scope. Settled:** NatNeg (UDP 27901), the relay, and the QR availability check (UDP 27900, one fixed answer),
+  all in the server: one project, one process. AltWFC keeps NAS only (our own NAS stays a future step).
+- **D2 Strategy. Settled:** `NATNEG_STRATEGY = hybrid | p2p | relay` (configuration), default `hybrid`. `p2p` and
+  `relay` force one way for everyone.
+- **D3 Hybrid. Settled: transparent when possible, else on the first failure.** Each player carries
+  `Nat::Unknown | Direct | Relay` (no "hybrid" at that level). With `p2p` or `relay` it's set at login; with
+  `hybrid` it starts `Unknown` and is classified during the player's first negotiation: the `INIT`s arrive before the
+  server sends `CONNECT` (the console waits up to 60 s for it), so the server probes them first:
+  - *filtering* (one IP is enough): an `ERT_TEST` to the console's NatNeg socket from another port; the game answers
+    `ERT_ACK`: no answer means a restricted NAT;
+  - *symmetric mapping* (needs natneg2/natneg3 on a second IP, D9): different public ports for the `INIT`s sent to
+    natneg1 and natneg2/3.
+  A pair is relayed if either player is `Relay`; the classification is kept for the player's session. When the
+  classification can't tell (one IP, two restricted NATs) the pair tries P2P; a failure (`REPORT` with failure, or
+  11688 in `NtcCollectionLog`) flags the strict side `Relay` (both if unknown), so the player's retry goes through the
+  relay. A second `CONNECT` after a failure is ignored by the game, and nothing retries by itself: the retry is the
+  player's (rejoining the city or quest).
+- **D4 Relay ports. Settled:** one UDP port per pair (forwarding by source: from A to B, from B to A, nothing else),
+  from a configured range (`RELAY_PORTS`, e.g. `40000-40999`: 1,000 pairs; a full city or party is 6), freed after
+  5 idle minutes (never under the game's 20 s) or when both consoles have left. **The operator opens UDP 27900, 27901
+  and the relay range** (firewall, router, Docker): in the README.
+- **D5 Abuse. Settled:** every check we can apply: only consoles logged in to FMP negotiate (an `INIT`'s source IP
+  must be a logged-in player's); the relay forwards only between the two addresses its pair negotiated (never an
+  open relay); per console at most 8 relayed pairs and ~20 kB/s (100 × the measured rate); over a limit: dropped, one
+  `warn`.
+- **D6 Addresses in the PAT offers. Answered by the decomp, to confirm in the lab:** GT2 uses NatNeg's address; the
+  offers' IP:port only serve a same-LAN shortcut the game skips. No rewriting. The relay learns each console's address
+  from its first ping on the relay port (not from `INIT`), and carries pings and game traffic through the same port
+  (GT2 checks the source address).
+- **D7 Topology. Answered by the decomp, to confirm in the lab:** a full mesh negotiated pair by pair (up to 6 pairs);
+  with 3 consoles, one pair blocked (the session's own relay through a member).
+- **D8 Relay address. Settled:** in the configuration: `EXTERNAL_ADDRESS` (the address consoles reach FMP at).
+- **D9 A second address for NAT detection. Open; recommendation:** optional `NATNEG_SECONDARY_ADDRESS`; when set,
+  natneg2/natneg3 resolve to it and the symmetric-NAT detection is on; without it, hybrid = the filtering probe plus
+  the fallback after one failure.
 
 ## Work (once the decisions are settled)
 
@@ -120,10 +123,12 @@ relay must never be the reason a link drops: no idle timeout under a few minutes
 - [ ] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
       `REPORT_ACK`, sessions forgotten after a minute; only logged-in consoles (D5).
 - [ ] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
-- [ ] Strategies (D2, D3): `p2p`, `relay`, `hybrid` with the failure memory.
+- [ ] Strategies (D2, D3): `Nat` per player; classification from the `INIT`s (`ERT_TEST` probe; symmetric mapping
+      with D9); a pair relayed if either is `Relay`; the failure fallback.
 - [ ] Replay: the harness replays recorded UDP too (NatNeg exchanges; P2P datagrams aren't the server's).
 - [ ] Tier 5: fake consoles through NatNeg and P2P in each strategy; simulated NAT; forced failure → relay on retry;
       relay latency (forwarding p99 under 1 ms on one host).
 - [ ] Lab: the M3 run in each strategy with AltWFC's NatNeg off; a `relay` run with 3 consoles (D7); a 15 s cut
       through the relay (it must hold like P2P does).
-- [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range).
+- [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range), the configuration
+      (`NATNEG_STRATEGY`, `RELAY_PORTS`, `NATNEG_SECONDARY_ADDRESS`).
