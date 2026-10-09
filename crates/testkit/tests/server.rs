@@ -855,3 +855,114 @@ async fn content_downloads() {
     ));
     running.stop().await;
 }
+
+/// Tier 3: positions relayed through one city of 4 players reach the others in under 2 ms (99th percentile, on one
+/// host). MH3SP took ~50–80 ms; the console sends positions every 500 ms, so the relay must add next to nothing.
+#[tokio::test]
+async fn relay_latency() {
+    use std::time::Instant;
+    const ROUNDS: u32 = 50;
+    const P99_LIMIT: Duration = Duration::from_millis(2);
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut consoles = Vec::new();
+    for _ in 0..4 {
+        let mut c = enter_world(&running).await;
+        send(
+            &mut c,
+            10,
+            ReqLayerDown {
+                layer: 1,
+                info: PatData::new(),
+            },
+        )
+        .await;
+        expect::<AnsLayerDown>(&mut c).await;
+        consoles.push(c);
+    }
+    send(&mut consoles[0], 11, ReqLayerCreateHead { number: 1 }).await;
+    send(
+        &mut consoles[0],
+        12,
+        ReqLayerCreateSet {
+            number: 1,
+            layer: PatData::new(),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    send(
+        &mut consoles[0],
+        13,
+        ReqLayerCreateFoot { number: 1, unk: 0 },
+    )
+    .await;
+    for c in consoles.iter_mut().skip(1) {
+        send(
+            c,
+            11,
+            ReqLayerDown {
+                layer: 1,
+                info: PatData::new(),
+            },
+        )
+        .await;
+    }
+    // Let the answers and arrival notices land, then forget them.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    for c in consoles.iter_mut() {
+        while let Received::Frame(_) = c.recv(Duration::from_millis(50)).await.unwrap() {}
+    }
+
+    let mut samples = Vec::new();
+    for round in 0..ROUNDS {
+        for sender in 0..consoles.len() {
+            // A position as the console sends it (an lp2 of 37 bytes), the round and sender in its first bytes.
+            let mut position = vec![0u8; 37];
+            position[..4].copy_from_slice(&round.to_be_bytes());
+            position[4] = sender as u8;
+            let mut data = vec![0, 37];
+            data.extend_from_slice(&position);
+            let sent = Instant::now();
+            send(
+                &mut consoles[sender],
+                100,
+                NtcLayerUserPosition {
+                    data: wire::packets::Rest(data.into()),
+                },
+            )
+            .await;
+            for (receiver, c) in consoles.iter_mut().enumerate() {
+                if receiver == sender {
+                    continue;
+                }
+                let got = expect::<NtcLayerUserPosition>(c).await;
+                samples.push(sent.elapsed());
+                // Sender's Capcom ID (lp2, 6 bytes) in front, then the position as sent.
+                assert_eq!(
+                    &got.data.0[8..],
+                    &position_lp2(&position)[..],
+                    "receiver {receiver} got another position"
+                );
+            }
+        }
+    }
+    samples.sort();
+    let pct = |p: usize| samples[(samples.len() * p / 100).min(samples.len() - 1)];
+    println!(
+        "relay latency over {} deliveries: median {:?}, p99 {:?}, max {:?}",
+        samples.len(),
+        pct(50),
+        pct(99),
+        samples[samples.len() - 1]
+    );
+    assert!(pct(99) < P99_LIMIT, "p99 {:?} over {P99_LIMIT:?}", pct(99));
+    running.stop().await;
+}
+
+fn position_lp2(position: &[u8]) -> Vec<u8> {
+    let mut v = vec![0, position.len() as u8];
+    v.extend_from_slice(position);
+    v
+}

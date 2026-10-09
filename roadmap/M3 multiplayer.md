@@ -124,7 +124,10 @@ player kicked for not being ready, a party broken by its leader before departure
       `s06`, `s07`, `s08`, `s09`). The harness accepts a console's own answer before frames recorded ahead of it (the
       Rust server answers at once; MH3SP was slow), and consoles still wait for every frame recorded before their
       next one.
-- [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test, relay latency.
+- [x] Tier 3, relay latency (`relay_latency`): 4 consoles in one city, 50 rounds of positions from each, timed from
+      send to each receiver (600 deliveries): p99 must stay under 2 ms. Measured (debug build, one Mac): median
+      ~0.13 ms, p99 ~0.3 ms, max ~0.6 ms; MH3SP: 50–80 ms.
+- [ ] Tier 3: 2–4 consoles, disconnect at every step, stress test.
 - [ ] Dolphin run with two consoles (exit criterion 1).
 - [ ] Lab checks: does a friend request survive in the inbox across a game restart (deliver once vs again)? Does
       a password quest work with the placeholder instead of the password (D9)? A city kick in the menus (D7)?
