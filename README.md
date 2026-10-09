@@ -51,9 +51,9 @@ it could use them.
 - `mh3sp announce "Maintenance tonight at 22:00"` sends a message to every logged-in player, shown in their chat from
   "[MH3SP]" (cut in lines of 30 characters).
 - `mh3sp stop 15min` (or `1h30m`, `30s`…) stops the server with warning: players are told at once, reminders follow
-  (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s before), then the server stops. Play goes on as usual meanwhile, but no
-  hunt starts in the last 15 minutes: a hunt doesn't survive the server stopping (its players end in a network error
-  on their way back to town).
+  (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s before, shown in hunts too), then the server stops. Nothing is refused
+  meanwhile; but a hunt doesn't survive the server stopping (its players end in a network error on their way back to
+  town), so give players time.
   `mh3sp stop cancel` changes your mind.
 - `docker stop` (or Ctrl-C) gives players a 5-second warning; a second one stops at once. For a planned restart, use
   `mh3sp stop` first.

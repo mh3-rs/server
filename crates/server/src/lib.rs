@@ -68,8 +68,8 @@ struct Shared {
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
     metrics: Arc<metrics::Metrics>,
-    /// A stop under way (`stop.rs`): cancelling it lifts it; when it ends.
-    stop: std::sync::Mutex<Option<(CancellationToken, tokio::time::Instant)>>,
+    /// A stop under way (`stop.rs`): cancelling it lifts it.
+    stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
     shutdown: CancellationToken,
 }

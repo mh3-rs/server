@@ -157,20 +157,21 @@ pub fn frame<P: Packet>(seq: u16, packet: &P) -> Result<Frame, Fault> {
 
 /// An announcement to every logged-in player (M5 D3), as MH3SP sends them: chat from a made-up sender, the text in
 /// lines of at most 30 characters (the chat's width), cut between words (a longer word is cut). Town chat doesn't
-/// show in a hunt (lab run 15): players on a quest get party chat (`NtcCircleChat`). How many players.
+/// show in a hunt (lab run 15): players on a quest get party chat (`NtcCircleChat`), which the game only shows from a
+/// party member (`uniqueIdToMember` drops the rest): sent as from themselves, named "[MH3SP]". How many players.
 pub fn announce(shared: &crate::Shared, text: &str) -> usize {
-    let (town, party) = (announcement(text, false), announcement(text, true));
+    let town = announcement(text, None);
     let world = shared.world.lock().unwrap();
     shared
         .players
         .broadcast(|capcom_id| match world.on_quest(capcom_id) {
-            true => &party,
-            false => &town,
+            true => announcement(text, Some(capcom_id)),
+            false => town.clone(),
         })
 }
 
-/// An announcement's frames: town chat, or party chat (`party`).
-pub fn announcement(text: &str, party: bool) -> Vec<Frame> {
+/// An announcement's frames: town chat, or party chat as from `party` (a member's Capcom ID).
+pub fn announcement(text: &str, party: Option<&str>) -> Vec<Frame> {
     const WIDTH: usize = 30;
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
@@ -187,18 +188,19 @@ pub fn announcement(text: &str, party: bool) -> Vec<Frame> {
             }
         }
     }
+    let sender = party.unwrap_or("000000").as_bytes();
     let info = PatData::new()
         .with(0x01, Item::Long(0x00ff_fff0))
         .with(0x02, Item::Long(0))
-        .with(0x03, Item::String(Bytes::from_static(b"000000")))
+        .with(0x03, Item::String(Bytes::copy_from_slice(sender)))
         .with(0x04, Item::String(Bytes::from_static(b"[MH3SP]")));
     lines
         .into_iter()
         .filter_map(|line| {
             let (info, text) = (info.clone(), line.into());
             match party {
-                true => frame(0, &NtcCircleChat { info, text }),
-                false => frame(
+                Some(_) => frame(0, &NtcCircleChat { info, text }),
+                None => frame(
                     0,
                     &NtcLayerChat {
                         channel: 1,
@@ -265,7 +267,7 @@ mod tests {
     #[test]
     fn announcements_fit_the_chat() {
         let lines = |text: &str| -> Vec<String> {
-            announcement(text, false)
+            announcement(text, None)
                 .iter()
                 .map(|f| {
                     String::from_utf8(NtcLayerChat::decode(&f.payload).unwrap().text.to_vec())

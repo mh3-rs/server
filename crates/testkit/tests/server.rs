@@ -1087,10 +1087,10 @@ async fn metrics_count_what_happens() {
     running.stop().await;
 }
 
-/// Tier 3, M5 run 15: players in a hunt get announcements as party chat (town chat doesn't show there), others as
-/// town chat; party chat a member sends reaches the others; in a stop's last 15 minutes, departures are refused.
+/// Tier 3, M5 runs 15–16: players in a hunt get announcements as party chat from themselves (town chat doesn't show
+/// there, party chat only from a member), others as town chat; party chat a member sends reaches the others.
 #[tokio::test]
-async fn hunters_get_announcements_and_no_late_departures() {
+async fn hunters_get_announcements() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
     let (mut a, mut b) = party(&running, 1, true).await;
@@ -1121,24 +1121,6 @@ async fn hunters_get_announcements_and_no_late_departures() {
         (&b"hi"[..], "Aiko".to_owned())
     );
 
-    // A stop in 10 minutes: a new party can't depart.
-    let (mut c, mut d) = party(&running, 2, false).await;
-    tokio::task::spawn_blocking(move || server::health::stop(health, "10min"))
-        .await
-        .unwrap()
-        .unwrap();
-    drain(&mut c, Duration::from_millis(100)).await;
-    drain(&mut d, Duration::from_millis(100)).await;
-    send(&mut c, 50, ReqCircleMatchStart {}).await;
-    assert!(
-        expect_alert(&mut c, AnsCircleMatchStart::ID)
-            .await
-            .contains("stops soon")
-    );
-    tokio::task::spawn_blocking(move || server::health::stop(health, "cancel"))
-        .await
-        .unwrap()
-        .unwrap();
     running.stop().await;
 }
 

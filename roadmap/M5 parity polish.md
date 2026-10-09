@@ -52,13 +52,14 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - **D4 Stopping. Settled (2026-10-09).** `mh3sp stop 5min` (a human-readable delay: `1h`, `30s`…) asks the
   running server, through its internal health port, to stop: at once a broadcast ("Server stopping in 5 minutes."),
   reminders at fixed steps (1h, 30min, 15min, 5min, 1min, 30s, 10s, 5s, those shorter than the delay), then the
-  connections closed and the process exits. Nothing is refused meanwhile, but **departing on a quest in the last
-  15 minutes** (an alert: "the server stops in N minutes"): lab run 15 showed a hunt doesn't survive the stop (the
-  party breaks with the server connection, even on a direct link; the way back to town needs the server: errors on
-  both consoles). Maintenance is only a way to start (`mh3sp maintenance`: a placeholder refusing everyone).
-  `mh3sp stop cancel` lifts a stop. SIGTERM (`docker stop`: 10 s by default) runs the same sequence with a 5 s
-  warning; a second one stops at once. The warnings must reach players in a quest: town chat (`NtcLayerChat`) isn't
-  shown there (run 15), so they get party chat (`NtcCircleChat`, its format from the D1 recording).
+  connections closed and the process exits. **Nothing is refused meanwhile.** A hunt doesn't survive the stop (lab run
+  15: the party breaks with the server connection, even on a direct link, and the way back to town needs the server:
+  network errors on both consoles), so refusing departures in a stop's last 15 minutes was tried and **dropped** (run
+  16): the game shows no alert for a refused departure, the leader's console just waits frozen (until a member's
+  un-ready frees it). Since the warnings reach hunters too (as party chat, see the announcements), players decide.
+  Maintenance is only a way to start (`mh3sp maintenance`: a placeholder refusing everyone). `mh3sp stop cancel`
+  lifts a stop. SIGTERM (`docker stop`: 10 s by default) runs the same sequence with a 5 s warning; a second one
+  stops at once.
 - **D5 Metrics. Settled:** `/metrics` on the health port, a JSON of the metrics (always); `/metrics/prometheus`
   behind a `prometheus` cargo feature. Two images: `1` (without) and `1-prometheus` (with; also `1.0-prometheus`,
   `1.0.0-prometheus`). Players online (per world server), cities, quests, NatNeg negotiations (direct, relayed,
@@ -96,9 +97,9 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - [x] Lab, run 15: an announcement shows in town chat (blue, "[MH3SP]", 30-character lines); a stop's warnings
       don't show in a quest; the server stopping mid-quest breaks the party (the leader sees the other leave at once,
       the other sees the leader frozen) and both end in a network error on the way back (11674, network instability).
-- [x] Stopping, from run 15: announcements (and a stop's warnings) as party chat (`NtcCircleChat`) to players in a
-      departed quest, town chat to the others; departures refused in a stop's last 15 minutes ("The server stops
-      soon: no new hunts."). `NtcCircleChat` relayed to the party (the game's fallback without a P2P session: s11
-      shows a hunt's chat is console to console). To see on a console: does party chat show in a hunt?
+- [x] Announcements in a hunt (runs 15–16): town chat doesn't show there; party chat (`NtcCircleChat`) only from a
+      party member (`uniqueIdToMember`, the decomp): hunters get it as from themselves, named "[MH3SP]" (shown, in
+      their party slot's colour), others town chat. `NtcCircleChat` relayed to the party (the game's fallback
+      without a P2P session: s11 shows a hunt's chat is console to console). The departure refusal: dropped (D4).
 - [ ] Lab: the town interval (D7); the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).

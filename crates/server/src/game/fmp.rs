@@ -750,10 +750,6 @@ impl Fmp {
             }
             ReqCircleMatchStart::ID => {
                 ReqCircleMatchStart::decode(p)?;
-                // A hunt doesn't outlive the server: none starts in a stop's last 15 minutes.
-                if crate::stop::too_close(shared) {
-                    return alert(AnsCircleMatchStart::ID, seq, Text::StoppingSoon);
-                }
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let id = world.circle_of(me).ok_or_else(not_in_circle)?;

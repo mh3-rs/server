@@ -19,14 +19,14 @@ const STEPS: [u64; 8] = [3600, 1800, 900, 300, 60, 30, 10, 5];
 /// Starts stopping the server in `delay` (a stop already under way is replaced, quietly).
 pub fn begin(shared: &Arc<Shared>, delay: Duration) {
     let cancel = CancellationToken::new();
-    let end = Instant::now() + delay;
-    if let Some((previous, _)) = shared.stop.lock().unwrap().replace((cancel.clone(), end)) {
+    if let Some(previous) = shared.stop.lock().unwrap().replace(cancel.clone()) {
         previous.cancel();
     }
     info!(seconds = delay.as_secs(), "stopping");
     announce(shared, &format!("Server stopping in {}.", human(delay)));
     let shared = shared.clone();
     tokio::spawn(async move {
+        let end = Instant::now() + delay;
         let steps = STEPS.map(Duration::from_secs);
         for step in steps.into_iter().filter(|&s| s < delay) {
             tokio::select! {
@@ -48,26 +48,13 @@ pub fn begin(shared: &Arc<Shared>, delay: Duration) {
 
 /// Cancels a stop under way: `false` if there was none.
 pub fn cancel(shared: &Shared) -> bool {
-    let Some((stop, _)) = shared.stop.lock().unwrap().take() else {
+    let Some(stop) = shared.stop.lock().unwrap().take() else {
         return false;
     };
     stop.cancel();
     info!("stop cancelled");
     announce(shared, "Server stop cancelled.");
     true
-}
-
-/// Departing on a quest is refused this close to a stop: a hunt doesn't outlive the server (lab run 15).
-const NO_DEPARTURE: Duration = Duration::from_secs(15 * 60);
-
-/// Whether a stop is this close: departures refused.
-pub fn too_close(shared: &Shared) -> bool {
-    shared
-        .stop
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|(_, end)| end.saturating_duration_since(Instant::now()) <= NO_DEPARTURE)
 }
 
 /// A delay as people write it: `5min`, `1h30m`, `30s`, `2 hours`; `None` if it isn't one (or is 0).
