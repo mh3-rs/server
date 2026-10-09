@@ -77,8 +77,9 @@ player kicked for not being ready, a party broken by its leader before departure
   - So a grace period would never help: the server never drops a console the game itself keeps, and the game
     doesn't reconnect once it gives up. For M4: our NatNeg relay, if it carries hunt traffic, should tolerate at
     least the same ~15 s.
-  - Seen in passing: with the server gone mid-quest, a hunting console kept hunting (the other, just back from a
-    cut, got 11674). What a console does when its quest ends without a server is still to check.
+  - The server gone mid-quest (checked in M5's lab run 15): the party breaks (the leader sees the other leave at
+    once, the other sees the leader frozen), and the way back to town needs the server: a network error on both
+    (11674, network instability). A hunt doesn't survive a server stop (M5 D4).
 - **D5 Locking. Settled:** one lock for the whole `World` (relays look up the layer's players under it and push to
   their mailboxes without waiting); written down where it's declared (`Shared::world`). Revisited the day the
   relay-latency test or production shows contention: per world server first (nothing crosses that boundary but
