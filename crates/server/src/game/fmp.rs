@@ -85,10 +85,14 @@ impl Fmp {
                 reply(seq, &NtcLogin { status: LOGGED_IN })
             }
             (None, id) => Err(unexpected(id)),
-            (Some(_), _) => match self.social(shared, req).await {
-                Some(handled) => handled,
-                None => self.request(shared, req),
-            },
+            (Some(_), _) => {
+                let handled = match self.social(shared, req).await {
+                    Some(handled) => handled,
+                    None => self.request(shared, req),
+                };
+                let (session, _) = self.login.as_mut().expect("logged in");
+                pending_requests(shared, session, handled).await
+            }
         }
     }
 
@@ -115,7 +119,7 @@ impl Fmp {
         if !ids.contains(&req.id) {
             return None;
         }
-        let (session, _) = self.login.as_mut().expect("logged in");
+        let (session, _) = self.login.as_ref().expect("logged in");
         Some(social(shared, session, req).await)
     }
 
@@ -1503,16 +1507,56 @@ async fn profile_set(shared: &Shared, session: &mut Session, req: &Frame) -> Han
     reply(req.seq, &AnsUserBinarySet {})
 }
 
+/// After a request handled: once per game session, on reaching a gate, the friend requests not answered yet. The
+/// game's inbox only lasts until it quits, and it drops messages sent at the world server level (seen in the lab:
+/// delivered with the friend list, they never showed).
+async fn pending_requests(shared: &Shared, session: &mut Session, handled: Handled) -> Handled {
+    let mut out = handled?;
+    if session.requests_sent {
+        return Ok(out);
+    }
+    let me = capcom_id(session);
+    let in_gate = shared
+        .world
+        .lock()
+        .unwrap()
+        .place(me)
+        .is_some_and(|p| p.gate.is_some());
+    if !in_gate {
+        return Ok(out);
+    }
+    let db = shared
+        .db
+        .pool()
+        .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
+    let server = |e: anyhow::Error| Fault::Server(e);
+    let (my_id, _) = accounts::hunter(db, me)
+        .await
+        .map_err(server)?
+        .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
+    for (from, name, message) in accounts::friend_requests(db, my_id).await.map_err(server)? {
+        let info = message_info(PatData::new(), &from, &Bytes::from(name));
+        let ntc = NtcFriendAccept {
+            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+            info,
+            text: message.into(),
+        };
+        out.push(frame(0, &ntc)?);
+    }
+    session.requests_sent = true;
+    Ok(out)
+}
+
 /// Messages, friends and the black list. A blocked hunter's tells and friend requests are answered as sent but
 /// never reach the blocker.
-async fn social(shared: &Shared, session: &mut Session, req: &Frame) -> Handled {
+async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
     let (seq, p) = (req.seq, &req.payload);
     let db = shared
         .db
         .pool()
         .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
     let server = |e: anyhow::Error| Fault::Server(e);
-    let me = &capcom_id(session).to_owned();
+    let me = capcom_id(session);
     let (my_id, _) = accounts::hunter(db, me)
         .await
         .map_err(server)?
@@ -1544,32 +1588,16 @@ async fn social(shared: &Shared, session: &mut Session, req: &Frame) -> Handled 
             reply(seq, &AnsTell {})
         }
         ReqFriendList::ID => {
-            // Asked when entering a world server: then, once per game session, the friend requests not answered yet
-            // (the game keeps received ones in its inbox until it quits).
+            // Asked when entering a world server.
             let r = ReqFriendList::decode(p)?;
             let list = accounts::friends(db, my_id).await.map_err(server)?;
-            let mut out = vec![frame(
+            reply(
                 seq,
                 &AnsFriendList {
                     unk: 0,
                     friends: hunter_records(list, r.first, r.count),
                 },
-            )?];
-            let pending = match session.requests_sent {
-                true => Vec::new(),
-                false => accounts::friend_requests(db, my_id).await.map_err(server)?,
-            };
-            session.requests_sent = true;
-            for (from, name, message) in pending {
-                let info = message_info(PatData::new(), &from, &Bytes::from(name));
-                let ntc = NtcFriendAccept {
-                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
-                    info,
-                    text: message.into(),
-                };
-                out.push(frame(seq, &ntc)?);
-            }
-            Ok(out)
+            )
         }
         ReqFriendAdd::ID => {
             let r = ReqFriendAdd::decode(p)?;

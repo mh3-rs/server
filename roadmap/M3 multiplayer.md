@@ -147,8 +147,9 @@ player kicked for not being ready, a party broken by its leader before departure
         open: Local Info never listed the other player (its population says 0/4), so a kick there can't be ruled
         out until it does. Maybe not a player feature at all (then: the website, see future steps). The only
         removal seen is at departure (players not ready stay behind).
-  - [x] Friend requests across a restart (D2): the game's inbox doesn't outlive the game. Pending requests are now
-        delivered at the first world server of each game session, until answered (the `delivered` flag is gone).
+  - [x] Friend requests across a restart (D2): the game's inbox doesn't outlive the game. Pending requests are delivered
+        once per game session until answered (the `delivered` flag is gone). Delivered with the friend list (at the
+        world server), the console dropped them; now on reaching a gate (to confirm in the lab).
   - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
         took that as an empty name: stored it, wiped the hunter's profile, friends and blocks (an empty "from" on
         the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.

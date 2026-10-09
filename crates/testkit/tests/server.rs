@@ -841,8 +841,8 @@ async fn cities_are_shared() {
     running.stop().await;
 }
 
-/// Tier 3: the game's inbox lasts one game session, so a friend request not answered yet is delivered at the
-/// first world server of each game, until answered.
+/// Tier 3: the game's inbox lasts one game session and drops messages at the world server level, so a friend
+/// request not answered yet is delivered on reaching a gate, once per game, until answered.
 #[tokio::test]
 async fn friend_requests_wait_for_an_answer() {
     let (config, _db) = config();
@@ -863,24 +863,33 @@ async fn friend_requests_wait_for_an_answer() {
     send(&mut a, 10, request).await;
     expect::<AnsFriendAdd>(&mut a).await;
 
-    let friend_list = || ReqFriendList {
+    let friend_list = ReqFriendList {
         first: 1,
         count: 10,
         fields: vec![],
     };
     for game in [1, 2] {
         let mut b = play(&running, &code).await;
-        send(&mut b, 10, friend_list()).await;
+        send(&mut b, 10, friend_list.clone()).await;
         let seen = drain(&mut b, Duration::from_millis(200)).await;
         assert_eq!(
             seen,
-            [AnsFriendList::ID, NtcFriendAccept::ID],
-            "game {game}"
+            [AnsFriendList::ID],
+            "game {game}: at the world server"
         );
-        // Once per game: the inbox still has it.
-        send(&mut b, 11, friend_list()).await;
-        let seen = drain(&mut b, Duration::from_millis(200)).await;
-        assert_eq!(seen, [AnsFriendList::ID], "game {game}, again");
+        // In a gate, and again in another: once per game (the inbox still has it).
+        for (seq, gate, expected) in [(11, 1, true), (13, 2, false)] {
+            let info = PatData::new();
+            send(&mut b, seq, ReqLayerDown { layer: gate, info }).await;
+            let seen = drain(&mut b, Duration::from_millis(200)).await;
+            assert_eq!(
+                seen.contains(&NtcFriendAccept::ID),
+                expected,
+                "game {game}, gate {gate}: {seen:?}"
+            );
+            send(&mut b, seq + 1, ReqLayerUp {}).await;
+            drain(&mut b, Duration::from_millis(100)).await;
+        }
     }
     running.stop().await;
 }
