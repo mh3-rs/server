@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
+use sqlx::SqlitePool;
 use tracing::{Span, info, trace, warn};
 use wire::packets::*;
 use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
@@ -90,8 +91,8 @@ impl Fmp {
                     Some(handled) => handled,
                     None => self.request(shared, req),
                 };
-                let (session, _) = self.login.as_mut().expect("logged in");
-                pending_requests(shared, session, req, handled).await
+                let (session, _) = self.login.as_ref().expect("logged in");
+                deliver_mail(shared, &self.mailbox, session, req, handled).await
             }
         }
     }
@@ -1449,18 +1450,21 @@ fn quit_quest(
     list_change(shared, world, requester, leaving.id, seq, out)
 }
 
-/// A text message's sender info: the console's fields with the sender filled in, and an unknown 20.
-fn message_info(info: PatData, me: &str, name: &Bytes) -> PatData {
-    let info = set(
-        info,
-        0x03,
-        Item::String(Bytes::copy_from_slice(me.as_bytes())),
-    );
-    set(
-        set(info, 0x04, Item::String(name.clone())),
-        0x02,
-        Item::Long(20),
-    )
+/// A message's sender info: the sender's Capcom ID and name, and an unknown 20; in the order consoles send (and
+/// MH3SP relays) each kind: a plain message `01` (0), `02`, `03`, `04`; a friend request `03`, `04`, `02`.
+fn message_info(friend_request: bool, from: &str, name: Bytes) -> PatData {
+    let from = Item::String(Bytes::copy_from_slice(from.as_bytes()));
+    match friend_request {
+        true => PatData::new()
+            .with(0x03, from)
+            .with(0x04, Item::String(name))
+            .with(0x02, Item::Long(20)),
+        false => PatData::new()
+            .with(0x01, Item::Long(0))
+            .with(0x02, Item::Long(20))
+            .with(0x03, from)
+            .with(0x04, Item::String(name)),
+    }
 }
 
 /// A list of hunters as the friend and black lists show them: index, Capcom ID, name; `count` from `first`.
@@ -1507,50 +1511,141 @@ async fn profile_set(shared: &Shared, session: &mut Session, req: &Frame) -> Han
     reply(req.seq, &AnsUserBinarySet {})
 }
 
-/// After a request handled: once per game session, the friend requests not answered yet, on the player's first
-/// position in a city. The game's inbox only lasts until it quits, and it drops a message arriving while a scene
-/// loads (seen in the lab: sent with the friend list, then on entering a gate, they never showed; sent to a player
-/// standing in a city, they do). A position means the town is loaded and the hunter on screen.
-async fn pending_requests(
+/// After a request handled: the messages waiting for the player, at their position in a city. The game's inbox
+/// drops a message arriving while a scene loads (seen in the lab: sent at the world server or on entering a gate,
+/// they never showed; to a player standing in a city, they do): a position means the town is loaded and the hunter
+/// on screen.
+async fn deliver_mail(
     shared: &Shared,
-    session: &mut Session,
+    mailbox: &Mailbox,
+    session: &Session,
     req: &Frame,
     handled: Handled,
 ) -> Handled {
     let mut out = handled?;
-    if session.requests_sent || req.id != NtcLayerUserPosition::ID {
+    if req.id != NtcLayerUserPosition::ID {
         return Ok(out);
     }
     let me = capcom_id(session);
-    let in_city = shared
-        .world
-        .lock()
-        .unwrap()
-        .place(me)
-        .is_some_and(|p| p.city.is_some());
-    if !in_city {
+    let in_city = match shared.world.lock().unwrap().place(me) {
+        Some(place) if place.city.is_some() => {
+            place.standing = true;
+            true
+        }
+        _ => false,
+    };
+    if !in_city || !mailbox.take_mail() {
         return Ok(out);
     }
     let db = shared
         .db
         .pool()
         .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
-    let server = |e: anyhow::Error| Fault::Server(e);
     let (my_id, _) = accounts::hunter(db, me)
         .await
-        .map_err(server)?
+        .map_err(Fault::Server)?
         .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
-    for (from, name, message) in accounts::friend_requests(db, my_id).await.map_err(server)? {
-        let info = message_info(PatData::new(), &from, &Bytes::from(name));
-        let ntc = NtcFriendAccept {
-            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
-            info,
-            text: message.into(),
-        };
-        out.push(frame(0, &ntc)?);
-    }
-    session.requests_sent = true;
+    out.extend(inbox(db, me, my_id, 0).await?);
     Ok(out)
+}
+
+/// The messages waiting for `me` (`id` in the database), as notices, now delivered.
+async fn inbox(db: &SqlitePool, me: &str, id: i64, seq: u16) -> Result<Vec<Frame>, Fault> {
+    let messages = accounts::inbox(db, id).await.map_err(Fault::Server)?;
+    let mut out = Vec::new();
+    for (from, name, text, friend_request) in messages {
+        let capcom_id = Bytes::copy_from_slice(me.as_bytes());
+        let info = message_info(friend_request, &from, name.into());
+        let text = text.into();
+        out.push(match friend_request {
+            true => frame(
+                seq,
+                &NtcFriendAccept {
+                    capcom_id,
+                    info,
+                    text,
+                },
+            )?,
+            false => frame(
+                seq,
+                &NtcTell {
+                    capcom_id,
+                    info,
+                    text,
+                },
+            )?,
+        });
+    }
+    Ok(out)
+}
+
+/// Stores a message (or a friend request) for `to`, unless they block the sender: delivered at once if they stand
+/// in a city, else when they next do.
+async fn post(
+    shared: &Shared,
+    db: &SqlitePool,
+    from: i64,
+    (to_id, to): (i64, &str),
+    text: &[u8],
+    friend_request: bool,
+    seq: u16,
+) -> Result<(), Fault> {
+    let server = |e: anyhow::Error| Fault::Server(e);
+    if to_id == from || accounts::blocks(db, to_id, from).await.map_err(server)? {
+        return Ok(());
+    }
+    if !accounts::store_message(db, from, to_id, text, friend_request)
+        .await
+        .map_err(server)?
+    {
+        warn!("recipient's inbox full, message dropped");
+        return Ok(());
+    }
+    let standing = shared
+        .world
+        .lock()
+        .unwrap()
+        .place(to)
+        .is_some_and(|p| p.standing);
+    match standing {
+        true => {
+            for notice in inbox(db, to, to_id, seq).await? {
+                shared.players.send(to, notice);
+            }
+        }
+        false => shared.players.mail(to),
+    }
+    Ok(())
+}
+
+/// Two hunters became friends: both are told (`me` in `out`, the other if online).
+fn befriend(
+    shared: &Shared,
+    (me, my_name): (&str, &Bytes),
+    (other, other_name): (&str, Bytes),
+    seq: u16,
+    out: &mut Vec<Frame>,
+) -> Result<(), Fault> {
+    info!("new friends");
+    let card = |id: &str, name: Bytes| {
+        PatData::new()
+            .with(0x01, Item::Long(1))
+            .with(0x02, Item::String(Bytes::copy_from_slice(id.as_bytes())))
+            .with(0x03, Item::String(name))
+    };
+    let to_them = NtcFriendAdd {
+        capcom_id: Bytes::copy_from_slice(other.as_bytes()),
+        friend: card(me, my_name.clone()),
+        accepted: 1,
+    };
+    shared.players.send(other, frame(seq, &to_them)?);
+    let to_me = NtcFriendAdd {
+        capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+        friend: card(other, other_name),
+        accepted: 1,
+    };
+    out.push(frame(seq, &to_me)?);
+    Ok(())
 }
 
 /// Messages, friends and the black list. A blocked hunter's tells and friend requests are answered as sent but
@@ -1571,25 +1666,11 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
     let named = |capcom_id: &Bytes| String::from_utf8_lossy(capcom_id).into_owned();
     match req.id {
         ReqTell::ID => {
+            // A message for the recipient's inbox: stored, delivered at their next position in a city.
             let r = ReqTell::decode(p)?;
             let to = named(&r.capcom_id);
-            let blocked = match accounts::hunter(db, &to).await.map_err(server)? {
-                Some((to_id, _)) => accounts::blocks(db, to_id, my_id).await.map_err(server)?,
-                None => false,
-            };
-            if !blocked {
-                let info = message_info(r.info, me, &session.name);
-                shared.players.send(
-                    &to,
-                    frame(
-                        seq,
-                        &NtcTell {
-                            capcom_id: r.capcom_id,
-                            info,
-                            text: r.text,
-                        },
-                    )?,
-                );
+            if let Some((to_id, _)) = accounts::hunter(db, &to).await.map_err(server)? {
+                post(shared, db, my_id, (to_id, &to), &r.text, false, seq).await?;
             }
             reply(seq, &AnsTell {})
         }
@@ -1606,27 +1687,29 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             )
         }
         ReqFriendAdd::ID => {
+            // A request (with its message), stored and delivered like a message; when the other asked too, the two
+            // become friends at once.
             let r = ReqFriendAdd::decode(p)?;
             let to = named(&r.capcom_id);
-            let Some((to_id, _)) = accounts::hunter(db, &to).await.map_err(server)? else {
+            let Some((to_id, to_name)) = accounts::hunter(db, &to).await.map_err(server)? else {
                 return alert(AnsFriendAdd::ID, seq, Text::UnknownCapcomId);
             };
-            if to_id != my_id && !accounts::blocks(db, to_id, my_id).await.map_err(server)? {
-                accounts::request_friend(db, my_id, to_id, &r.text)
-                    .await
-                    .map_err(server)?;
-                let info = message_info(r.info, me, &session.name);
-                let ntc = frame(
+            let mut out = vec![frame(seq, &AnsFriendAdd {})?];
+            if accounts::answer_friend_request(db, to_id, my_id, true)
+                .await
+                .map_err(server)?
+            {
+                befriend(
+                    shared,
+                    (me, &session.name),
+                    (&to, to_name.into()),
                     seq,
-                    &NtcFriendAccept {
-                        capcom_id: r.capcom_id,
-                        info,
-                        text: r.text,
-                    },
+                    &mut out,
                 )?;
-                shared.players.send(&to, ntc);
+            } else {
+                post(shared, db, my_id, (to_id, &to), &r.text, true, seq).await?;
             }
-            reply(seq, &AnsFriendAdd {})
+            Ok(out)
         }
         ReqFriendAccept::ID => {
             // The answer to a request: only one actually sent counts.
@@ -1643,25 +1726,13 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                 .map_err(server)?
                 && accept
             {
-                info!("new friends");
-                let card = |id: &str, name: Bytes| {
-                    PatData::new()
-                        .with(0x01, Item::Long(1))
-                        .with(0x02, Item::String(Bytes::copy_from_slice(id.as_bytes())))
-                        .with(0x03, Item::String(name))
-                };
-                let to_them = NtcFriendAdd {
-                    capcom_id: r.capcom_id,
-                    friend: card(me, session.name.clone()),
-                    accepted: 1,
-                };
-                shared.players.send(&from, frame(seq, &to_them)?);
-                let to_me = NtcFriendAdd {
-                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
-                    friend: card(&from, from_name.into()),
-                    accepted: 1,
-                };
-                out.push(frame(seq, &to_me)?);
+                befriend(
+                    shared,
+                    (me, &session.name),
+                    (&from, from_name.into()),
+                    seq,
+                    &mut out,
+                )?;
             }
             Ok(out)
         }

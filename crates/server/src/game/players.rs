@@ -2,6 +2,9 @@
 //! registry (decision 4). The socket stays with its connection task, the only writer: frames for a player go
 //! through its mailbox.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +23,8 @@ pub struct Mailbox {
     pub conn: u64,
     tx: mpsc::Sender<Frame>,
     kick: CancellationToken,
+    /// Messages may wait in the database (from the start: they may have come while away).
+    mail: Arc<AtomicBool>,
 }
 
 impl Mailbox {
@@ -32,6 +37,7 @@ impl Mailbox {
                 conn,
                 tx,
                 kick: kick.clone(),
+                mail: Arc::new(AtomicBool::new(true)),
             },
             rx,
             kick,
@@ -48,6 +54,11 @@ impl Mailbox {
 
     pub fn kick(&self) {
         self.kick.cancel();
+    }
+
+    /// Whether messages may wait for this player, now cleared.
+    pub fn take_mail(&self) -> bool {
+        self.mail.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -71,6 +82,13 @@ impl Players {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Tells a logged-in player messages wait for them.
+    pub fn mail(&self, capcom_id: &str) {
+        if let Some(mailbox) = self.0.get(capcom_id) {
+            mailbox.mail.store(true, Ordering::Relaxed);
         }
     }
 

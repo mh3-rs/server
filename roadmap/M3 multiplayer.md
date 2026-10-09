@@ -147,13 +147,15 @@ player kicked for not being ready, a party broken by its leader before departure
         open: Local Info never listed the other player (its population says 0/4), so a kick there can't be ruled
         out until it does. Maybe not a player feature at all (then: the website, see future steps). The only
         removal seen is at departure (players not ready stay behind).
-  - [x] Friend requests across a restart (D2): the game's inbox doesn't outlive the game, and drops a message
-        arriving while a scene loads (sent with the friend list at the world server, then on entering a gate: lost).
-        Pending requests are delivered once per game session until answered, at the player's first position in a
-        city (confirmed, run 5: in the inbox on arrival, accepted, both lists updated). The `delivered` flag is gone.
-        A plain message (without a request) is a tell (`ReqTell` → `NtcTell`): relayed live, not stored; deleting
-        one from the inbox is local (no packet). A friend deletion ends it for both; the other's list updates at
-        its next login (no notice in the protocol).
+  - [x] Messages and friend requests (D2), runs 2–5: the game's inbox doesn't outlive the game, drops a message
+        arriving while a scene loads (sent at the world server, or on entering a gate: lost), and deleting from it
+        is local (no packet). A plain message is `ReqTell` → `NtcTell` (what the corpus calls a tell: the same
+        inbox message), a request `ReqFriendAdd` → `NtcFriendAccept`. Settled: both are stored (`messages`) and
+        delivered once, when the recipient stands in a city (at once if they do, else at their next position
+        there; confirmed run 5); a plain message is then deleted, a request kept 30 days as the proof an answer
+        needs; sending it again delivers it again; two hunters asking each other become friends at once. A blocked
+        sender's messages are never stored; 100 waiting per recipient at most; everything expires after 30 days. A
+        friend deletion ends it for both; the other's list updates at its next login (no notice in the protocol).
   - [x] Found: picking a used slot, the console sends no name when the slot list shows its hunter's; the server
         took that as an empty name: stored it, wiped the hunter's profile, friends and blocks (an empty "from" on
         the friend request, a nameless hunter in town). Fixed: no name keeps the stored one.

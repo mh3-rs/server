@@ -161,7 +161,7 @@ pub async fn use_slot(
                 .execute(&mut *tx)
                 .await?;
                 sqlx::query!(
-                    "DELETE FROM friend_requests WHERE from_hunter = ?1 OR to_hunter = ?1",
+                    "DELETE FROM messages WHERE from_hunter = ?1 OR to_hunter = ?1",
                     used.id
                 )
                 .execute(&mut *tx)
@@ -218,21 +218,77 @@ pub async fn hunter(db: &SqlitePool, capcom_id: &str) -> Result<Option<(i64, Vec
     .map(|r| (r.id, r.name)))
 }
 
-/// Records a friend request (a new one from the same hunter replaces its message).
-pub async fn request_friend(db: &SqlitePool, from: i64, to: i64, message: &[u8]) -> Result<()> {
+/// Messages waiting for one recipient, at most: more are dropped (a console can't fill the database).
+const INBOX: i64 = 100;
+
+/// Stores a message for `to`, with a friend request or not (a new request from the same hunter replaces the
+/// previous one, to be delivered again): `false` if `to` has too many waiting.
+pub async fn store_message(
+    db: &SqlitePool,
+    from: i64,
+    to: i64,
+    text: &[u8],
+    friend_request: bool,
+) -> Result<bool> {
     sqlx::query!(
-        r#"INSERT INTO friend_requests (from_hunter, to_hunter, message) VALUES (?1, ?2, ?3)
-           ON CONFLICT (from_hunter, to_hunter) DO UPDATE SET message = ?3, created_at = CURRENT_TIMESTAMP"#,
-        from,
-        to,
-        message
+        "DELETE FROM messages WHERE to_hunter = ?1 AND created_at <= datetime('now', '-30 days')",
+        to
     )
     .execute(db)
     .await?;
-    Ok(())
+    let waiting = sqlx::query_scalar!(
+        "SELECT count(*) FROM messages WHERE to_hunter = ?1 AND sent = 0",
+        to
+    )
+    .fetch_one(db)
+    .await?;
+    if waiting >= INBOX {
+        return Ok(false);
+    }
+    sqlx::query!(
+        r#"INSERT INTO messages (from_hunter, to_hunter, text, friend_request) VALUES (?1, ?2, ?3, ?4)
+           ON CONFLICT (from_hunter, to_hunter) WHERE friend_request = 1
+           DO UPDATE SET text = excluded.text, sent = 0, created_at = CURRENT_TIMESTAMP"#,
+        from,
+        to,
+        text,
+        friend_request
+    )
+    .execute(db)
+    .await?;
+    Ok(true)
 }
 
-/// Answers the request `from` sent `to`: `false` if there was none. Accepted, the two become friends.
+/// The messages waiting for a hunter (sender's Capcom ID and name, text, with a friend request), oldest first,
+/// now delivered: plain ones deleted, requests kept as the proof an answer needs.
+pub async fn inbox(db: &SqlitePool, hunter: i64) -> Result<Vec<(String, Vec<u8>, Vec<u8>, bool)>> {
+    let mut tx = db.begin().await?;
+    let mut waiting = sqlx::query!(
+        r#"UPDATE messages SET sent = 1
+           WHERE to_hunter = ?1 AND sent = 0 AND created_at > datetime('now', '-30 days')
+           RETURNING id, (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS "capcom_id!: String",
+                     (SELECT name FROM hunters WHERE id = from_hunter) AS "name!: Vec<u8>", text,
+                     friend_request"#,
+        hunter
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM messages WHERE to_hunter = ?1 AND sent = 1 AND friend_request = 0",
+        hunter
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    waiting.sort_by_key(|m| m.id);
+    Ok(waiting
+        .into_iter()
+        .map(|m| (m.capcom_id, m.name, m.text, m.friend_request == 1))
+        .collect())
+}
+
+/// Answers the request `from` sent `to` (30 days at most): `false` if there was none. Accepted, the two become
+/// friends.
 pub async fn answer_friend_request(
     db: &SqlitePool,
     from: i64,
@@ -241,7 +297,8 @@ pub async fn answer_friend_request(
 ) -> Result<bool> {
     let mut tx = db.begin().await?;
     let found = sqlx::query!(
-        "DELETE FROM friend_requests WHERE from_hunter = ?1 AND to_hunter = ?2",
+        r#"DELETE FROM messages WHERE from_hunter = ?1 AND to_hunter = ?2 AND friend_request = 1
+           AND created_at > datetime('now', '-30 days')"#,
         from,
         to
     )
@@ -288,23 +345,6 @@ pub async fn friends(db: &SqlitePool, hunter: i64) -> Result<Vec<(String, Vec<u8
     .await?
     .into_iter()
     .map(|r| (r.capcom_id, r.name))
-    .collect())
-}
-
-/// The friend requests a hunter hasn't answered yet: sender's Capcom ID and name, message.
-pub async fn friend_requests(
-    db: &SqlitePool,
-    hunter: i64,
-) -> Result<Vec<(String, Vec<u8>, Vec<u8>)>> {
-    Ok(sqlx::query!(
-        r#"SELECT h.capcom_id, h.name, r.message FROM friend_requests r JOIN hunters h ON h.id = r.from_hunter
-           WHERE r.to_hunter = ?1 ORDER BY r.created_at"#,
-        hunter
-    )
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|r| (r.capcom_id, r.name, r.message))
     .collect())
 }
 

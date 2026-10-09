@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM messages WHERE from_hunter = ?1 AND to_hunter = ?2 AND friend_request = 1\n           AND created_at > datetime('now', '-30 days')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a6b246cf7ec7a7372e64a25f44561ef4b331cd94f4eef783f061619879058fd6"
+}

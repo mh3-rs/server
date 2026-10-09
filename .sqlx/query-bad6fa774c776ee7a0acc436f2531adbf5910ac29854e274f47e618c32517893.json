@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM messages WHERE to_hunter = ?1 AND sent = 1 AND friend_request = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "bad6fa774c776ee7a0acc436f2531adbf5910ac29854e274f47e618c32517893"
+}

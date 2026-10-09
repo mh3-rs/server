@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE messages SET sent = 1\n           WHERE to_hunter = ?1 AND sent = 0 AND created_at > datetime('now', '-30 days')\n           RETURNING id, (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS \"capcom_id!: String\",\n                     (SELECT name FROM hunters WHERE id = from_hunter) AS \"name!: Vec<u8>\", text,\n                     friend_request",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "capcom_id!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "capcom_id"
+          }
+        }
+      },
+      {
+        "name": "name!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "text",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "text"
+          }
+        }
+      },
+      {
+        "name": "friend_request",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "friend_request"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "ba0fc4b202bb3bde9bb74ab10c03196d8f6adffdf6b9e0e159ad2ef7898cc72b"
+}

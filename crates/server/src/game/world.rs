@@ -119,6 +119,8 @@ pub struct Place {
     pub circle: Option<u32>,
     pub name: Bytes,
     pub profile: Profile,
+    /// Standing in the city: a position sent since entering it (its scene loaded; messages reach the inbox).
+    pub standing: bool,
     /// The connection that placed the player (a newer login replaces the place, the older one mustn't remove it).
     conn: u64,
     arrival: u64,
@@ -248,6 +250,7 @@ impl World {
             circle: None,
             name,
             profile,
+            standing: false,
             conn,
             arrival: self.arrivals,
         };
@@ -332,6 +335,7 @@ impl World {
         }
         if let Some(place) = self.places.get_mut(capcom_id) {
             place.city = Some(id.2);
+            place.standing = false;
         }
         Ok(())
     }
@@ -356,6 +360,7 @@ impl World {
         }
         if let Some(place) = self.places.get_mut(capcom_id) {
             place.city = Some(id.2);
+            place.standing = false;
         }
         Ok(())
     }
@@ -369,6 +374,7 @@ impl World {
         };
         let (server, gate) = (place.server, place.gate);
         let left = place.city.take();
+        place.standing = false;
         for (&id, city) in self.cities.iter_mut() {
             if city.reserved_by.as_deref() == Some(capcom_id) {
                 city.reserved_by = None;

@@ -117,17 +117,24 @@ CREATE TABLE friends (
 ) STRICT;
 CREATE INDEX friends_b ON friends (hunter_b);
 
--- Friend requests not answered yet: the game keeps a received one in its inbox to answer later, but only until it
--- quits; so the server checks an answer against them, and delivers them all again at each login until answered.
-CREATE TABLE friend_requests (
-    from_hunter INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
-    to_hunter   INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
-    message     BLOB NOT NULL,     -- as the game sends it (may be Shift-JIS)
-    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (from_hunter, to_hunter),
+-- Messages to a hunter's inbox, with or without a friend request (`ReqTell`, `ReqFriendAdd`). The game's inbox
+-- only lasts until it quits and drops what arrives while a scene loads, and deleting from it is local: so the server
+-- stores them and delivers each once, at the recipient's next position in a city. A plain message goes once
+-- delivered; a friend request stays as the proof an answer needs. Both expire 30 days after their (last) sending;
+-- sending a request again delivers it again. A blocked sender's messages are never stored.
+CREATE TABLE messages (
+    id              INTEGER PRIMARY KEY,
+    from_hunter     INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    to_hunter       INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    text            BLOB NOT NULL,     -- as the game sends it (may be Shift-JIS)
+    friend_request  INTEGER NOT NULL CHECK (friend_request IN (0, 1)),
+    sent            INTEGER NOT NULL DEFAULT 0 CHECK (sent IN (0, 1)),
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (from_hunter <> to_hunter)
 ) STRICT;
-CREATE INDEX friend_requests_to ON friend_requests (to_hunter);
+CREATE INDEX messages_to ON messages (to_hunter, sent);
+-- One request per pair: a new one replaces it.
+CREATE UNIQUE INDEX messages_one_request ON messages (from_hunter, to_hunter) WHERE friend_request = 1;
 
 -- Black lists are personal: (a, b) and (b, a) are separate rows, only the blocker removes theirs. The server
 -- doesn't deliver to a blocker what their blocked hunters send them.

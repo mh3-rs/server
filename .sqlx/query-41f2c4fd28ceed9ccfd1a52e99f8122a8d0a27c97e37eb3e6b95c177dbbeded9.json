@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO messages (from_hunter, to_hunter, text, friend_request) VALUES (?1, ?2, ?3, ?4)\n           ON CONFLICT (from_hunter, to_hunter) WHERE friend_request = 1\n           DO UPDATE SET text = excluded.text, sent = 0, created_at = CURRENT_TIMESTAMP",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "41f2c4fd28ceed9ccfd1a52e99f8122a8d0a27c97e37eb3e6b95c177dbbeded9"
+}

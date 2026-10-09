@@ -841,52 +841,81 @@ async fn cities_are_shared() {
     running.stop().await;
 }
 
-/// Tier 3: the game's inbox lasts one game session and drops messages arriving while a scene loads, so a friend
-/// request not answered yet is delivered at the player's first position in a city, once per game, until answered.
-#[tokio::test]
-async fn friend_requests_wait_for_an_answer() {
-    let (config, _db) = config();
-    let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+/// A new console with its hunter on slot 1: its support code and Capcom ID.
+async fn new_hunter(lmp: SocketAddr) -> (String, String) {
     let (code, _, _) = first_visit(lmp, None).await;
     login(lmp, &code, 1).await;
     let (_, _, slots) = first_visit(lmp, Some(&code)).await;
-    let to = slots[0].0.clone();
+    (code, slots[0].0.clone())
+}
 
-    // Sent while the recipient is away.
-    let mut a = enter_world(&running).await;
-    let request = ReqFriendAdd {
-        capcom_id: to.into(),
+/// The message notices (`NtcTell`, `NtcFriendAccept`, `NtcFriendAdd`) a console receives within 200 ms.
+async fn mail(console: &mut Console) -> Vec<wire::PacketId> {
+    let kinds = [NtcTell::ID, NtcFriendAccept::ID, NtcFriendAdd::ID];
+    let seen = drain(console, Duration::from_millis(200)).await;
+    seen.into_iter().filter(|id| kinds.contains(id)).collect()
+}
+
+/// Tier 3: messages, with or without a friend request, are stored and delivered once, when the recipient stands in
+/// a city (the game's inbox drops what arrives while a scene loads, and forgets it all when the game quits).
+#[tokio::test]
+async fn messages_wait_for_their_recipient() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let (a_code, a_id) = new_hunter(lmp).await;
+    let (b_code, b_id) = new_hunter(lmp).await;
+    let (c_code, c_id) = new_hunter(lmp).await;
+    let tell = |to: &str, text: &'static [u8]| ReqTell {
+        capcom_id: to.to_owned().into(),
         info: PatData::new(),
-        text: Bytes::from_static(b"hi"),
+        text: Bytes::from_static(text),
     };
-    send(&mut a, 10, request).await;
-    expect::<AnsFriendAdd>(&mut a).await;
-
+    let request = |to: &str| ReqFriendAdd {
+        capcom_id: to.to_owned().into(),
+        info: PatData::new(),
+        text: Bytes::from_static(b"friends?"),
+    };
     let position = || NtcLayerUserPosition {
         data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
     };
-    for (game, gate) in [(1, 1), (2, 2)] {
-        let mut b = play(&running, &code).await;
-        // Nothing in a gate, nor on entering a city: first a position there, then once per game.
-        let info = PatData::new();
-        send(&mut b, 10, ReqLayerDown { layer: gate, info }).await;
-        meet(&mut b, &mut enter_world(&running).await, gate, 2).await;
-        let seen = drain(&mut b, Duration::from_millis(200)).await;
-        assert!(
-            !seen.contains(&NtcFriendAccept::ID),
-            "game {game}: {seen:?}"
-        );
-        for (seq, expected) in [(30, true), (31, false)] {
-            send(&mut b, seq, position()).await;
-            let seen = drain(&mut b, Duration::from_millis(200)).await;
-            assert_eq!(
-                seen.contains(&NtcFriendAccept::ID),
-                expected,
-                "game {game}, position {seq}: {seen:?}"
-            );
-        }
-    }
+
+    // While B is away: a message and a friend request from A.
+    let mut a = play(&running, &a_code).await;
+    send(&mut a, 10, tell(&b_id, b"hello")).await;
+    send(&mut a, 11, request(&b_id)).await;
+    drain(&mut a, Duration::from_millis(100)).await;
+
+    // B: nothing in a gate, nor on entering a city; at its first position there, both, once.
+    let mut b = play(&running, &b_code).await;
+    let info = PatData::new();
+    send(&mut b, 10, ReqLayerDown { layer: 1, info }).await;
+    meet(&mut b, &mut enter_world(&running).await, 1, 2).await;
+    assert_eq!(mail(&mut b).await, []);
+    send(&mut b, 30, position()).await;
+    assert_eq!(mail(&mut b).await, [NtcTell::ID, NtcFriendAccept::ID]);
+    send(&mut b, 31, position()).await;
+    assert_eq!(mail(&mut b).await, []);
+
+    // B stands in the city now: a message arrives at once; a blocked hunter's never does.
+    let mut c = play(&running, &c_code).await;
+    send(&mut c, 10, tell(&b_id, b"hi")).await;
+    assert_eq!(mail(&mut b).await, [NtcTell::ID]);
+    let block = ReqBlackAdd {
+        capcom_id: c_id.into(),
+        info: PatData::new(),
+    };
+    send(&mut b, 32, block).await;
+    drain(&mut b, Duration::from_millis(100)).await;
+    send(&mut c, 11, tell(&b_id, b"blocked")).await;
+    assert_eq!(mail(&mut b).await, []);
+
+    // A asks again: delivered again. B asks A too: friends at once, both told.
+    send(&mut a, 12, request(&b_id)).await;
+    assert_eq!(mail(&mut b).await, [NtcFriendAccept::ID]);
+    send(&mut b, 33, request(&a_id)).await;
+    assert_eq!(mail(&mut b).await, [NtcFriendAdd::ID]);
+    assert_eq!(mail(&mut a).await, [NtcFriendAdd::ID]);
     running.stop().await;
 }
 
