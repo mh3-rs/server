@@ -122,17 +122,22 @@ Settled with the user on 2026-10-09.
       host sees "entered" then "left"; no new `INIT` by itself. Rejoining: a new negotiation, a new cookie, the same
       failure. Unblocked: pings answered in 50 ms, `REPORT` success. AltWFC sends one `CONNECT` per `INIT`: the extra
       ones, arriving while pinging, are acked and ignored (the second-`CONNECT` rule, seen live).
-- [ ] Wire: NatNeg records (magic, version, type, session id, port type, client index, then per type) typed and
+- [x] Wire: NatNeg records (magic, version, type, session id, port type, client index, then per type) typed and
       round-tripped on every recorded datagram; the QR availability packet (D1).
-- [ ] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
+- [x] NatNeg server (UDP 27901): `INIT`/`INIT_ACK`, `CONNECT` once both sides are in, `CONNECT_ACK`, `REPORT`/
       `REPORT_ACK`, sessions forgotten after a minute; only logged-in consoles (D5).
-- [ ] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
+- [x] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
 - [ ] Strategies (D2, D3): `Option<Nat>` per player; classification from the `INIT`s (`ERT_TEST` probe; symmetric mapping
       with D9); a pair relayed if either is `Relay`; the failure fallback.
 - [ ] Replay: the harness replays recorded UDP too (NatNeg exchanges; P2P datagrams aren't the server's).
 - [ ] Tier 5: fake consoles through NatNeg and P2P in each strategy; simulated NAT; forced failure → relay on retry;
       relay latency (forwarding p99 under 1 ms on one host).
-- [ ] Lab: the M3 run in each strategy with AltWFC's NatNeg off; a `relay` run with 3 consoles (D7); a 15 s cut
-      through the relay (it must hold like P2P does).
+- [x] Lab, `relay` (run 10, 2026-10-09; AltWFC on NAS only, `lab/altwfc.sh nas`): a city and a quest together, all
+      through one relay port (the quest reuses the city's link: no new negotiation); D6 confirmed: no rewriting.
+- [x] Lab, `p2p` (run 11): the same, direct, through our NatNeg. Timings as with AltWFC: entering a city takes ~5–6 s,
+      almost all the game's own wait before `REPORT` (5 s after the peer answers); our `CONNECT` comes 5 ms after
+      the `INIT`s (AltWFC ~70 ms). Joining a party: no negotiation, answered in ~30 ms.
+- [ ] Lab: `hybrid` (after step 4); a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold
+      like P2P does).
 - [ ] Deployment: the UDP ports in the Dockerfile and the README (27900, 27901, the relay range), the configuration
       (`NATNEG_STRATEGY`, `RELAY_PORTS`, `NATNEG_SECONDARY_ADDRESS`).
