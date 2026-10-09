@@ -77,8 +77,9 @@ player kicked for not being ready, a party broken by its leader before departure
   milliseconds, once per creation and per join attempt), compared at each join, **dropped at departure** (a departed
   quest can't be joined). Never in the database or the logs. MH3SP also puts the password itself in the quest's
   record (field `0x04`), sent to everyone in the city with the quest list, every change and every info request;
-  copied in M2. The record has a "has password" flag: to test while recording that the console only needs the
-  flag, then the password stops leaving the server (it must, for the hash to replace it).
+  copied in M2. **The password never leaves the server**: the record has a "has password" flag; to test while
+  recording that the console only needs the flag; if it needs field `0x04` present too, the server sends a fixed
+  placeholder instead of the password.
 - **D8 Tier 4** (live differential, kept for later in M1). M3 is where it pays off: scripted multi-console scenarios
   the corpus doesn't have, run against MH3SP and Rust. *Recommended:* decide after D1's recordings (they may cover
   enough).
