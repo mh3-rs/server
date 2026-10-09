@@ -39,7 +39,7 @@ fn config() -> (Config, tempfile::TempDir) {
         tls_cert: repo().join("certs/dev/server.crt"),
         tls_key: repo().join("certs/dev/server.key"),
         database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
-        // Where the recordings were made: the addresses handed out match theirs.
+        // Where most recordings were made; a replay uses its scenario's own (`recorded_address`).
         external_address: Some("192.168.110.150".into()),
         natneg_hostname: Some("natneg1.gs.nintendowifi.net".into()),
         secret: Some(server::config::Secret(b"test secret".to_vec())),
@@ -157,16 +157,29 @@ async fn accepts_wii_tls_and_reports_health() {
     running.stop().await;
 }
 
-/// When the scenario was recorded, by the reference server's clock (its first `AnsServerTime`).
-fn recorded_at(scenario: &Path) -> Option<i64> {
+/// The payload of the scenario's first `name` frame.
+fn first_payload(scenario: &Path, name: &str) -> Option<Vec<u8>> {
     let recordings = corpus::load(scenario).unwrap();
     let frame = recordings
         .iter()
         .flat_map(|r| r.connections.iter().flat_map(|c| &c.frames))
-        .filter(|f| f.name == "AnsServerTime")
+        .filter(|f| f.name == name)
         .min_by_key(|f| f.t)?;
-    let payload = hex::decode(&frame.payload).unwrap();
+    Some(hex::decode(&frame.payload).unwrap())
+}
+
+/// When the scenario was recorded, by the reference server's clock (its first `AnsServerTime`).
+fn recorded_at(scenario: &Path) -> Option<i64> {
+    let payload = first_payload(scenario, "AnsServerTime")?;
     Some(i64::from((&payload[..]).get_u32()))
+}
+
+/// The address the reference server handed out when the scenario was recorded (its first `AnsLmpConnect`).
+fn recorded_address(scenario: &Path) -> Option<String> {
+    let payload = first_payload(scenario, "AnsLmpConnect")?;
+    let mut p = &payload[..];
+    let len = p.get_u16() as usize;
+    Some(String::from_utf8_lossy(&p[..len]).into_owned())
 }
 
 async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
@@ -179,6 +192,9 @@ async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
             .unwrap()
             .as_secs() as i64;
         config.clock_offset = at - now;
+    }
+    if let Some(address) = recorded_address(scenario) {
+        config.external_address = Some(address);
     }
     let running = server::start(&config).await.unwrap();
     let targets = Targets {
@@ -793,7 +809,10 @@ async fn cities_are_shared() {
     assert_eq!(string(arrived.user.get(0x02)), "Aiko");
     send(&mut a, 11, ReqLayerCreateHead { number: 1 }).await;
     expect::<AnsLayerCreateHead>(&mut a).await;
-    // Reserved: shown full to the other player, who can't create it.
+    // Reserved: shown full to the other player, at once (its gate's list stays live, as MH3SP) and when it asks;
+    // it can't create the city.
+    let info = expect::<NtcLayerInfoSet>(&mut b).await;
+    assert_eq!(info.record.get(0x10), Some(&Item::Byte(2)));
     let cities = children(&mut b, 11, 1, 1).await;
     assert!(matches!(cities[0].0.get(0x10), Some(Item::Byte(2))));
     send(&mut b, 12, ReqLayerCreateHead { number: 1 }).await;
@@ -813,8 +832,12 @@ async fn cities_are_shared() {
     )
     .await;
     expect::<AnsLayerCreateSet>(&mut a).await;
+    let counts = expect::<NtcLayerUserNum>(&mut b).await;
+    assert_eq!((counts.kind, long(counts.layer.get(0x02))), (4, 1));
     send(&mut a, 13, ReqLayerCreateFoot { number: 1, unk: 0 }).await;
     expect::<AnsLayerCreateFoot>(&mut a).await;
+    let info = expect::<NtcLayerInfoSet>(&mut b).await;
+    assert_eq!(info.record.get(0x10), Some(&Item::Byte(3)));
 
     // Created: joinable (state 3) with one player; the other joins it.
     let cities = children(&mut b, 13, 1, 1).await;
@@ -1240,15 +1263,15 @@ async fn player_search() {
         count: 100,
         fields: vec![1, 2, 3, 4],
     };
-    // Everyone is named "Aiko": part of it, another case.
+    // Everyone is named "Aiko": part of it, another case; the searcher isn't among them.
     send(&mut searcher, 70, head("", b"aIK")).await;
-    assert_eq!(expect::<AnsUserSearchHead>(&mut searcher).await.count, 3);
-    send(&mut searcher, 71, ReqUserSearchData { first: 1, count: 2 }).await;
+    assert_eq!(expect::<AnsUserSearchHead>(&mut searcher).await.count, 2);
+    send(&mut searcher, 71, ReqUserSearchData { first: 1, count: 1 }).await;
     assert_eq!(
         expect::<AnsUserSearchData>(&mut searcher).await.users.len(),
-        2
+        1
     );
-    send(&mut searcher, 72, ReqUserSearchData { first: 3, count: 2 }).await;
+    send(&mut searcher, 72, ReqUserSearchData { first: 2, count: 2 }).await;
     assert_eq!(
         expect::<AnsUserSearchData>(&mut searcher).await.users.len(),
         1

@@ -1,0 +1,13 @@
+description = "Player Search (ReqUserSearchHead/Data/Foot) from a gate, every server: by name ('dev', both hunters are named so; 'de'; 'zzz', nobody) and by Capcom ID (dev2's), then dev2's card (ReqUserSearchInfo). The searcher is among MH3SP's results (the console grays it out). 'Warp to' on the card sends ReqUserSearchInfo again, no ReqLayerJump*; the console then logs error 0x80060002 (NtcCollectionLog) and shows an empty message: the warp needs something the answer lacks (the jumps step)."
+steps = [
+  "both: Online, slot 1, Valor1; dev2: City Gate 2; dev1: City Gate 1",
+  "dev1: Player Search, By Name: 'dev', 'de', 'zzz'",
+  "dev1: Player Search, By ID: dev2's; open dev2's card",
+  "dev1: 'Warp to' on dev2's card (an empty message)",
+  "both: close",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M5"

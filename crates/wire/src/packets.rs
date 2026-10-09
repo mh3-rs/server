@@ -339,10 +339,17 @@ packets! {
     AnsLayerChildListData = 0x64250200 { first: u32, children: Vec<(PatData, OptionalFields)> }
     ReqLayerChildListFoot = 0x64260100 {}
     AnsLayerChildListFoot = 0x64260200 {}
+    ReqLayerSiblingListHead = 0x64270100 { first: u32, count: u32, fields: Vec<u8> }
+    AnsLayerSiblingListHead = 0x64270200 { first: u32, count: u32 }
+    ReqLayerSiblingListData = 0x64280100 { first: u32, count: u32 }
+    AnsLayerSiblingListData = 0x64280200 { first: u32, siblings: Vec<(PatData, OptionalFields)> }
+    ReqLayerSiblingListFoot = 0x64290100 {}
+    AnsLayerSiblingListFoot = 0x64290200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
     ReqLayerChildInfo = 0x64230100 { layer: u16, fields: Vec<u8>, rest: Rest }
     AnsLayerChildInfo = 0x64230200 { layer: u16, record: PatData, settings: OptionalFields, rest: Rest }
     NtcLayerUserNum = 0x64031000 { kind: u8, layer: PatData }
+    NtcLayerInfoSet = 0x64201000 { path: Bytes, record: PatData, settings: OptionalFields }
     ReqLayerDown = 0x64140100 { layer: u16, info: PatData }
     AnsLayerDown = 0x64140200 { layer: u16 }
     ReqLayerUp = 0x64150100 {}

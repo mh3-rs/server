@@ -109,6 +109,9 @@ console sessions to do: `recordings.md`.
 - **D8 Tier 4 (live differential against MH3SP). Settled: dropped.** Kept for later twice; the corpus replays
   (tier 2) and console runs covered parity so far, and MH3SP is a moving reference. Revisit only if a divergence
   can't be found otherwise.
+- **D9 Player Search leaves out the searcher. Settled (2026-10-09, s12).** MH3SP lists the searcher among the
+  results; the console grays that row out, but it is still a useless result and takes a place in the count and the
+  pages. Ours filters it out before paging (a divergence on s12's `dev` and `de` searches).
 
 ## Work (once the decisions are settled)
 
@@ -119,9 +122,20 @@ console sessions to do: `recordings.md`.
       `LayerMediationList` lists the real ones (MH3SP's 14 "Test" placeholders: a divergence entry). Test:
       `one_player_per_seat`. To confirm on consoles (`recordings.md`: s13 and the Rust check).
 - [x] Player Search (`UserSearchHead/Data/Foot`): every world server, part of a Capcom ID or of a name (any case),
-      as MH3SP; nothing without either; the pages the console asks for (MH3SP sent everything each time). Rows as the
-      layer search's (`found_users`). Test: `player_search`. To confirm on consoles (`recordings.md`: s12 and the
-      Rust check).
+      as MH3SP but without the searcher (D9); nothing without either; the pages the console asks for (MH3SP sent
+      everything each time). Rows as MH3SP's `UserSearchInfo` (s12): Capcom ID, name, the hunter's stats block
+      (`0x03`), the path (`0x04`); the layer search's rows have the path in `0x03`. Test: `player_search`; s12 replays.
+      To confirm on consoles (`recordings.md`: the Rust check).
+- [x] Found by s12's replay (2026-10-09):
+  - a gate's city list stays live: the players standing in the gate get a city's counts (`NtcLayerUserNum`, kind 4)
+    when it's created or someone leaves it, and its whole record (`NtcLayerInfoSet`) when it's reserved, created or
+    emptied, as MH3SP (test: `cities_are_shared`);
+  - lists show players in the order they reached the layer (MH3SP's), not the world server (`World::arrive`); the
+    city host handed on is the earliest to have entered the city;
+  - Change Gates' list (`LayerSiblingListHead/Data/Foot`): the world server's gates (from a city, its gate's
+    cities), as MH3SP; our server closed the connection on it before. Picking one still fails (the jumps step);
+  - the replay gate (`corpus::REACHED`) moves to M5; each scenario replays with the address it was recorded with
+    (s12: the lab machine's new one).
 - [ ] Recordings (D1) of the rest, each replaying whole (`recordings.md`).
 - [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
       `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.

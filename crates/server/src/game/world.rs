@@ -289,6 +289,14 @@ impl World {
         self.places.get_mut(capcom_id)
     }
 
+    /// The player reached another layer: lists show it after those already there (MH3SP's order).
+    pub fn arrive(&mut self, capcom_id: &str) {
+        self.arrivals += 1;
+        if let Some(place) = self.places.get_mut(capcom_id) {
+            place.arrival = self.arrivals;
+        }
+    }
+
     /// The players where `capcom_id` is (same world server, gate and city), the earliest first.
     pub fn neighbours(&self, capcom_id: &str) -> Vec<(&str, &Place)> {
         let Some(here) = self.places.get(capcom_id) else {
@@ -353,6 +361,7 @@ impl World {
             place.city = Some(id.2);
             place.standing = false;
         }
+        self.arrive(capcom_id);
         Ok(())
     }
 
@@ -378,11 +387,12 @@ impl World {
             place.city = Some(id.2);
             place.standing = false;
         }
+        self.arrive(capcom_id);
         Ok(())
     }
 
-    /// The player leaves its city, if in one, or drops its reservation: an empty city goes, a leader leaving hands
-    /// the city to the earliest player left.
+    /// The player leaves its city, if in one, for its gate (arriving there), or drops its reservation: an empty city
+    /// goes, a leader leaving hands the city to the earliest player left.
     pub fn leave_city(&mut self, capcom_id: &str) {
         self.leave_circle(capcom_id);
         self.release_seats(capcom_id);
@@ -392,6 +402,8 @@ impl World {
         let (server, gate) = (place.server, place.gate);
         let left = place.city.take();
         place.standing = false;
+        self.arrivals += 1;
+        place.arrival = self.arrivals;
         for (&id, city) in self.cities.iter_mut() {
             if city.reserved_by.as_deref() == Some(capcom_id) {
                 city.reserved_by = None;

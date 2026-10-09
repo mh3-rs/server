@@ -209,7 +209,7 @@ impl Fmp {
             }
             ReqLayerUserSearchData::ID => {
                 ReqLayerUserSearchData::decode(p)?;
-                let users = found_users(shared, &self.search);
+                let users = found_users(shared, &self.search, false);
                 reply(seq, &AnsLayerUserSearchData { first: 0, users })
             }
             ReqLayerUserSearchFoot::ID => {
@@ -217,9 +217,11 @@ impl Fmp {
                 reply(seq, &AnsLayerUserSearchFoot {})
             }
             ReqUserSearchHead::ID => {
-                // Player Search (Online menu): everyone on every world server, by part of their Capcom ID or name
-                // (any case), as MH3SP; nothing without either. Kept for the data requests.
+                // Player Search (Online menu): everyone else on every world server, by part of their Capcom ID or
+                // name (any case), as MH3SP but without the searcher (M5 D9); nothing without either. Kept for the
+                // data requests.
                 let r = ReqUserSearchHead::decode(p)?;
+                let me = capcom_id(session);
                 let world = shared.world.lock().unwrap();
                 let contains = |haystack: &[u8], needle: &[u8]| {
                     haystack
@@ -232,7 +234,8 @@ impl Fmp {
                         .everyone()
                         .into_iter()
                         .filter(|(id, p)| {
-                            (r.capcom_id.is_empty() || contains(id.as_bytes(), &r.capcom_id))
+                            *id != me
+                                && (r.capcom_id.is_empty() || contains(id.as_bytes(), &r.capcom_id))
                                 && (r.name.is_empty() || contains(&p.name, &r.name))
                         })
                         .skip(r.first.saturating_sub(1) as usize)
@@ -258,7 +261,7 @@ impl Fmp {
                     .take(r.count as usize)
                     .cloned()
                     .collect();
-                let users = found_users(shared, &page);
+                let users = found_users(shared, &page, true);
                 reply(seq, &AnsUserSearchData { first: 0, users })
             }
             ReqUserSearchFoot::ID => {
@@ -459,6 +462,54 @@ impl Fmp {
                 ReqLayerChildListFoot::decode(p)?;
                 reply(seq, &AnsLayerChildListFoot {})
             }
+            ReqLayerSiblingListHead::ID => {
+                // Change Gates (a gate's entrance, Relocate): the layers beside the player's, as MH3SP: its world
+                // server's gates, or its gate's cities. Picking one goes through `ReqLayerJump*` (not built).
+                ReqLayerSiblingListHead::decode(p)?;
+                let count = match location(shared, session)? {
+                    (_, Some(_), None) => world::GATES,
+                    (_, Some(_), Some(_)) => world::CITIES,
+                    _ => {
+                        return Err(Fault::Client(anyhow!(
+                            "no siblings at the world server level"
+                        )));
+                    }
+                };
+                reply(
+                    seq,
+                    &AnsLayerSiblingListHead {
+                        first: 0,
+                        count: u32::from(count),
+                    },
+                )
+            }
+            ReqLayerSiblingListData::ID => {
+                let r = ReqLayerSiblingListData::decode(p)?;
+                let place = location(shared, session)?;
+                let world = shared.world.lock().unwrap();
+                let siblings = match place {
+                    (server, Some(_), None) => world::gates(&world, server, r.first, r.count),
+                    (server, Some(gate), Some(_)) => {
+                        world::cities(&world, server, gate, r.first, r.count)
+                    }
+                    _ => {
+                        return Err(Fault::Client(anyhow!(
+                            "no siblings at the world server level"
+                        )));
+                    }
+                };
+                reply(
+                    seq,
+                    &AnsLayerSiblingListData {
+                        first: r.first,
+                        siblings,
+                    },
+                )
+            }
+            ReqLayerSiblingListFoot::ID => {
+                ReqLayerSiblingListFoot::decode(p)?;
+                reply(seq, &AnsLayerSiblingListFoot {})
+            }
             ReqLayerChildInfo::ID => {
                 // A layer's record: `unk` 0 the player's own layer, else that child of it (a gate from a world
                 // server, a city from a gate). Answered with the same `unk`: only for 0 does the console take the
@@ -500,6 +551,7 @@ impl Fmp {
                 match (gate, city) {
                     (None, _) if (1..=world::GATES).contains(&r.layer) => {
                         world.place(me).expect("located").gate = Some(r.layer);
+                        world.arrive(me);
                         info!(gate = r.layer, "entered gate");
                         let ntc = layer_in(&world, me, seq)?;
                         for other in world.others(me) {
@@ -581,7 +633,7 @@ impl Fmp {
             }
             ReqLayerUserListData::ID => {
                 ReqLayerUserListData::decode(p)?;
-                let users = found_users(shared, &self.search);
+                let users = found_users(shared, &self.search, false);
                 reply(seq, &AnsLayerUserListData { first: 1, users })
             }
             ReqLayerUserListFoot::ID => {
@@ -651,14 +703,13 @@ impl Fmp {
                 if !(1..=world::CITIES).contains(&r.number) {
                     return Err(Fault::Client(anyhow!("no city {}", r.number)));
                 }
-                if let Err(refusal) = shared
-                    .world
-                    .lock()
-                    .unwrap()
-                    .reserve_city((server, gate, r.number), capcom_id(session))
-                {
+                let me = capcom_id(session);
+                let id = (server, gate, r.number);
+                let mut world = shared.world.lock().unwrap();
+                if let Err(refusal) = world.reserve_city(id, me) {
                     return alert(AnsLayerCreateHead::ID, seq, refusal.text());
                 }
+                gate_record(shared, &world, me, id)?;
                 reply(seq, &AnsLayerCreateHead { number: r.number })
             }
             ReqLayerCreateSet::ID => {
@@ -666,25 +717,25 @@ impl Fmp {
                 let (server, gate, _) = location(shared, session)?;
                 let gate =
                     gate.ok_or_else(|| Fault::Client(anyhow!("city created outside a gate")))?;
-                if let Err(refusal) = shared.world.lock().unwrap().create_city(
-                    (server, gate, r.number),
-                    capcom_id(session),
-                    r.extra,
-                ) {
+                let me = capcom_id(session);
+                let id = (server, gate, r.number);
+                let mut world = shared.world.lock().unwrap();
+                if let Err(refusal) = world.create_city(id, me, r.extra) {
                     return alert(AnsLayerCreateSet::ID, seq, refusal.text());
                 }
                 info!(gate, city = r.number, "created city");
+                gate_counts(shared, &world, me, id)?;
                 reply(seq, &AnsLayerCreateSet { number: r.number })
             }
             ReqLayerCreateFoot::ID => {
                 let r = ReqLayerCreateFoot::decode(p)?;
                 let (server, gate, _) = location(shared, session)?;
                 if let Some(gate) = gate {
-                    shared
-                        .world
-                        .lock()
-                        .unwrap()
-                        .release_city((server, gate, r.number), capcom_id(session));
+                    let me = capcom_id(session);
+                    let id = (server, gate, r.number);
+                    let mut world = shared.world.lock().unwrap();
+                    world.release_city(id, me);
+                    gate_record(shared, &world, me, id)?;
                 }
                 reply(seq, &AnsLayerCreateFoot { number: r.number })
             }
@@ -1225,6 +1276,7 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
                 world.leave_city(me);
             } else {
                 place.gate = None;
+                world.arrive(me);
             }
         }
         Depart::World => world.leave(me, conn),
@@ -1242,6 +1294,11 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     if let Some(id) = city.filter(|_| leaves_city) {
         // Best effort: the departure itself is done.
         let _ = user_num(shared, world, me, id);
+        let _ = gate_counts(shared, world, me, id);
+        // An emptied city: its whole record.
+        if world.city_host(id).is_none() {
+            let _ = gate_record(shared, world, me, id);
+        }
     }
     if let Some(id) = city.filter(|_| was_host)
         && let Some(host) = world.city_host(id)
@@ -1262,6 +1319,76 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
             for other in &others {
                 shared.players.send(other, ntc.clone());
             }
+        }
+    }
+}
+
+/// A city's counts changed: the players standing in its gate (not in its cities) get them (`NtcLayerUserNum`, kind 4:
+/// a child of the console's layer), as MH3SP, so the gate's city list stays live.
+fn gate_counts(
+    shared: &Shared,
+    world: &World,
+    me: &str,
+    (server, gate, city): (u32, u16, u16),
+) -> Result<(), Fault> {
+    let Some((record, _)) = world::cities(world, server, gate, u32::from(city), 1).pop() else {
+        return Ok(());
+    };
+    let count = |field| record.get(field).cloned().unwrap_or(Item::Long(0));
+    let path = world::path(server, Some(gate), Some(city));
+    let ntc = frame(
+        0,
+        &NtcLayerUserNum {
+            kind: 4,
+            layer: PatData::new()
+                .with(0x01, Item::Binary(Bytes::copy_from_slice(&path)))
+                .with(0x02, count(0x06))
+                .with(0x03, Item::Long(u32::from(city)))
+                // Unknown; MH3SP's values.
+                .with(0x04, Item::Long(0xaf00_fa00))
+                .with(0x05, count(0x09))
+                .with(0x06, Item::Long(0xbf00_fb00))
+                .with(0x07, count(0x0b)),
+        },
+    )?;
+    to_gate(shared, world, me, (server, gate), ntc);
+    Ok(())
+}
+
+/// A city was reserved, created or emptied: the players standing in its gate get its whole record
+/// (`NtcLayerInfoSet`), as MH3SP.
+fn gate_record(
+    shared: &Shared,
+    world: &World,
+    me: &str,
+    (server, gate, city): (u32, u16, u16),
+) -> Result<(), Fault> {
+    let Some((record, settings)) = world::cities(world, server, gate, u32::from(city), 1).pop()
+    else {
+        return Ok(());
+    };
+    let path = Bytes::copy_from_slice(&world::path(server, Some(gate), Some(city)));
+    // The city's own path even when nobody holds it (the list names it only for an occupied city).
+    let record = match record.get(0x02) {
+        Some(_) => record,
+        None => record.with(0x02, Item::Binary(path.clone())),
+    };
+    let ntc = frame(
+        0,
+        &NtcLayerInfoSet {
+            path,
+            record,
+            settings,
+        },
+    )?;
+    to_gate(shared, world, me, (server, gate), ntc);
+    Ok(())
+}
+
+fn to_gate(shared: &Shared, world: &World, me: &str, (server, gate): (u32, u16), ntc: Frame) {
+    for (other, _) in world.players_at(server, Some(gate), None) {
+        if other != me {
+            shared.players.send(other, ntc.clone());
         }
     }
 }
@@ -1343,26 +1470,30 @@ fn search_ids(capcom_id: &str) -> (u32, u32) {
     (hash.get_u32(), hash.get_u32())
 }
 
-/// Players found by a search, as the lists show them: Capcom ID, name, where they are; then weapon type and whether
-/// on a quest (0 in town, 1 on a quest), and HR.
-fn found_users(shared: &Shared, found: &[String]) -> Vec<(PatData, OptionalFields)> {
+/// Players found by a search, as the lists show them: Capcom ID, name, where they are (with `stats`, Player Search's
+/// rows: the hunter's stats block first, as MH3SP's `UserSearchInfo`); then weapon type and whether on a quest (0 in
+/// town, 1 on a quest), and HR.
+fn found_users(shared: &Shared, found: &[String], stats: bool) -> Vec<(PatData, OptionalFields)> {
     let mut world = shared.world.lock().unwrap();
     found
         .iter()
         .filter_map(|id| {
             let on_quest = world.on_quest(id);
             let place = world.place(id)?;
+            let path = Item::Binary(Bytes::copy_from_slice(&world::path(
+                place.server,
+                place.gate,
+                place.city,
+            )));
             let record = PatData::new()
                 .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
-                .with(0x02, Item::String(place.name.clone()))
-                .with(
-                    0x03,
-                    Item::Binary(Bytes::copy_from_slice(&world::path(
-                        place.server,
-                        place.gate,
-                        place.city,
-                    ))),
-                );
+                .with(0x02, Item::String(place.name.clone()));
+            let record = match stats {
+                true => record
+                    .with(0x03, Item::Binary(place.profile.bytes()))
+                    .with(0x04, path),
+                false => record.with(0x03, path),
+            };
             let in_quest = u32::from(on_quest);
             let weapon = u32::from(place.profile.weapon);
             let hr = u32::from(place.profile.hr);

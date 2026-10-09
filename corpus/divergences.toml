@@ -53,6 +53,21 @@ packet = "AnsLayerMediationList"
 offset = 1
 reason = "the city's seats actually taken, not MH3SP's 14 free placeholders"
 
+# Player Search leaves out the searcher (M5 D9): MH3SP's answers to s12's 'dev' and 'de' list both hunters, ours only
+# dev2. Ignored: the count in every head (all 8 bytes long), and the rows of those two-row answers (626 bytes); the
+# search by Capcom ID (one row) is still compared whole.
+[[mask]]
+packet = "AnsUserSearchHead"
+offset = 4
+len = 4
+reason = "Player Search leaves out the searcher (M5 D9)"
+
+[[mask]]
+packet = "AnsUserSearchData"
+payload_len = 626
+offset = 4
+reason = "Player Search leaves out the searcher (M5 D9)"
+
 # A quest's password (field 0x04 of a quest record, a string): MH3SP sends it in clear to everyone in the city, the
 # Rust server a placeholder (s10's password and the placeholder are both 4 characters).
 [[mask]]

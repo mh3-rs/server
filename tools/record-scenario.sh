@@ -21,7 +21,7 @@ GAME=${MH3_GAME:-/Volumes/USB/mh3/rmhp08.rvz}
 # devN -> lab profile and MAC (dev1 uses the original profile, others are clones).
 profile() { [ "$1" = 1 ] && echo dolphin-user || echo "p$1"; }
 mac() { printf '00:17:ab:b3:3b:%02x' $((0x2a + $1)); }
-dolphin_running() { pgrep -f "Dolphin -u $LAB/$(profile "$1") " >/dev/null; }
+dolphin_running() { pgrep -f "Dolphin .*-u $LAB/$(profile "$1") " >/dev/null; }
 
 # Preconditions.
 grep -q '# >>> mh3sp' /etc/hosts || { echo "hosts redirection is off: sudo $LAB/hosts.sh on"; exit 1; }

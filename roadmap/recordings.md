@@ -10,18 +10,6 @@ The lab: `lab/play.sh` boots each console from its save state (the Village or Ci
 
 ## Pending
 
-### s12-player-search (record against MH3SP, M5 D1)
-
-Player Search (`ReqUserSearchHead/Data/Foot`): by name and by Capcom ID, every server. Then what follows a found
-player: their card (`ReqUserSearchInfo`), and whether a "join" option exists (it may need `ReqLayerJump`, which
-nobody answers: last step).
-
-1. both: Online, slot 1, Valor1. dev2: City Gate 2. dev1: City Gate 1.
-2. dev1: Player Search, By Name: dev2's full name, then part of it, then a name nobody has.
-3. dev1: Player Search, By ID: dev2's Capcom ID. Open dev2's card.
-4. dev1, last: any "join"/"go to" option on dev2's card (it may hang on MH3SP).
-5. both: close.
-
 ### s13-seats (record against MH3SP, M5 D1)
 
 City seats (1–12) and arm wrestling (13–14): `ReqLayerMediationLock/Unlock`. MH3SP lets two players share a seat and
@@ -52,11 +40,14 @@ see the requests the console sends; built with the jumps, as their own step.
 - s15: dev2 creates City 1 with at least one setting not at its default; dev1, from a gate, searches cities with
   matching conditions, then non-matching, then "any"; last, dev1 picks the result (hangs).
 - s16: dev1 in City Gate 1: entrance, Relocate, Change Gates (the list); last, pick City Gate 2 (hangs).
+- Already seen in s12: on MH3SP, picking a gate in Change Gates shows an empty message; "Warp to" on a found
+  player's card sends `ReqUserSearchInfo` again (no `ReqLayerJump*`), then the console logs error `0x80060002`
+  (`NtcCollectionLog`) and shows an empty message: the warp needs something `AnsUserSearchInfo` lacks.
 
 ### Rust server checks (after building, M5)
 
 - Seats on the Rust server: s13's steps; dev2 is refused dev1's seat; quitting while seated frees it.
-- Player search on the Rust server: s12's steps 1–3.
+- Player search on the Rust server: s12's steps 1–3 (dev1 is no longer among its own results, D9).
 
 ### The hour-long session (M5 exit criterion 4)
 
@@ -71,3 +62,7 @@ punch), the others direct; a city and a quest with all three. Shows a relayed an
 ## Done
 
 - 2026-10-09: runs 1–17 (M3, M4, M5): see the milestones' roadmaps.
+- 2026-10-09, s12-player-search (against MH3SP): by name ('dev', both hunters; 'de'; 'zzz', nobody) and by Capcom ID
+  all work; the searcher is among the results (grayed out by the console; we leave it out, M5 D9); "Warp to" fails
+  (above, s15/s16). Its replay found three gaps, fixed (M5's work list): gates' live city lists, list order by
+  arrival in the layer, Change Gates' list.
