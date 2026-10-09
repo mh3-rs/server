@@ -141,7 +141,9 @@ Settled with the user on 2026-10-09.
 - [x] Lab, `hybrid` (run 12): direct link blocked (`lab/p2p.sh block`, relay range let through): the first join fails
       (both report failure, 11688), the retry opens a relay, then a city and a quest through it, still blocked.
       Negotiations happen at the city level only (each pair of city members); a party reuses the city's links.
-- [ ] Lab: a `relay` run with 3 consoles (D7); a 15 s cut through the relay (it must hold like P2P does).
+- [x] Lab, a 15 s cut through the relay (run 13, `relay`): in town and mid-quest, the cut console freezes for the
+      other, then comes back; same connections, same relay pair, no new negotiation: as with a direct link (M3 D4).
+- [ ] Lab: a `relay` run with 3 consoles (D7).
 - [ ] Lab, another day: a mixed city (one console relayed, the others direct: decided per pair, unit-tested), with a
       Dolphin on another machine (the lab's consoles share one IP, so one flag relays them all).
 - [x] Deployment: `README.md` (the settings an operator sets, the ports to open, natneg1/2/3's DNS, Docker with
