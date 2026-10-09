@@ -102,7 +102,10 @@ Reference: MH3SP `fmp_server.py`, `mh/pat.py`, `mh/database.py` (world model), `
       alerts (the answer's id with kind byte `0x01`). Layer states are MH3SP's: 1 empty, 2 full, 3 joinable. `s03`
       creates its city and stops at the quest downloads.
 - [ ] Circles (quests): create, match options, info, info set, match start/end, leave.
-- [ ] Content binaries (D1); the content folder with MH3SP's event files (D2); time (D6).
+- [x] Content binaries (D1), from MH3SP's event files (D2), time (D6): all of `0x01`–`0x0f`. Quests are parsed
+      into typed structs (`content/quest.rs`) and laid out as MH3SP does; checked once against MH3SP's own
+      generator on all 40 quest files: byte-identical. MH3SP quirk kept: Grudge Match Wyvern Trio and Land Lords
+      have 9 items in their last arena set's 8-slot pouch, written whole.
 - [ ] World model (D3), players registry and `Effect`s (D4).
 - [ ] Replay gate: the solo scenarios, every connection.
 - [ ] Tier 3 solo scenarios.

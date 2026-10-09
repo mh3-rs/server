@@ -14,6 +14,8 @@ use tracing::error;
 
 use crate::text::{Language, Text, text};
 
+mod quest;
+
 const DAY: u64 = 24 * 60 * 60;
 /// The Jhen Mohran cycle, in days: fog the first day, Jhen Mohran (sandstorm) the next two.
 const JHEN_CYCLE: u64 = 14;
@@ -81,6 +83,11 @@ pub fn binary(kind: u8, ctx: &Context) -> Result<Option<Binary>> {
         0x04 => trading_post(ctx)?,
         // Unknown purpose (the game fetches it as file 5): MH3SP's placeholder, which the console accepts.
         0x05 => b"5".repeat(0x10),
+        // The quests of the day, one per type; a day with fewer leaves zeros.
+        0x06..=0x0f => match day_quests(ctx)?.get(usize::from(kind - 0x06)) {
+            Some(file) => quest::binary(&quest::load(&ctx.dir.join(file))?)?,
+            None => vec![0; quest::QUEST_SIZE],
+        },
         _ => return Ok(None),
     };
     Ok(Some(Binary::new(bytes)))
@@ -89,8 +96,8 @@ pub fn binary(kind: u8, ctx: &Context) -> Result<Option<Binary>> {
 /// Reads every content file once and logs what is wrong (not fatal: a download needing a broken file fails).
 pub fn check(dir: &Path) {
     let result = (|| -> Result<()> {
-        for quest in rotation(dir)?.iter().flatten() {
-            quest_info(dir, quest)?;
+        for file in rotation(dir)?.iter().flatten() {
+            quest::binary(&quest::load(&dir.join(file))?)?;
         }
         trading_post_days(dir)?;
         Ok(())
@@ -117,19 +124,17 @@ fn rotation(dir: &Path) -> Result<Vec<Vec<String>>> {
         .with_context(|| format!("{}: a list of days, each a list of files", path.display()))
 }
 
-/// A quest's name, and whether it's an arena quest.
-fn quest_info(dir: &Path, file: &str) -> Result<(String, bool)> {
-    let path = dir.join(file);
-    let quest = read_json(&path)?;
-    let info = &quest["quest_info"];
-    let Some(name) = info["name"].as_str() else {
-        bail!("{}: no quest_info.name", path.display());
-    };
-    // The flags are four bytes written as bits, least significant first; arena quests have bit 4 of the last one.
-    let arena = info["flags"][3][4]
-        .as_u64()
-        .with_context(|| format!("{}: no quest_info.flags", path.display()))?;
-    Ok((name.to_owned(), arena == 1))
+/// The quest files of the day.
+fn day_quests(ctx: &Context) -> Result<Vec<String>> {
+    let mut days = rotation(ctx.dir)?;
+    if days.is_empty() {
+        bail!(
+            "{}: no rotation day",
+            ctx.dir.join("event/quest_rotation.json").display()
+        );
+    }
+    let today = (ctx.day() % days.len() as u64) as usize;
+    Ok(days.swap_remove(today))
 }
 
 /// Each day of the trading post: (offered, price 1, price 2), each an (item, quantity) pair.
@@ -159,21 +164,13 @@ fn jhen_active(day: u64) -> bool {
 
 /// What the town's NPCs say: shops, trading post, the event and arena quests of the day, the guildmaster.
 fn greeters(ctx: &Context) -> Result<Vec<u8>> {
-    let days = rotation(ctx.dir)?;
-    if days.is_empty() {
-        bail!(
-            "{}: no rotation day",
-            ctx.dir.join("event/quest_rotation.json").display()
-        );
-    }
     let mut events = Vec::new();
     let mut arena = Vec::new();
-    for file in &days[(ctx.day() % days.len() as u64) as usize] {
-        let (name, is_arena) = quest_info(ctx.dir, file)?;
-        if is_arena {
-            arena.push(name)
-        } else {
-            events.push(name)
+    for file in day_quests(ctx)? {
+        let info = quest::load(&ctx.dir.join(file))?.quest_info;
+        match info.is_arena() {
+            true => arena.push(info.name),
+            false => events.push(info.name),
         }
     }
     let sale = jhen_active(ctx.day());
