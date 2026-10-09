@@ -17,7 +17,7 @@ One process serves every role. Configuration is environment variables, each with
 | `NATNEG_STRATEGY` | `hybrid` (default): direct, the relay for consoles that can't; `p2p` or `relay`: one way for everyone. |
 | `RELAY_PORTS` | `40000-40999` (default): one UDP port per relayed pair of consoles. |
 | `DATABASE_URL` | `sqlite://data/mh3sp.db` (default). |
-| `CONTENT_DIR` | Event content (MH3SP's files), never in this repository. |
+| `CONTENT_DIR` | Event content, never in this repository: a checkout of MH3SP's `event-quest-rotation-full` branch (its live server's quests, rotation and trading post). |
 
 The Nintendo login (NAS) is still AltWFC's: run its NAS service next to this server (its NAT negotiation and QR
 server must be off: this server holds their ports).
@@ -80,5 +80,7 @@ thousand proxies.
 
 ## Development
 
-`scripts/dev.sh` prepares `.env`; `scripts/ci-tests.sh` runs what CI runs. The working rules are in
+`scripts/dev.sh` prepares `.env`; `scripts/ci-tests.sh` runs what CI runs. Quest binaries are checked byte-identical
+to an MH3SP checkout's own generator: `tools/reference-content.py <checkout> <out>` (Python 2), then
+`REFERENCE_DIR=<out> CONTENT_DIR=<checkout> cargo test -p server --lib reference`. The working rules are in
 [`CLAUDE.md`](CLAUDE.md).

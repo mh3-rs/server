@@ -78,7 +78,12 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
 - [x] `roadmap/unk.md`: renames (no change on the wire); `NtcUserBinaryNotice` with `target` 1 to its one player
       (`profile_notices_reach_their_target`); the join/leave `state` note in the code.
 - [ ] Recordings (D1) and the missing handlers, each replaying whole.
-- [ ] Content (D2): the generator's rework, the live branch's quests byte-identical.
+- [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
+      `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.
+      The only change needed: quests naming a small monster data file (`smallmonster_data_file`) instead of listing
+      them; the live branch names six files it doesn't have, so those quests carry no small monsters (as served
+      there). The other binaries' builders (server types, time events, NPC greeters, trading post) only changed in
+      formatting; `arena_utils.py`'s additions are imported by nothing.
 - [x] Announcements (D3): `POST /announce` on the health port, `mh3sp announce "<text>"`; every logged-in player,
       from "[MH3SP]", 30-character lines (tests: the cutting; two consoles at different places). To see on a console.
 - [x] Stopping (D4): `stop.rs`, `POST /stop`, `mh3sp stop <delay|cancel>`; nothing refused meanwhile; a signal warns

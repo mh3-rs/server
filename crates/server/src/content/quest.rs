@@ -21,8 +21,13 @@ pub struct Quest {
     large_monsters: LargeMonsters,
     objective_details: Objectives,
     unknown: Unknown,
-    /// Per wave, per area of the location: the monsters placed there.
+    /// Per wave, per area of the location: the monsters placed there. None when the quest names a small monster
+    /// data file instead (`smallmonster_data_file`).
+    #[serde(default)]
     small_monsters: Vec<Vec<SmallMonster>>,
+    /// That file's bytes, if it exists (read by `load`).
+    #[serde(skip)]
+    small_monster_file: Option<Vec<u8>>,
     /// Arena quests: four sets of (weapon, weapon, weapon, helm, chest, gauntlets, faulds, legs, items, pouch).
     arena_equipment: Option<Vec<ArenaSet>>,
 }
@@ -57,6 +62,9 @@ pub struct QuestInfo {
     wave_2_transition_type: i16,
     wave_2_transition_target: i16,
     wave_2_transition_quantity: i16,
+    /// A file (next to the quest, hexadecimal text) holding the small monster tables as the game reads them, instead
+    /// of `small_monsters`. MH3SP's live server names files it doesn't have: those quests get no small monsters.
+    smallmonster_data_file: Option<String>,
 }
 
 impl QuestInfo {
@@ -229,7 +237,22 @@ fn areas(location: u8) -> Option<usize> {
 
 pub fn load(path: &Path) -> Result<Quest> {
     let text = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_slice(&text).with_context(|| format!("parse {}", path.display()))
+    let mut quest: Quest =
+        serde_json::from_slice(&text).with_context(|| format!("parse {}", path.display()))?;
+    if let Some(file) = &quest.quest_info.smallmonster_data_file {
+        let file = path.with_file_name(file);
+        if let Ok(hex) = std::fs::read_to_string(&file) {
+            let hex: String = hex.split_whitespace().collect();
+            let bytes = hex::decode(hex).with_context(|| format!("parse {}", file.display()))?;
+            ensure!(
+                bytes.len() >= 4,
+                "{}: shorter than its size field",
+                file.display()
+            );
+            quest.small_monster_file = Some(bytes);
+        }
+    }
+    Ok(quest)
 }
 
 /// The binary of a quest.
@@ -348,7 +371,13 @@ pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
         d.len()
     );
 
-    let small = small_monsters(quest)?;
+    // The small monster tables, after their total size (MH3SP: a data file's own first 4 bytes are replaced by it;
+    // a missing one leaves the size alone).
+    let small = match (&q.smallmonster_data_file, &quest.small_monster_file) {
+        (Some(_), Some(file)) => file[4..].to_vec(),
+        (Some(_), None) => Vec::new(),
+        (None, _) => small_monsters(quest)?,
+    };
     d.put_u32((QUEST_SIZE + 4 + small.len()) as u32);
     d.extend_from_slice(&small);
     if let Some(sets) = &quest.arena_equipment {
@@ -509,4 +538,55 @@ fn arena(d: &mut Vec<u8>, sets: &[ArenaSet]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every quest byte-identical to an MH3SP checkout's own generator (`tools/reference-content.py`): runs with
+    /// `REFERENCE_DIR` (its output) and `CONTENT_DIR` (the checkout) set, else skipped.
+    #[test]
+    fn quests_match_the_reference_generator() {
+        let (Some(reference), Some(content)) = (
+            std::env::var_os("REFERENCE_DIR"),
+            std::env::var_os("CONTENT_DIR"),
+        ) else {
+            return;
+        };
+        let mut checked = 0;
+        let mut wrong = Vec::new();
+        for entry in std::fs::read_dir(&reference).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let expected = std::fs::read(&path).unwrap();
+            let quest = Path::new(&content)
+                .join("event")
+                .join(format!("{name}.json"));
+            let got = match load(&quest).and_then(|q| binary(&q)) {
+                Ok(got) => got,
+                Err(e) => {
+                    wrong.push(format!("{name}: {e:#}"));
+                    continue;
+                }
+            };
+            if got != expected {
+                let at = got.iter().zip(&expected).position(|(a, b)| a != b);
+                let at = at.unwrap_or(got.len().min(expected.len()));
+                wrong.push(format!(
+                    "{name}: {} bytes (expected {}), first difference at {at:#x}",
+                    got.len(),
+                    expected.len()
+                ));
+            }
+            checked += 1;
+        }
+        wrong.sort();
+        assert!(
+            wrong.is_empty(),
+            "{} of {checked}:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
 }
