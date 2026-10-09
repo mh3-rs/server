@@ -8,3 +8,4 @@ data/
 # Event content lives outside the code repository (CONTENT_DIR).
 /content/
 claude*.sh
+TODOs.md
