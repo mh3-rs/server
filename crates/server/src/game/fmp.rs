@@ -29,6 +29,9 @@ pub struct Fmp {
     downloads: HashMap<u8, Binary>,
     /// The players found by the last layer search (`LayerUserListHead`), read by `LayerUserListData`.
     search: Vec<String>,
+    /// The version constant the console reported at login (ConnectionData item 3: 4 on PAL, 3 on US), which starts
+    /// the paths it can jump to (M5 D11).
+    version: u32,
 }
 
 impl Fmp {
@@ -38,6 +41,7 @@ impl Fmp {
             login: None,
             downloads: HashMap::new(),
             search: Vec::new(),
+            version: 0,
         }
     }
 
@@ -50,6 +54,10 @@ impl Fmp {
                     return Err(Fault::Client(anyhow!("no ticket")));
                 };
                 let ticket = String::from_utf8_lossy(ticket).into_owned();
+                let Some(Item::Long(version)) = data.get(0x03) else {
+                    return Err(Fault::Client(anyhow!("no version constant")));
+                };
+                self.version = *version;
                 let session = shared
                     .tickets
                     .remove(&ticket)
@@ -307,9 +315,11 @@ impl Fmp {
                     .with(0x01, Item::String(r.capcom_id))
                     .with(0x02, Item::String(place.name.clone()))
                     .with(0x03, Item::Binary(place.profile.bytes()))
+                    // Where "Warp to" goes (M5 D11): a player on a quest is found in their city.
                     .with(
                         0x04,
-                        Item::Binary(Bytes::copy_from_slice(&world::path(
+                        Item::Binary(Bytes::copy_from_slice(&world::jump_path(
+                            self.version,
                             place.server,
                             place.gate,
                             place.city,
@@ -487,11 +497,30 @@ impl Fmp {
                 let r = ReqLayerSiblingListData::decode(p)?;
                 let place = location(shared, session)?;
                 let world = shared.world.lock().unwrap();
+                // Each row with the path a pick jumps to (item 2, M5 D11).
+                let version = self.version;
+                let to = |path: [u8; 14], (row, settings): (PatData, OptionalFields)| {
+                    let row = PatData(row.0.into_iter().filter(|(f, _)| *f != 0x02).collect());
+                    let row = row.with(0x02, Item::Binary(Bytes::copy_from_slice(&path)));
+                    (row, settings)
+                };
+                let first = r.first.max(1);
                 let siblings = match place {
-                    (server, Some(_), None) => world::gates(&world, server, r.first, r.count),
-                    (server, Some(gate), Some(_)) => {
-                        world::cities(&world, server, gate, r.first, r.count)
-                    }
+                    (server, Some(_), None) => (first..)
+                        .zip(world::gates(&world, server, first, r.count))
+                        .map(|(g, row)| {
+                            to(world::jump_path(version, server, Some(g as u16), None), row)
+                        })
+                        .collect(),
+                    (server, Some(gate), Some(_)) => (first..)
+                        .zip(world::cities(&world, server, gate, first, r.count))
+                        .map(|(c, row)| {
+                            to(
+                                world::jump_path(version, server, Some(gate), Some(c as u16)),
+                                row,
+                            )
+                        })
+                        .collect(),
                     _ => {
                         return Err(Fault::Client(anyhow!(
                             "no siblings at the world server level"
@@ -550,20 +579,14 @@ impl Fmp {
                 let mut world = shared.world.lock().unwrap();
                 match (gate, city) {
                     (None, _) if (1..=world::GATES).contains(&r.layer) => {
-                        world.place(me).expect("located").gate = Some(r.layer);
-                        world.arrive(me);
-                        info!(gate = r.layer, "entered gate");
-                        let ntc = layer_in(&world, me, seq)?;
-                        for other in world.others(me) {
-                            shared.players.send(&other, ntc.clone());
-                        }
+                        enter_gate(shared, &mut world, me, r.layer, seq);
                     }
                     (Some(gate), None) => {
-                        if let Err(refusal) = world.join_city((server, gate, r.layer), me) {
+                        if let Err(refusal) =
+                            enter_city(shared, &mut world, me, (server, gate, r.layer))
+                        {
                             return alert(AnsLayerDown::ID, seq, refusal.text());
                         }
-                        info!(gate, city = r.layer, "entered city");
-                        user_num(shared, &world, me, (server, gate, r.layer))?;
                     }
                     _ => return Err(Fault::Client(anyhow!("no layer {} below", r.layer))),
                 }
@@ -580,6 +603,64 @@ impl Fmp {
                     Depart::Up,
                 );
                 reply(seq, &AnsLayerUp {})
+            }
+            ReqLayerJump::ID => {
+                // A jump within the world server (M5 D10, D12): Change Gates, a found player's card, a friend's.
+                let r = ReqLayerJump::decode(p)?;
+                let (server, gate, city) = world::jump_target(&r.path)
+                    .ok_or_else(|| Fault::Client(anyhow!("no such layer to jump to")))?;
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                if world.place(me).map(|p| p.server) != Some(server) {
+                    return Err(Fault::Client(anyhow!("a jump to another world server")));
+                }
+                if let Err(refusal) =
+                    jump(shared, &mut world, me, self.mailbox.conn, (gate, city), seq)
+                {
+                    return alert(AnsLayerJump::ID, seq, refusal.text());
+                }
+                reply(seq, &AnsLayerJump {})
+            }
+            ReqLayerJumpReady::ID => {
+                // A jump to another world server (M5 D13): the target checked, a one-time ticket for it. The console
+                // then reconnects there (`FmpInfo2`, `LayerEnd`, `Shut`) and finishes with `LayerJumpGo`.
+                let r = ReqLayerJumpReady::decode(p)?;
+                let target = world::jump_target(&r.path)
+                    .ok_or_else(|| Fault::Client(anyhow!("no such layer to jump to")))?;
+                if let (server, gate, Some(city)) = target
+                    && let Err(refusal) =
+                        shared.world.lock().unwrap().can_join((server, gate, city))
+                {
+                    return alert(NtcLayerJumpReady::ID, seq, refusal.text());
+                }
+                let mut ticket = [0; 4];
+                openssl::rand::rand_bytes(&mut ticket).map_err(|e| Fault::Server(e.into()))?;
+                let ticket = u32::from_be_bytes(ticket);
+                shared
+                    .jumps
+                    .insert(ticket, (capcom_id(session).to_owned(), target));
+                reply(seq, &NtcLayerJumpReady { ticket })
+            }
+            ReqLayerJumpGo::ID => {
+                // Back on the target's world server: its ticket places the player, once.
+                let r = ReqLayerJumpGo::decode(p)?;
+                let target = world::jump_target(&r.path);
+                let me = capcom_id(session);
+                let mut world = shared.world.lock().unwrap();
+                let valid = shared
+                    .jumps
+                    .remove(&r.ticket)
+                    .is_some_and(|(who, to)| who == me && Some(to) == target)
+                    && world.place(me).map(|p| p.server) == target.map(|t| t.0);
+                let Some((_, gate, city)) = target.filter(|_| valid) else {
+                    return alert(NtcLayerJumpGo::ID, seq, Text::JumpFailed);
+                };
+                if let Err(refusal) =
+                    jump(shared, &mut world, me, self.mailbox.conn, (gate, city), seq)
+                {
+                    return alert(NtcLayerJumpGo::ID, seq, refusal.text());
+                }
+                reply(seq, &NtcLayerJumpGo {})
             }
             ReqLayerHost::ID => {
                 // A console entering a city asks who hosts its P2P session; the others learn of the arrival.
@@ -1230,6 +1311,65 @@ fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<F
                 shared.players.send(player, ntc.clone());
             }
         }
+    }
+}
+
+/// The player enters gate `gate` of its world server, from the server's root: those there see it arrive.
+fn enter_gate(shared: &Shared, world: &mut World, me: &str, gate: u16, seq: u16) {
+    world.place(me).expect("located").gate = Some(gate);
+    world.arrive(me);
+    info!(gate, "entered gate");
+    if let Ok(ntc) = layer_in(world, me, seq) {
+        for other in world.others(me) {
+            shared.players.send(&other, ntc.clone());
+        }
+    }
+}
+
+/// The player enters city `id` from its gate, if the city can take it: those in it get its new counts (the console
+/// announces itself with `LayerHost`).
+fn enter_city(
+    shared: &Shared,
+    world: &mut World,
+    me: &str,
+    id: (u32, u16, u16),
+) -> Result<(), world::CityRefusal> {
+    world.join_city(id, me)?;
+    info!(gate = id.1, city = id.2, "entered city");
+    // Best effort: the player is in.
+    let _ = user_num(shared, world, me, id);
+    Ok(())
+}
+
+/// A jump to `gate` (and `city`) of the player's world server (M5 D12): leaving where it is and walking in, with the
+/// same notices; a city that can't take the player refuses before it moves.
+fn jump(
+    shared: &Shared,
+    world: &mut World,
+    me: &str,
+    conn: u64,
+    (gate, city): (u16, Option<u16>),
+    seq: u16,
+) -> Result<(), world::CityRefusal> {
+    let place = world.place(me).expect("located");
+    let (server, here) = (place.server, (place.gate, place.city));
+    if let Some(city) = city {
+        world.can_join((server, gate, city))?;
+    }
+    if here.1.is_some() && here != (Some(gate), city) {
+        depart(shared, world, me, conn, Depart::Up);
+    }
+    if here.0.is_some_and(|g| g != gate) {
+        depart(shared, world, me, conn, Depart::Up);
+    }
+    if world.place(me).expect("located").gate.is_none() {
+        enter_gate(shared, world, me, gate, seq);
+    }
+    match city {
+        Some(city) if world.place(me).expect("located").city != Some(city) => {
+            enter_city(shared, world, me, (server, gate, city))
+        }
+        _ => Ok(()),
     }
 }
 

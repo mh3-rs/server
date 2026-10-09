@@ -45,6 +45,8 @@ use relay::Relays;
 
 /// How long a session waits for the console's next connection (decision 4).
 const HANDOFF_TTL: Duration = Duration::from_secs(120);
+/// How long a jump to another world server may take to finish (M5 D13).
+const JUMP_TTL: Duration = Duration::from_secs(60);
 
 /// What every connection shares.
 struct Shared {
@@ -55,6 +57,8 @@ struct Shared {
     fmp_port: u16,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
+    /// Jumps to another world server under way (M5 D13), by ticket: who, and where to.
+    jumps: moka::sync::Cache<u32, (String, game::world::Target)>,
     /// Players logged in on FMP, by Capcom ID.
     players: Players,
     /// Where the players are.
@@ -179,6 +183,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
+        jumps: moka::sync::Cache::builder().time_to_live(JUMP_TTL).build(),
         players: Players::default(),
         world: Default::default(),
         started: SystemTime::now(),

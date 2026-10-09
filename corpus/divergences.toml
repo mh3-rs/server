@@ -68,6 +68,22 @@ payload_len = 626
 offset = 4
 reason = "Player Search leaves out the searcher (M5 D9)"
 
+# Paths a console jumps to start with its version constant (M5 D11: 4 on PAL), MH3SP's with the depth: a card's item 4
+# (the path after its marker: item 4, binary, 14 bytes).
+[[mask]]
+packet = "AnsUserSearchInfo"
+pattern = "0406000e"
+offset = 4
+len = 4
+reason = "jump paths start with the console's version constant (M5 D11)"
+
+# Change Gates' rows carry the path a pick jumps to (item 2, M5 D11); MH3SP's have none (picking one failed): compared
+# up to the rows (`jumps_within_a_world_server` checks them).
+[[mask]]
+packet = "AnsLayerSiblingListData"
+offset = 8
+reason = "Change Gates' rows carry the path a pick jumps to (M5 D11)"
+
 # A quest's password (field 0x04 of a quest record, a string): MH3SP sends it in clear to everyone in the city, the
 # Rust server a placeholder (s10's password and the placeholder are both 4 characters).
 [[mask]]
@@ -127,3 +143,13 @@ connection = "dev2-05-fmp"
 packet = "NtcCircleListLayerChange"
 seq = 0
 reason = "MH3SP's stale quest after a party breaks (a member leaving it again later)"
+
+# s15: dev1 sends dev2 a friend request from dev2's card while dev2, just in the city it created, hasn't moved yet.
+# MH3SP pushes it at once; the Rust server delivers it at dev2's next position in the city (M3 D2: the game drops a
+# message arriving while a scene loads), so it arrives later, as an extra notice.
+[[omit]]
+scenario = "s15-jumps"
+connection = "dev2-05-fmp"
+packet = "NtcFriendAccept"
+seq = 30275
+reason = "friend requests are delivered at the recipient's next position in a city (M3 D2)"

@@ -32,22 +32,14 @@ console), and only if the chat menu offers a recipient. If no menu offers it, `L
 3. both: City Gate 1; the same there (dev2 sends `tell 2`). Does the sender see its own line, once or twice?
 4. both: close.
 
-### s15-city-search and s16-change-gate (record against MH3SP; for the jumps step, after M5)
-
-The lists work on MH3SP, joining from them hangs (`ReqLayerInfo`, `ReqLayerJump*`: nobody answers them). Recorded to
-see the requests the console sends; built with the jumps, as their own step.
-
-- s15: dev2 creates City 1 with at least one setting not at its default; dev1, from a gate, searches cities with
-  matching conditions, then non-matching, then "any"; last, dev1 picks the result (hangs).
-- s16: dev1 in City Gate 1: entrance, Relocate, Change Gates (the list); last, pick City Gate 2 (hangs).
-- Already seen in s12: on MH3SP, picking a gate in Change Gates shows an empty message; "Warp to" on a found
-  player's card sends `ReqUserSearchInfo` again (no `ReqLayerJump*`), then the console logs error `0x80060002`
-  (`NtcCollectionLog`) and shows an empty message: the warp needs something `AnsUserSearchInfo` lacks.
-
 ### Rust server checks (after building, M5)
 
 - Seats on the Rust server: s13's steps; dev2 is refused dev1's seat; quitting while seated frees it.
 - Player search on the Rust server: s12's steps 1–3 (dev1 is no longer among its own results, D9).
+- Jumps on the Rust server (M5 D10–D13): s15's steps, each pick now a jump: Change Gates to City Gate 2, Warp to
+  dev2's city from the friends list and from the card; then dev2 in another world server (Greed1) and dev1 warps
+  there from the friends list (the reconnection); last, dev2's city full (four players can't be had: skip) or
+  reserved (dev2 creating another city while dev1 warps).
 
 ### The hour-long session (M5 exit criterion 4)
 
@@ -66,3 +58,7 @@ punch), the others direct; a city and a quest with all three. Shows a relayed an
   all work; the searcher is among the results (grayed out by the console; we leave it out, M5 D9); "Warp to" fails
   (above, s15/s16). Its replay found three gaps, fixed (M5's work list): gates' live city lists, list order by
   arrival in the layer, Change Gates' list.
+- 2026-10-09, s15-jumps (against MH3SP): Change Gates, the friends list's warp and the card's "Warp to" all fail the
+  same way (the empty message, error `0x80060002`, no jump request): MH3SP's paths start with the depth where the
+  console wants its version constant (M5 D11). The friends list warps through `ReqUserSearchInfo`, like the card. No
+  menu found that searches cities. Built after it: the jumps (M5 D10–D13).

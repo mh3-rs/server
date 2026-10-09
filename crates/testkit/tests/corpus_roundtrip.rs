@@ -174,12 +174,11 @@ fn typed_packets_reencode() {
             .join("\n")
     );
     if !scenarios().is_empty() {
-        // Typed from the decomp, never sent by MH3SP (NtcLayerUserNum: the city counts Local Info shows, M3).
+        // Typed from the decomp, never sent by MH3SP (the jumps: no console ever jumped there, M5 D11).
         let never_recorded = [
             "ReqMaintenance",
             "AnsMaintenance",
             "NtcCircleBreak",
-            "NtcLayerUserNum",
             "NtcCircleChat",
             "ReqLayerMediationLock",
             "AnsLayerMediationLock",
@@ -187,12 +186,12 @@ fn typed_packets_reencode() {
             "ReqLayerMediationUnlock",
             "AnsLayerMediationUnlock",
             "NtcLayerMediationUnlock",
-            "ReqUserSearchHead",
-            "AnsUserSearchHead",
-            "ReqUserSearchData",
-            "AnsUserSearchData",
-            "ReqUserSearchFoot",
-            "AnsUserSearchFoot",
+            "ReqLayerJump",
+            "AnsLayerJump",
+            "ReqLayerJumpReady",
+            "NtcLayerJumpReady",
+            "ReqLayerJumpGo",
+            "NtcLayerJumpGo",
         ];
         let missing: Vec<_> = TYPED
             .iter()

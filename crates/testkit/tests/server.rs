@@ -340,9 +340,11 @@ async fn waits_for_the_database_at_startup() {
     running.stop().await;
 }
 
-/// A PAL console's connection data: its support code and its ticket, when it has them.
+/// A PAL console's connection data: its version constant (4), its support code and its ticket, when it has them.
 fn connection_data(support_code: Option<&str>, ticket: Option<&str>) -> PatData {
-    let mut data = PatData::new().with(0x07, Item::String(Bytes::from_static(b"1002121503")));
+    let mut data = PatData::new()
+        .with(0x03, Item::Long(4))
+        .with(0x07, Item::String(Bytes::from_static(b"1002121503")));
     if let Some(code) = support_code {
         data = data.with(0x01, Item::String(code.to_owned().into()));
     }
@@ -782,6 +784,183 @@ async fn solo_city_and_quest() {
     assert!(cities[2].1.0.is_empty(), "city 3 still has its settings");
     send(&mut c, 24, ReqLayerEnd {}).await;
     expect::<AnsLayerEnd>(&mut c).await;
+    running.stop().await;
+}
+
+/// A path a PAL console can jump to (M5 D11): its version constant 4, world server, 1, gate, city.
+fn jump_path(server: u32, gate: u16, city: u16) -> Bytes {
+    let mut path = Vec::new();
+    path.put_u32(4);
+    path.put_u32(server);
+    path.put_u16(1);
+    path.put_u16(gate);
+    path.put_u16(city);
+    path.into()
+}
+
+/// The Capcom ID of a console alone where it stands.
+async fn own_id(console: &mut Console, seq: u16) -> String {
+    send(console, seq, ReqLayerUserList { fields: vec![] }).await;
+    string(expect::<AnsLayerUserList>(console).await.users[0].get(0x01))
+}
+
+/// Tier 3, jumps within a world server (M5 D10–D12): Change Gates' rows and a found player's card carry paths the
+/// console can jump to; a jump into a city is an arrival there; a city that can't take the player refuses.
+#[tokio::test]
+async fn jumps_within_a_world_server() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // B creates City 1 in City Gate 2; A stands in City Gate 1.
+    let mut b = enter_world(&running).await;
+    send(
+        &mut b,
+        10,
+        ReqLayerDown {
+            layer: 2,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    expect::<AnsLayerDown>(&mut b).await;
+    send(&mut b, 11, ReqLayerCreateHead { number: 1 }).await;
+    expect::<AnsLayerCreateHead>(&mut b).await;
+    let set = ReqLayerCreateSet {
+        number: 1,
+        layer: PatData::new(),
+        extra: Default::default(),
+    };
+    send(&mut b, 12, set).await;
+    expect::<AnsLayerCreateSet>(&mut b).await;
+    send(&mut b, 13, ReqLayerCreateFoot { number: 1, unk: 0 }).await;
+    expect::<AnsLayerCreateFoot>(&mut b).await;
+    let b_id = own_id(&mut b, 14).await;
+    let mut a = enter_world(&running).await;
+    send(
+        &mut a,
+        10,
+        ReqLayerDown {
+            layer: 1,
+            info: PatData::new(),
+        },
+    )
+    .await;
+    expect::<AnsLayerDown>(&mut a).await;
+
+    // Change Gates: the world server's 40 gates, each with the path a pick jumps to.
+    let head = ReqLayerSiblingListHead {
+        first: 1,
+        count: 40,
+        fields: vec![],
+    };
+    send(&mut a, 11, head).await;
+    assert_eq!(expect::<AnsLayerSiblingListHead>(&mut a).await.count, 40);
+    send(
+        &mut a,
+        12,
+        ReqLayerSiblingListData {
+            first: 1,
+            count: 10,
+        },
+    )
+    .await;
+    let gates = expect::<AnsLayerSiblingListData>(&mut a).await.siblings;
+    assert_eq!(gates.len(), 10);
+    assert_eq!(
+        gates[1].0.get(0x02),
+        Some(&Item::Binary(jump_path(1, 2, 0)))
+    );
+
+    // B's card: where "Warp to" goes, B's city.
+    let card = ReqUserSearchInfo {
+        capcom_id: b_id.clone().into(),
+        info: PatData::new(),
+    };
+    send(&mut a, 13, card).await;
+    let to_b = expect::<AnsUserSearchInfo>(&mut a).await.info;
+    assert_eq!(to_b.get(0x04), Some(&Item::Binary(jump_path(1, 2, 1))));
+
+    // A jumps there: B's city now has 2 of 4.
+    let jump = ReqLayerJump {
+        path: jump_path(1, 2, 1),
+        match_key: 0,
+    };
+    send(&mut a, 14, jump).await;
+    expect::<AnsLayerJump>(&mut a).await;
+    let counts = expect::<NtcLayerUserNum>(&mut b).await;
+    assert_eq!((counts.kind, long(counts.layer.get(0x02))), (2, 2));
+
+    // A city that doesn't exist: refused, and A stays where it is.
+    let jump = ReqLayerJump {
+        path: jump_path(1, 2, 3),
+        match_key: 0,
+    };
+    send(&mut a, 15, jump).await;
+    assert!(
+        expect_alert(&mut a, AnsLayerJump::ID)
+            .await
+            .contains("no longer exists")
+    );
+    send(&mut a, 16, ReqLayerUserList { fields: vec![] }).await;
+    assert_eq!(expect::<AnsLayerUserList>(&mut a).await.users.len(), 2);
+    running.stop().await;
+}
+
+/// Tier 3, a jump to another world server (M5 D13): a ticket, the server selection's handshake, then the ticket
+/// places the player there, once.
+#[tokio::test]
+async fn jumps_to_another_world_server() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (code, _, _) = first_visit(lmp, None).await;
+    let ticket = login(lmp, &code, 1).await;
+    let mut selection = fmp_login(fmp, &ticket).await;
+    let pick = |index| ReqFmpInfo2 {
+        index,
+        fields: vec![2, 3],
+    };
+    send(&mut selection, 1, pick(1)).await;
+    expect::<AnsFmpInfo2>(&mut selection).await;
+    send(&mut selection, 2, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut selection).await;
+    let mut a = fmp_login(fmp, &ticket).await;
+
+    // To City Gate 3 of world server 2.
+    let ready = ReqLayerJumpReady {
+        path: jump_path(2, 3, 0),
+        match_key: 0,
+    };
+    send(&mut a, 10, ready).await;
+    let jump = expect::<NtcLayerJumpReady>(&mut a).await.ticket;
+    send(&mut a, 11, pick(2)).await;
+    expect::<AnsFmpInfo2>(&mut a).await;
+    send(&mut a, 12, ReqLayerEnd {}).await;
+    expect::<AnsLayerEnd>(&mut a).await;
+    send(&mut a, 13, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut a).await;
+    let mut a = fmp_login(fmp, &ticket).await;
+    let go = || ReqLayerJumpGo {
+        path: jump_path(2, 3, 0),
+        ticket: jump,
+    };
+    send(&mut a, 10, go()).await;
+    expect::<NtcLayerJumpGo>(&mut a).await;
+    let a_id = own_id(&mut a, 11).await;
+    let card = ReqUserSearchInfo {
+        capcom_id: a_id.into(),
+        info: PatData::new(),
+    };
+    send(&mut a, 12, card).await;
+    let here = expect::<AnsUserSearchInfo>(&mut a).await.info;
+    assert_eq!(here.get(0x04), Some(&Item::Binary(jump_path(2, 3, 0))));
+
+    // The ticket is spent.
+    send(&mut a, 13, go()).await;
+    assert!(
+        expect_alert(&mut a, NtcLayerJumpGo::ID)
+            .await
+            .contains("can't go there")
+    );
     running.stop().await;
 }
 

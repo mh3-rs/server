@@ -58,8 +58,8 @@ path whose first `u32` is its own, which is 4 in every recording, where our path
 **Settled (2026-10-09):** seats and arm wrestling done properly (who holds which seat, per city; a taken seat refused
 with an alert; the others notified; seats freed when their holder leaves); Player Search built; city search and
 Change Gates built together with `ReqLayerInfo` and `ReqLayerJump*` as their own step after M5 (a list one can't act
-on is worse than none); `LayerTell` only if a recording shows the chat menu offers it; `NtcLayerTellLow` never. The
-console sessions to do: `recordings.md`.
+on is worse than none; superseded by D10: the jumps are built in M5); `LayerTell` only if a recording shows the
+chat menu offers it; `NtcLayerTellLow` never. The console sessions to do: `recordings.md`.
 
 ## Decisions
 
@@ -112,6 +112,26 @@ console sessions to do: `recordings.md`.
 - **D9 Player Search leaves out the searcher. Settled (2026-10-09, s12).** MH3SP lists the searcher among the
   results; the console grays that row out, but it is still a useless result and takes a place in the count and the
   pages. Ours filters it out before paging (a divergence on s12's `dev` and `de` searches).
+- **D10 Jumps, now. Settled (2026-10-09, after s15).** Replaces "the jumps step after M5": jumping is what makes
+  Player Search, Change Gates and the friends list useful. Built: Change Gates, and the warp from a found player's card
+  and from the friends list (one mechanism: both ask `ReqUserSearchInfo` and jump to its item 4); to the same world
+  server and to another. City search (`LayerDetailSearch`, `ReqLayerInfo`): not until a recording shows the menu that
+  sends it (none found in s15).
+- **D11 Jump paths carry the console's version constant. Settled (2026-10-09).** The console only jumps to a path
+  whose first u32 is the constant it reported at login (ConnectionData item 3: 4 on PAL, 3 on US; the decomp's
+  `handleLayerJump`), else error `0x80060002` and an empty message, without a request: why every jump failed on MH3SP,
+  whose paths start with the depth. Only the paths a console jumps to carry it (Change Gates rows' item 2,
+  `AnsUserSearchInfo` item 4), built for the console asking; every other path keeps MH3SP's depth (never checked;
+  changing them would mean a frame per recipient for broadcasts, and a divergence across the corpus).
+- **D12 Arriving by a jump. Settled (2026-10-09).** As walking in: a full or reserved city refused with an alert (the
+  console cancels the jump); a gate always open; a player on a quest is found in their city. For the others a jump is a
+  leave and an arrival: `NtcLayerOut` to the old layer, `NtcLayerIn` to the new, counts and gate notices, the city's
+  host handed on.
+- **D13 Jumps to another world server. Settled (2026-10-09).** `LayerJumpReady` checks the target and hands out a
+  one-time ticket for (player, target), kept in memory for a minute; the console then goes through the server
+  selection's handshake (`FmpInfo2`, `LayerEnd`, `Shut`, a new connection) and `LayerJumpGo` with the ticket places
+  it. A missing or expired ticket, or a city that filled meanwhile: an alert, and the console stays at the world
+  server's root.
 
 ## Work (once the decisions are settled)
 
@@ -136,6 +156,12 @@ console sessions to do: `recordings.md`.
     cities), as MH3SP; our server closed the connection on it before. Picking one still fails (the jumps step);
   - the replay gate (`corpus::REACHED`) moves to M5; each scenario replays with the address it was recorded with
     (s12: the lab machine's new one).
+- [x] Jumps (D10–D13): `LayerJump` within a world server, `LayerJumpReady`/`LayerJumpGo` to another (a ticket in
+      `Shared::jumps`, a minute); Change Gates' rows and the card's item 4 with the console's version constant
+      (ConnectionData item 3, required at the FMP login); a jump leaves and arrives as walking does (`enter_gate`,
+      `enter_city`, `depart`). Tests: `jumps_within_a_world_server`, `jumps_to_another_world_server`; s15 replays
+      (its divergences: the jump paths; a friend request delivered at the next position, M3 D2). To see on consoles
+      (`recordings.md`: the Rust check).
 - [ ] Recordings (D1) of the rest, each replaying whole (`recordings.md`).
 - [x] Content (D2): checked against MH3SP's own generators (`tools/reference-content.py`, Python 2, and the
       `quests_match_the_reference_generator` test): all 40 quests of the live branch (`7e21e0a`) and of dev byte-identical.

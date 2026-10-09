@@ -375,14 +375,20 @@ impl World {
         self.tidy(id);
     }
 
-    /// Puts the player in an existing city of its gate (`LayerDown` from a gate).
-    pub fn join_city(&mut self, id: CityId, capcom_id: &str) -> Result<(), CityRefusal> {
+    /// Whether a player can walk into the city: it exists, isn't being created and has room.
+    pub fn can_join(&self, id: CityId) -> Result<(), CityRefusal> {
         let Some(city) = self.cities.get(&id) else {
             return Err(CityRefusal::Missing);
         };
         if city.reserved_by.is_some() || self.city_population(id) >= CITY_CAPACITY {
             return Err(CityRefusal::Full);
         }
+        Ok(())
+    }
+
+    /// Puts the player in an existing city of its gate (`LayerDown` from a gate).
+    pub fn join_city(&mut self, id: CityId, capcom_id: &str) -> Result<(), CityRefusal> {
+        self.can_join(id)?;
         if let Some(place) = self.places.get_mut(capcom_id) {
             place.city = Some(id.2);
             place.standing = false;
@@ -807,21 +813,39 @@ impl World {
 }
 
 /// A layer's state in lists: 1 empty, 2 full (or reserved), 3 joinable.
-/// A layer's path as consoles address it: depth (1 world server, 2 gate, 3 city), world server, 1, gate, city.
+/// A layer's path as MH3SP writes it: depth (1 world server, 2 gate, 3 city), world server, 1, gate, city.
 pub fn path(server: u32, gate: Option<u16>, city: Option<u16>) -> [u8; 14] {
     let depth: u32 = match (gate, city) {
         (_, Some(_)) => 3,
         (Some(_), None) => 2,
         (None, None) => 1,
     };
+    jump_path(depth, server, gate, city)
+}
+
+/// A path a console can jump to (M5 D11): the same, starting with the version constant that console reported at
+/// login (ConnectionData item 3) instead of the depth.
+pub fn jump_path(version: u32, server: u32, gate: Option<u16>, city: Option<u16>) -> [u8; 14] {
     let mut path = [0; 14];
     let mut out = &mut path[..];
-    out.put_u32(depth);
+    out.put_u32(version);
     out.put_u32(server);
     out.put_u16(1);
     out.put_u16(gate.unwrap_or(0));
     out.put_u16(city.unwrap_or(0));
     path
+}
+
+/// Where a jump goes: world server, gate, and city if any.
+pub type Target = (u32, u16, Option<u16>);
+
+/// A jump's target, from its path: an existing world server and gate, and city if any.
+pub fn jump_target(path: &[u8]) -> Option<Target> {
+    let (server, gate, city) = parse_path(path)?;
+    let gate = gate.filter(|g| (1..=GATES).contains(g))?;
+    let valid = (1..=SERVERS.len() as u32).contains(&server)
+        && city.is_none_or(|c| (1..=CITIES).contains(&c));
+    valid.then_some((server, gate, city))
 }
 
 /// A path's world server, gate and city (0 parts are absent).

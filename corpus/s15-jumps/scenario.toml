@@ -1,0 +1,15 @@
+description = "Every way to jump, against MH3SP: Change Gates (the sibling list, then a pick), the warp from the friends list and from a found player's card (both ReqUserSearchInfo, the card's path in item 4). Each pick fails on the console with error 0x80060002 (NtcCollectionLog) and an empty message, before any jump request: MH3SP's paths start with the layer depth where the console expects its own version constant (ConnectionData item 3: 4 on PAL). No city search: no menu found that sends it."
+steps = [
+  "both: Online, slot 1, Valor1, City Gate 2; dev2: create City 1 with a non-default setting; dev1: join it",
+  "dev1: message to dev2 with a friend request; dev2: accept it",
+  "dev1: leave the city and City Gate 2, enter City Gate 1",
+  "dev1: Relocate, Change Gates, pick City Gate 2 (an empty message)",
+  "dev1: friends list, dev2, warp (an empty message)",
+  "dev1: Player Search by name 'dev', dev2's card, Warp to (an empty message)",
+  "both: close",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-09"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M5"

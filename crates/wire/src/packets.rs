@@ -360,6 +360,14 @@ packets! {
     AnsLayerCreateSet = 0x64120200 { number: u16 }
     ReqLayerCreateFoot = 0x64130100 { number: u16, unk: u8 }
     AnsLayerCreateFoot = 0x64130200 { number: u16 }
+    // Jumps (decomp: `NetworkLayerPat::handleLayerJump`): the path is the target's; `match_key` is 0 but from a city
+    // search; another world server takes a ticket (`JumpReady`) used after reconnecting (`JumpGo`).
+    ReqLayerJump = 0x64100100 { path: Bytes, match_key: u32 }
+    AnsLayerJump = 0x64100200 {}
+    ReqLayerJumpReady = 0x64160100 { path: Bytes, match_key: u32 }
+    NtcLayerJumpReady = 0x64160200 { ticket: u32 }
+    ReqLayerJumpGo = 0x64170100 { path: Bytes, ticket: u32 }
+    NtcLayerJumpGo = 0x64170200 {}
     /// `layer`: a layer path (depth, world server, …), 14 bytes.
     ReqLayerHost = 0x64410100 { layer: Bytes }
     AnsLayerHost = 0x64410200 { layer: Bytes, capcom_id: Bytes, name: Bytes }
