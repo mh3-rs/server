@@ -72,12 +72,13 @@ player kicked for not being ready, a party broken by its leader before departure
   hands it over (`NtcCircleHost`); at departure, players not ready are kicked from the party (`NtcCircleKick`).
   *Recommended:* the same.
 - **D9 Quest capacity and password. Settled:** both are set at creation and enforced at `CircleJoin` ("quest is
-  full", "wrong password" alerts). The password is **never kept in clear**: the server keeps its HMAC-SHA256 under a
-  random key generated at startup (memory only) and compares a join attempt's HMAC to it; it's **dropped at
-  departure** (a departed quest can't be joined). Never in the database or the logs. MH3SP puts the password itself
-  in the quest's record, sent to everyone in the city (copied in M2); the record also has a "has password" flag.
-  To test while recording: does the console only need the flag? If so the password stops leaving the server (it
-  must, for the HMAC to replace it).
+  full", "wrong password" alerts). **The server checks the password**: a joining console sends the one typed in
+  `ReqCircleJoin`. It's **never kept in clear**: hashed with argon2 at creation (off the async threads: tens of
+  milliseconds, once per creation and per join attempt), compared at each join, **dropped at departure** (a departed
+  quest can't be joined). Never in the database or the logs. MH3SP also puts the password itself in the quest's
+  record (field `0x04`), sent to everyone in the city with the quest list, every change and every info request;
+  copied in M2. The record has a "has password" flag: to test while recording that the console only needs the
+  flag, then the password stops leaving the server (it must, for the hash to replace it).
 - **D8 Tier 4** (live differential, kept for later in M1). M3 is where it pays off: scripted multi-console scenarios
   the corpus doesn't have, run against MH3SP and Rust. *Recommended:* decide after D1's recordings (they may cover
   enough).
