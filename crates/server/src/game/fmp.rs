@@ -721,6 +721,64 @@ impl Fmp {
                 out.push(frame(seq, &AnsCircleLeave { circle: r.circle })?);
                 Ok(out)
             }
+            NtcLayerChat::ID => {
+                // Chat: to the others at the sender's place, with the sender filled in and the place's colour
+                // (MH3SP's: pink on a world server, white in gates and cities).
+                let r = NtcLayerChat::decode(p)?;
+                let me = capcom_id(session);
+                let (_, gate, _) = location(shared, session)?;
+                let colour = if gate.is_some() {
+                    0xffff_ffff
+                } else {
+                    0xbb33_85ff
+                };
+                let info = set(
+                    set(
+                        set(r.info, 0x01, Item::Long(colour)),
+                        0x03,
+                        Item::String(Bytes::copy_from_slice(me.as_bytes())),
+                    ),
+                    0x04,
+                    Item::String(session.name.clone()),
+                );
+                relay(
+                    shared,
+                    me,
+                    &NtcLayerChat {
+                        unk: r.unk,
+                        info,
+                        text: r.text,
+                    },
+                    seq,
+                )
+            }
+            ReqTell::ID => {
+                // A message to one player, wherever they are on the server; dropped if they're gone.
+                let r = ReqTell::decode(p)?;
+                let me = capcom_id(session);
+                let to = String::from_utf8_lossy(&r.capcom_id).into_owned();
+                let info = set(
+                    set(
+                        set(r.info, 0x02, Item::Long(20)),
+                        0x03,
+                        Item::String(Bytes::copy_from_slice(me.as_bytes())),
+                    ),
+                    0x04,
+                    Item::String(session.name.clone()),
+                );
+                shared.players.send(
+                    &to,
+                    frame(
+                        seq,
+                        &NtcTell {
+                            capcom_id: r.capcom_id,
+                            info,
+                            text: r.text,
+                        },
+                    )?,
+                );
+                reply(seq, &AnsTell {})
+            }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;
                 reply(seq, &AnsCircleInfoNoticeSet {})
