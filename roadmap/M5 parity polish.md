@@ -67,12 +67,20 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
   IDs.
 - **D6 Chat logs. Settled: not in M5.** Never logged now (user content, M1's logging rule); what to keep, where and
   how long is for moderation (M6–M8).
-- **D7 Town position interval. Settled: a lab test, extremes included.** The layer record's field `0x11` is the
-  console's position interval (how often it sends its own position; the decomp's `applyLoginRecord`), set by the
-  server: 500 ms today (MH3SP's). Tried from one extreme to the other (e.g. 33 ms, one frame at 30 fps; 50, 100, 200,
-  500, 1,000, 2,000 ms), noting for each how smooth town movement looks and the traffic measured (packets and bytes a
-  second, per console and per full city): smooth but heavy, laggy but light, and the balance kept. Any console
-  trouble at the low end ends that end.
+- **D7 Town position interval. Settled (lab run 17): 500 ms stays** (MH3SP's value, likely the original servers').
+  The layer record's field `0x11` is the console's position interval (how often it sends its own position while
+  moving; the decomp's `applyLoginRecord`). Tried on two consoles running in a city:
+
+  | Asked | Sent while moving | Traffic per moving console | Seen on the other console |
+  |---|---|---|---|
+  | 33 ms | ~16/s (the game rounds to ~62 ms steps) | ~750 B/s | drifting, teleporting: worse |
+  | 75 ms | ~8/s | ~380 B/s | a bit jumpy |
+  | 200 ms | ~4–5/s | ~200–250 B/s | quite bad |
+  | 500 ms | ~2/s | ~100 B/s | the best |
+  | 2,000 ms | ~0.5/s | ~21 B/s | choppy: a jump every 2 s |
+
+  The delay between a move and its display barely changes with the interval: it comes from the game's own smoothing,
+  tuned for 500 ms. A console standing still sends nothing.
 - **D8 Tier 4 (live differential against MH3SP). Settled: dropped.** Kept for later twice; the corpus replays
   (tier 2) and console runs covered parity so far, and MH3SP is a moving reference. Revisit only if a divergence
   can't be found otherwise.
@@ -101,5 +109,6 @@ M1–M4. After M5 the Rust server can replace MH3SP for players (the website, M7
       party member (`uniqueIdToMember`, the decomp): hunters get it as from themselves, named "[MH3SP]" (shown, in
       their party slot's colour), others town chat. `NtcCircleChat` relayed to the party (the game's fallback
       without a P2P session: s11 shows a hunt's chat is console to console). The departure refusal: dropped (D4).
-- [ ] Lab: the town interval (D7); the mixed city on two machines (M4).
+- [x] Lab: the town interval (D7, run 17): 500 ms kept.
+- [ ] Lab, another day: the mixed city on two machines (M4).
 - [ ] The hour-long play session (exit criterion 4).
