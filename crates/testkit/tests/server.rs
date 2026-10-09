@@ -34,6 +34,8 @@ fn config() -> (Config, tempfile::TempDir) {
         health: any,
         qr: any,
         natneg: any,
+        strategy: server::config::Strategy::P2p,
+        relay_ports: 41000..=41099,
         tls_cert: repo().join("certs/dev/server.crt"),
         tls_key: repo().join("certs/dev/server.key"),
         database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
@@ -1499,22 +1501,19 @@ async fn natneg_received(socket: &tokio::net::UdpSocket) -> Vec<wire::natneg::Re
     records
 }
 
-/// Tier 5: two consoles negotiate through the server: each gets a `CONNECT` with the other's game socket address;
-/// a report is acknowledged; nothing is answered for an address with no logged-in console. The QR check is answered.
-#[tokio::test]
-async fn natneg_pairs_two_consoles() {
+/// Two fake consoles (a game socket and a NatNeg socket each) negotiate a pair through the server: their sockets,
+/// and the address each was told its peer is at (`CONNECT`).
+async fn negotiate(
+    running: &server::Running,
+    cookie: u32,
+) -> (
+    Vec<(tokio::net::UdpSocket, tokio::net::UdpSocket)>,
+    Vec<SocketAddr>,
+) {
     use std::net::{Ipv4Addr, SocketAddrV4};
-    use tokio::net::UdpSocket;
     use wire::natneg::{Body, Port, Record};
 
-    let (config, _db) = config();
-    let running = server::start(&config).await.unwrap();
-    let local = |port: u16| SocketAddr::from(([127, 0, 0, 1], port));
-    let (natneg, qr) = (
-        local(running.natneg.unwrap().port()),
-        local(running.qr.unwrap().port()),
-    );
-    let cookie = 0x5a8f_90df;
+    let natneg = SocketAddr::from(([127, 0, 0, 1], running.natneg.unwrap().port()));
     let init = |kind, client_index| Record {
         cookie,
         body: Body::Init {
@@ -1524,21 +1523,13 @@ async fn natneg_pairs_two_consoles() {
             game: Bytes::from_static(b"mh3uswii"),
         },
     };
-    // Each console: its game socket and its NatNeg socket.
     let mut consoles = Vec::new();
     for _ in 0..2 {
         consoles.push((
-            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
-            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap(),
         ));
     }
-
-    // Nobody logged in: ignored.
-    let (game, _) = &consoles[0];
-    game.send_to(&init(0, 0).encode(), natneg).await.unwrap();
-    assert!(natneg_received(game).await.is_empty());
-
-    let _logged_in = enter_world(&running).await;
     for (index, (game, nn)) in consoles.iter().enumerate() {
         game.send_to(&init(0, index as u8).encode(), natneg)
             .await
@@ -1547,6 +1538,7 @@ async fn natneg_pairs_two_consoles() {
             .await
             .unwrap();
     }
+    let mut told = Vec::new();
     for (index, (game, nn)) in consoles.iter().enumerate() {
         let mut got = natneg_received(game).await;
         got.extend(natneg_received(nn).await);
@@ -1555,17 +1547,37 @@ async fn natneg_pairs_two_consoles() {
             .filter(|r| matches!(r.body, Body::InitAck(_)))
             .count();
         assert_eq!(acks, 2, "console {index}: {got:?}");
-        let peer = consoles[1 - index].0.local_addr().unwrap();
+        let connects: Vec<SocketAddr> = got
+            .iter()
+            .filter_map(|r| match &r.body {
+                Body::Connect(p) => Some(SocketAddr::V4(p.addr)),
+                _ => None,
+            })
+            .collect();
         assert!(
-            got.iter()
-                .any(|r| matches!(&r.body, Body::Connect(p) if SocketAddr::V4(p.addr) == peer)),
-            "console {index}: no CONNECT to {peer}: {got:?}"
+            !connects.is_empty() && connects.iter().all(|c| *c == connects[0]),
+            "console {index}: {got:?}"
         );
+        told.push(connects[0]);
     }
+    (consoles, told)
+}
 
-    let (_, nn) = &consoles[0];
+/// Tier 5: two consoles negotiate through the server: each gets a `CONNECT` with the other's game socket address;
+/// a report is acknowledged; nothing is answered for an address with no logged-in console. The QR check is answered.
+#[tokio::test]
+async fn natneg_pairs_two_consoles() {
+    use wire::natneg::{Body, Port, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let natneg = SocketAddr::from(([127, 0, 0, 1], running.natneg.unwrap().port()));
+    let qr = SocketAddr::from(([127, 0, 0, 1], running.qr.unwrap().port()));
+
+    // Nobody logged in: ignored.
+    let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let report = Record {
-        cookie,
+        cookie: 1,
         body: Body::Report {
             port: Port {
                 kind: 0x80,
@@ -1577,6 +1589,19 @@ async fn natneg_pairs_two_consoles() {
             game: Bytes::from_static(b"mh3uswii"),
         },
     };
+    stranger.send_to(&report.encode(), natneg).await.unwrap();
+    assert!(natneg_received(&stranger).await.is_empty());
+
+    let _logged_in = enter_world(&running).await;
+    let (consoles, told) = negotiate(&running, 0x5a8f_90df).await;
+    for index in 0..2 {
+        assert_eq!(
+            told[index],
+            consoles[1 - index].0.local_addr().unwrap(),
+            "console {index}"
+        );
+    }
+    let (_, nn) = &consoles[0];
     nn.send_to(&report.encode(), natneg).await.unwrap();
     assert!(matches!(
         natneg_received(nn).await[..],
@@ -1586,7 +1611,7 @@ async fn natneg_pairs_two_consoles() {
         }]
     ));
 
-    let check = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let check = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     check
         .send_to(&hex::decode("09000000006d6833757377696900").unwrap(), qr)
         .await
@@ -1597,6 +1622,51 @@ async fn natneg_pairs_two_consoles() {
         .unwrap()
         .unwrap();
     assert_eq!(buf[..n], wire::natneg::AVAILABLE);
+    running.stop().await;
+}
+
+/// Tier 5, `relay`: both consoles are told the same relay port; it forwards what one's game socket sends to the
+/// other, both ways, and nothing for anyone else.
+#[tokio::test]
+async fn the_relay_forwards_a_pair() {
+    let (mut config, _db) = config();
+    config.strategy = server::config::Strategy::Relay;
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (consoles, told) = negotiate(&running, 0x1234_5678).await;
+    assert_eq!(told[0], told[1]);
+    assert_eq!(
+        told[0].ip().to_string(),
+        "192.168.110.150",
+        "EXTERNAL_ADDRESS"
+    );
+    let relay = SocketAddr::from(([127, 0, 0, 1], told[0].port()));
+    let (a, b) = (&consoles[0].0, &consoles[1].0);
+    let mut buf = [0; 64];
+    // A speaks first (B's address isn't known yet: dropped), then B, then A again.
+    a.send_to(b"ping a", relay).await.unwrap();
+    b.send_to(b"ping b", relay).await.unwrap();
+    let n = tokio::time::timeout(Duration::from_secs(1), a.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf[..n], b"ping b");
+    a.send_to(b"game a", relay).await.unwrap();
+    let n = tokio::time::timeout(Duration::from_secs(1), b.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&buf[..n], b"game a");
+    // A stranger on another IP: never forwarded.
+    let stranger = tokio::net::UdpSocket::bind("127.0.0.2:0").await;
+    if let Ok(stranger) = stranger {
+        stranger.send_to(b"spam", relay).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), b.recv(&mut buf))
+                .await
+                .is_err()
+        );
+    }
     running.stop().await;
 }
 

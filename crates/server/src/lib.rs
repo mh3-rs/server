@@ -20,10 +20,11 @@ mod game;
 pub mod health;
 mod natneg;
 mod net;
+mod relay;
 mod text;
 mod tls;
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -34,9 +35,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub use config::Config;
+use config::Strategy;
 use database::Database;
 use game::players::Players;
 use game::{Role, Session};
+use relay::Relays;
 
 /// How long a session waits for the console's next connection (decision 4).
 const HANDOFF_TTL: Duration = Duration::from_secs(120);
@@ -197,7 +200,35 @@ pub async fn start(config: &Config) -> Result<Running> {
             .with_context(|| format!("bind NatNeg on {}", config.natneg))?;
         natneg = Some(socket.local_addr()?);
         info!(role = "natneg", addr = %socket.local_addr()?, "listening");
-        tasks.spawn(natneg::serve(socket, shared.clone(), shutdown.clone()));
+        let relays = match config
+            .external_address
+            .as_deref()
+            .map(str::parse::<Ipv4Addr>)
+        {
+            Some(Ok(external)) => Some(Relays::new(
+                external,
+                config.relay_ports.clone(),
+                shutdown.clone(),
+            )),
+            _ => {
+                if config.strategy != Strategy::P2p {
+                    error!(
+                        "the relay needs EXTERNAL_ADDRESS as an IPv4 address: consoles connect directly"
+                    );
+                }
+                None
+            }
+        };
+        let connector = natneg::Connector {
+            strategy: config.strategy,
+            relays,
+        };
+        tasks.spawn(natneg::serve(
+            socket,
+            shared.clone(),
+            connector,
+            shutdown.clone(),
+        ));
     }
 
     let listener = TcpListener::bind(config.health)

@@ -6,6 +6,8 @@
 //! |---|---|
 //! | `OPN_PORT`, `LMP_PORT`, `FMP_PORT`, `HEALTH_PORT` | 8200, 8201, 8202, 8280 |
 //! | `QR_PORT`, `NATNEG_PORT` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
+//! | `NATNEG_STRATEGY` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
+//! | `RELAY_PORTS` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
 //! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
 //! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
 //! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
@@ -20,6 +22,7 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -35,6 +38,8 @@ pub struct Config {
     /// UDP.
     pub qr: SocketAddr,
     pub natneg: SocketAddr,
+    pub strategy: Strategy,
+    pub relay_ports: RangeInclusive<u16>,
     pub tls_cert: PathBuf,
     pub tls_key: PathBuf,
     pub database_url: String,
@@ -72,6 +77,8 @@ impl Config {
             health: health()?,
             qr: listen("QR_PORT", 27900)?,
             natneg: listen("NATNEG_PORT", 27901)?,
+            strategy: strategy(optional("NATNEG_STRATEGY"))?,
+            relay_ports: ports(&get("RELAY_PORTS", "40000-40999"))?,
             tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
             tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
             database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),
@@ -100,6 +107,35 @@ fn listen(key: &str, default: u16) -> Result<SocketAddr> {
             .with_context(|| format!("{key}: {v:?} is not a port (1–65535)"))?,
     };
     Ok(SocketAddr::from(([0, 0, 0, 0], port)))
+}
+
+/// How consoles reach each other (M4 D2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Strategy {
+    /// Directly, through the relay for the consoles that can't.
+    Hybrid,
+    P2p,
+    Relay,
+}
+
+fn strategy(value: Option<String>) -> Result<Strategy> {
+    Ok(match value.as_deref() {
+        None | Some("hybrid") => Strategy::Hybrid,
+        Some("p2p") => Strategy::P2p,
+        Some("relay") => Strategy::Relay,
+        Some(other) => bail!("NATNEG_STRATEGY: {other:?} is not hybrid, p2p or relay"),
+    })
+}
+
+/// `first-last`.
+fn ports(value: &str) -> Result<RangeInclusive<u16>> {
+    let parsed = value
+        .split_once('-')
+        .and_then(|(a, b)| Some((a.trim().parse::<u16>().ok()?, b.trim().parse::<u16>().ok()?)))
+        .filter(|&(a, b)| a > 0 && a <= b);
+    let (first, last) =
+        parsed.with_context(|| format!("RELAY_PORTS: {value:?} is not first-last"))?;
+    Ok(first..=last)
 }
 
 /// `SECRET__FILE` wins over `SECRET` (Docker secrets are files); the file's trailing newline isn't part of it.
