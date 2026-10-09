@@ -11,6 +11,10 @@
 //!   dev1 waiting in its city for dev2 doesn't time out while dev2 is still logging in. The timeout
 //!   is then [`RECV_TIMEOUT`] plus however long the frame took after its last cause in the recording
 //!   (Python only tells others about a vanished player at its next line check, ~30 s later).
+//! - A notification relayed from another console (a `Ntc…` frame whose sequence number isn't one of this
+//!   connection's requests: positions, game data, arrivals…) doesn't hold the console back: it stays expected
+//!   in the following segments and must arrive before the connection's recording ends. Its order relative to
+//!   this console's own answers is timing (MH3SP answered slowly, so relays often came first), not protocol.
 //! - Extra notifications (`Ntc…` frames matching nothing expected, and no expected frame with the
 //!   same id) are listed, not failed: one that races with a player leaving may legitimately arrive or
 //!   not. Missing or wrong frames fail.
@@ -300,10 +304,27 @@ async fn run(
     report: &mut ConnectionReport,
 ) -> Result<()> {
     let mut console = Console::connect(addr, tls).await?;
+    // This connection's request numbers: a notification carrying one answers this console, in order.
+    let own: Vec<u16> = steps
+        .iter()
+        .filter(|s| s.record.dir == Dir::C2s && s.record.seq != 0)
+        .map(|s| s.record.seq)
+        .collect();
+    let relayed = |p: usize| {
+        let r = steps[p].record;
+        r.name.starts_with("Ntc") && r.name != "NtcLogin" && !own.contains(&r.seq)
+    };
+    // Relayed notifications not arrived yet, still expected.
+    let mut late: Vec<usize> = Vec::new();
     let mut i = 0;
-    while i < steps.len() {
-        let step = &steps[i];
-        if step.record.dir == Dir::C2s {
+    while i <= steps.len() {
+        if i == steps.len() {
+            // The recording's end: what's still late must arrive now.
+            if late.is_empty() {
+                break;
+            }
+        } else if steps[i].record.dir == Dir::C2s {
+            let step = &steps[i];
             if let Some(turn) = step.turn {
                 wait_turns(&mut console, turn, shared).await?;
             }
@@ -322,16 +343,18 @@ async fn run(
             continue;
         }
 
-        // The server frames expected before the next console frame, in any order.
+        // The server frames expected before the next console frame, in any order, and the late relays.
         let end = steps[i..]
             .iter()
             .position(|s| s.record.dir == Dir::C2s)
             .map_or(steps.len(), |p| i + p);
-        let mut pending: Vec<usize> = (i..end).collect();
+        let at_end = end == steps.len();
+        let mut pending: Vec<usize> = late.drain(..).chain(i..end).collect();
         // Their causes first: frames arriving meanwhile wait in the socket.
         let after = pending.iter().map(|&p| steps[p].after).max().unwrap_or(0);
         wait_turns(&mut console, after, shared).await?;
-        while !pending.is_empty() {
+        // Wait while this console's own frames are pending (all of them at the recording's end).
+        while pending.iter().any(|&p| at_end || !relayed(p)) {
             let lag = pending
                 .iter()
                 .map(|&p| steps[p].lag)
@@ -379,14 +402,16 @@ async fn run(
                     report.extras.push(frame)
                 }
                 None => {
-                    let p = pending.remove(0);
+                    let k = pending.iter().position(|&p| !relayed(p)).unwrap_or(0);
+                    let p = pending.remove(k);
                     report
                         .mismatches
                         .push(mismatch(p, steps, Got::Frame(frame)));
                 }
             }
         }
-        i = end;
+        late = pending;
+        i = if at_end { steps.len() + 1 } else { end };
     }
     Ok(())
 }
