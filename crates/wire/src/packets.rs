@@ -120,6 +120,38 @@ impl Field for ShortList {
     }
 }
 
+/// Search criteria (`ReqLayerUserSearchHead`, …): an unknown u32 (0 except for circle searches), then per field its
+/// id, whether it has a value, an unknown kind byte, and the value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DetailedOptionalFields {
+    pub unk: u32,
+    pub fields: Vec<(u8, u8, Option<u32>)>,
+}
+
+impl Field for DetailedOptionalFields {
+    fn read(r: &mut Reader) -> Result<Self, DecodeError> {
+        let unk = r.u32()?;
+        let fields = (0..r.u32()?)
+            .map(|_| {
+                let (id, has, kind) = (r.u8()?, r.u8()?, r.u8()?);
+                Ok((id, kind, if has != 0 { Some(r.u32()?) } else { None }))
+            })
+            .collect::<Result<_, DecodeError>>()?;
+        Ok(DetailedOptionalFields { unk, fields })
+    }
+    fn write(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
+        out.put_u32(self.unk);
+        out.put_u32(count(self.fields.len(), u32::MAX as usize)? as u32);
+        for &(id, kind, value) in &self.fields {
+            out.put_slice(&[id, u8::from(value.is_some()), kind]);
+            if let Some(v) = value {
+                out.put_u32(v);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The bytes left in the payload, kept as they are.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rest(pub Bytes);
@@ -423,6 +455,20 @@ packets! {
     AnsBlackAdd = 0x66600200 {}
     ReqBlackDelete = 0x66610100 { capcom_id: Bytes }
     AnsBlackDelete = 0x66610200 {}
+
+    // FMP: player search.
+    /// The players under a layer (a gate: its cities too), optionally by Capcom ID or name.
+    ReqLayerUserSearchHead = 0x64670100 { unk: u8, layer: Bytes, capcom_id: Bytes, name: Bytes, search: DetailedOptionalFields, first: u32, count: u32, fields: Vec<u8> }
+    AnsLayerUserSearchHead = 0x64670200 { unk: u32, count: u32 }
+    ReqLayerUserSearchData = 0x64680100 { first: u32, count: u32 }
+    AnsLayerUserSearchData = 0x64680200 { unk: u32, users: Vec<(PatData, OptionalFields)> }
+    ReqLayerUserSearchFoot = 0x64690100 {}
+    AnsLayerUserSearchFoot = 0x64690200 {}
+    /// A player's card: profile block, where they are, the ids relayed data is attributed with.
+    ReqUserSearchInfo = 0x66360100 { capcom_id: Bytes, info: PatData }
+    AnsUserSearchInfo = 0x66360200 { info: PatData, extra: OptionalFields }
+    /// The console reporting an error (field 0x01: its code).
+    NtcCollectionLog = 0x60501000 { log: PatData }
 }
 
 #[cfg(test)]

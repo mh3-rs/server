@@ -11,10 +11,10 @@
 //!   dev1 waiting in its city for dev2 doesn't time out while dev2 is still logging in. The timeout
 //!   is then [`RECV_TIMEOUT`] plus however long the frame took after its last cause in the recording
 //!   (Python only tells others about a vanished player at its next line check, ~30 s later).
-//! - A notification relayed from another console (a `Ntc…` frame whose sequence number isn't one of this
-//!   connection's requests: positions, game data, arrivals…) doesn't hold the console back: it stays expected
-//!   in the following segments and must arrive before the connection's recording ends. Its order relative to
-//!   this console's own answers is timing (MH3SP answered slowly, so relays often came first), not protocol.
+//! - An answer to a request this console already sent may arrive before frames recorded ahead of it (the Rust
+//!   server answers at once; MH3SP was slow enough for other consoles' relays to come first): it's accepted
+//!   early, and counted where the recording has it. Consoles still wait for every frame recorded before their
+//!   next one, relays included, so they never overtake what caused them.
 //! - Extra notifications (`Ntc…` frames matching nothing expected, and no expected frame with the
 //!   same id) are listed, not failed: one that races with a player leaving may legitimately arrive or
 //!   not. Missing or wrong frames fail.
@@ -152,6 +152,8 @@ impl Turns {
 
 /// What every connection of a scenario shares.
 struct Shared<'a> {
+    /// The scenario's name (its folder), for the declared omissions.
+    scenario: String,
     targets: &'a Targets,
     masks: &'a Masks,
     bindings: Mutex<Bindings>,
@@ -195,6 +197,10 @@ pub async fn replay(
         .collect();
 
     let shared = Shared {
+        scenario: scenario
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         targets,
         masks,
         bindings: Mutex::new(Bindings::default()),
@@ -221,6 +227,14 @@ async fn replay_console(
             .iter()
             .enumerate()
             .filter(|(_, f)| !is_line_check(f))
+            // Frames the Rust server leaves out on purpose (`[[omit]]` in divergences.toml).
+            .filter(|(_, f)| {
+                let name = format!("{}-{:02}-{}", rec.console, n + 1, c.role);
+                !(f.dir == Dir::S2c
+                    && shared
+                        .masks
+                        .omitted(&shared.scenario, &name, &f.name, f.seq))
+            })
             .map(|(fi, record)| Step {
                 record,
                 turn: turn_of.get(&(ci, n, fi)).copied(),
@@ -266,6 +280,7 @@ pub async fn replay_connection(
         ..Targets::host(addr.ip())
     };
     let shared = Shared {
+        scenario: String::new(),
         targets: &targets,
         masks,
         bindings: Mutex::new(std::mem::take(bindings)),
@@ -304,27 +319,14 @@ async fn run(
     report: &mut ConnectionReport,
 ) -> Result<()> {
     let mut console = Console::connect(addr, tls).await?;
-    // This connection's request numbers: a notification carrying one answers this console, in order.
-    let own: Vec<u16> = steps
-        .iter()
-        .filter(|s| s.record.dir == Dir::C2s && s.record.seq != 0)
-        .map(|s| s.record.seq)
-        .collect();
-    let relayed = |p: usize| {
-        let r = steps[p].record;
-        r.name.starts_with("Ntc") && r.name != "NtcLogin" && !own.contains(&r.seq)
-    };
-    // Relayed notifications not arrived yet, still expected.
-    let mut late: Vec<usize> = Vec::new();
+    // Answers received before their recorded place (indices into `steps`).
+    let mut early: Vec<usize> = Vec::new();
+    // Request numbers this console has sent so far.
+    let mut sent: Vec<u16> = Vec::new();
     let mut i = 0;
-    while i <= steps.len() {
-        if i == steps.len() {
-            // The recording's end: what's still late must arrive now.
-            if late.is_empty() {
-                break;
-            }
-        } else if steps[i].record.dir == Dir::C2s {
-            let step = &steps[i];
+    while i < steps.len() {
+        let step = &steps[i];
+        if step.record.dir == Dir::C2s {
             if let Some(turn) = step.turn {
                 wait_turns(&mut console, turn, shared).await?;
             }
@@ -336,6 +338,7 @@ async fn run(
                 payload: Bytes::from(payload),
             };
             console.send(frame).await?;
+            sent.push(step.record.seq);
             if let Some(turn) = step.turn {
                 shared.turns.finish([turn]);
             }
@@ -343,18 +346,16 @@ async fn run(
             continue;
         }
 
-        // The server frames expected before the next console frame, in any order, and the late relays.
+        // The server frames expected before the next console frame, in any order.
         let end = steps[i..]
             .iter()
             .position(|s| s.record.dir == Dir::C2s)
             .map_or(steps.len(), |p| i + p);
-        let at_end = end == steps.len();
-        let mut pending: Vec<usize> = late.drain(..).chain(i..end).collect();
+        let mut pending: Vec<usize> = (i..end).filter(|p| !early.contains(p)).collect();
         // Their causes first: frames arriving meanwhile wait in the socket.
         let after = pending.iter().map(|&p| steps[p].after).max().unwrap_or(0);
         wait_turns(&mut console, after, shared).await?;
-        // Wait while this console's own frames are pending (all of them at the recording's end).
-        while pending.iter().any(|&p| at_end || !relayed(p)) {
+        while !pending.is_empty() {
             let lag = pending
                 .iter()
                 .map(|&p| steps[p].lag)
@@ -372,7 +373,7 @@ async fn run(
                 report.aborted = Some("server stopped answering".into());
                 return Ok(());
             };
-            let found = pending.iter().position(|&p| {
+            let fits = |p: usize| {
                 let record = steps[p].record;
                 frame.id.0 == id_of(record)
                     && frame.seq == record.seq
@@ -386,7 +387,21 @@ async fn run(
                             &frame.payload,
                         )
                     })
-            });
+            };
+            let found = pending.iter().position(|&p| fits(p));
+            // An answer recorded later, to a request already sent: early, not wrong.
+            if found.is_none()
+                && let Some(p) = (end..steps.len()).find(|&p| {
+                    steps[p].record.dir == Dir::S2c
+                        && sent.contains(&steps[p].record.seq)
+                        && !early.contains(&p)
+                        && fits(p)
+                })
+            {
+                early.push(p);
+                report.matched += 1;
+                continue;
+            }
             match found {
                 Some(k) => {
                     pending.remove(k);
@@ -402,16 +417,14 @@ async fn run(
                     report.extras.push(frame)
                 }
                 None => {
-                    let k = pending.iter().position(|&p| !relayed(p)).unwrap_or(0);
-                    let p = pending.remove(k);
+                    let p = pending.remove(0);
                     report
                         .mismatches
                         .push(mismatch(p, steps, Got::Frame(frame)));
                 }
             }
         }
-        late = pending;
-        i = if at_end { steps.len() + 1 } else { end };
+        i = end;
     }
     Ok(())
 }

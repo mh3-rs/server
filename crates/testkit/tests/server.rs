@@ -198,6 +198,24 @@ fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
     assert!(dirty.is_empty(), "{}: {dirty:#?}", scenario.display());
 }
 
+/// Whole scenarios of the milestone in progress (M3) that replay cleanly already; replaced by `REACHED` once M3 is.
+const CLEAN_SO_FAR: [&str; 6] = [
+    "s04-city-join",
+    "s04-city-join-2",
+    "s06-disconnect",
+    "s07-chat",
+    "s08-friends",
+    "s09-blacklist",
+];
+
+#[tokio::test]
+async fn clean_so_far() {
+    for name in CLEAN_SO_FAR {
+        let scenario = repo().join("corpus").join(name);
+        assert_clean(&scenario, &replay(&scenario).await);
+    }
+}
+
 /// Tier 2: scenarios whose milestone is reached must replay cleanly against the Rust server.
 #[tokio::test]
 async fn reached_scenarios_replay_cleanly() {

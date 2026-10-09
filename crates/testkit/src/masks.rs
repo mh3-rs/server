@@ -25,35 +25,57 @@ pub struct Mask {
 }
 
 #[derive(Debug, Default)]
-pub struct Masks(Vec<Mask>);
+pub struct Masks(Vec<Mask>, Vec<Omit>);
+
+/// A server frame the Rust server doesn't send, on purpose (`[[omit]]` in `divergences.toml`): the recording's
+/// frame of `packet` with `seq` on `connection` (`dev1-05-fmp`) of `scenario` isn't expected.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Omit {
+    pub scenario: String,
+    pub connection: String,
+    pub packet: String,
+    pub seq: u16,
+    pub reason: String,
+}
+
+impl From<Vec<Mask>> for Masks {
+    fn from(masks: Vec<Mask>) -> Self {
+        Masks(masks, Vec::new())
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MaskFile {
+    #[serde(default)]
     mask: Vec<Mask>,
+    #[serde(default)]
+    omit: Vec<Omit>,
 }
 
-fn read(path: &Path) -> Result<Vec<Mask>> {
+fn read(path: &Path) -> Result<MaskFile> {
     let text = std::fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
-    let file: MaskFile = toml::from_str(&text).with_context(|| format!("{}", path.display()))?;
-    Ok(file.mask)
+    toml::from_str(&text).with_context(|| format!("{}", path.display()))
 }
 
 impl Masks {
     /// The masks of a corpus folder: `masks.toml` and, when present, `divergences.toml`.
     pub fn load(corpus: &Path) -> Result<Self> {
-        let mut masks = read(&corpus.join("masks.toml"))?;
+        let mut masks = read(&corpus.join("masks.toml"))?.mask;
+        let mut omits = Vec::new();
         let divergences = corpus.join("divergences.toml");
         if divergences.exists() {
             let more = read(&divergences)?;
-            if let Some(m) = more.iter().find(|m| m.reason.is_none()) {
+            if let Some(m) = more.mask.iter().find(|m| m.reason.is_none()) {
                 anyhow::bail!(
                     "{}: divergence on {} without a reason",
                     divergences.display(),
                     m.packet
                 );
             }
-            masks.extend(more);
+            masks.extend(more.mask);
+            omits = more.omit;
         }
         for m in &masks {
             if m.len.is_none() && (m.var.is_some() || m.pattern.is_some()) {
@@ -67,7 +89,17 @@ impl Masks {
                     .with_context(|| format!("mask on {}: pattern", m.packet))?;
             }
         }
-        Ok(Self(masks))
+        Ok(Self(masks, omits))
+    }
+
+    /// Whether the Rust server leaves this recorded frame out on purpose.
+    pub fn omitted(&self, scenario: &str, connection: &str, packet: &str, seq: u16) -> bool {
+        self.1.iter().any(|o| {
+            o.scenario == scenario
+                && o.connection == connection
+                && o.packet == packet
+                && o.seq == seq
+        })
     }
 
     fn of<'a>(&'a self, packet: &'a str, len: usize) -> impl Iterator<Item = &'a Mask> + 'a {
@@ -182,7 +214,7 @@ mod tests {
     use super::*;
 
     fn masks() -> Masks {
-        Masks(vec![
+        Masks::from(vec![
             Mask {
                 packet: "AnsTicket".into(),
                 offset: 2,
@@ -288,7 +320,7 @@ mod tests {
 
     #[test]
     fn a_mask_to_the_end_compares_what_comes_before() {
-        let masks = Masks(vec![Mask {
+        let masks = Masks::from(vec![Mask {
             packet: "AnsBlackList".into(),
             offset: 4,
             len: None,

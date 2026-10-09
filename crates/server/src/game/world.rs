@@ -376,6 +376,27 @@ impl World {
         list
     }
 
+    /// The players under a place (a world server: everyone on it; a gate: its cities too), the earliest first.
+    pub fn players_under(
+        &self,
+        server: u32,
+        gate: Option<u16>,
+        city: Option<u16>,
+    ) -> Vec<(&str, &Place)> {
+        let mut list: Vec<_> = self
+            .places
+            .iter()
+            .filter(|(_, p)| {
+                p.server == server
+                    && gate.is_none_or(|g| p.gate == Some(g))
+                    && city.is_none_or(|c| p.city == Some(c))
+            })
+            .map(|(id, p)| (id.as_str(), p))
+            .collect();
+        list.sort_by_key(|(_, p)| p.arrival);
+        list
+    }
+
     /// The host of a city (its leader), while they're in it.
     pub fn city_host(&self, id: CityId) -> Option<&str> {
         let leader = self.cities.get(&id)?.leader.as_str();

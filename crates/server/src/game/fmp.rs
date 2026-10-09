@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
-use tracing::{Span, info, trace};
+use tracing::{Span, info, trace, warn};
 use wire::packets::*;
 use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
 
@@ -17,7 +17,7 @@ use super::{
 use crate::Shared;
 use crate::accounts;
 use crate::content::{self, Binary};
-use crate::text::{Language, Text};
+use crate::text::{Language, Text, text};
 
 /// `NtcLogin` status on FMP.
 const LOGGED_IN: u8 = 3;
@@ -164,15 +164,126 @@ impl Fmp {
             }
             ReqUserSearchInfoMine::ID => {
                 ReqUserSearchInfoMine::decode(p)?;
-                // Two numbers the game uses to tell players apart in relayed town data: stable per Capcom ID.
-                let capcom_id = session.capcom_id.as_deref().unwrap_or_default();
-                let hash = openssl::sha::sha256(capcom_id.as_bytes());
-                let number =
-                    |i: usize| u32::from_be_bytes([hash[i], hash[i + 1], hash[i + 2], hash[i + 3]]);
+                let (a, b) = search_ids(capcom_id(session));
                 let info = PatData::new()
-                    .with(0x0f, Item::Long(number(0)))
-                    .with(0x10, Item::Long(number(4)));
+                    .with(0x0f, Item::Long(a))
+                    .with(0x10, Item::Long(b));
                 reply(seq, &AnsUserSearchInfoMine { info })
+            }
+            ReqLayerUserSearchHead::ID => {
+                // The player search: everyone under a layer (a gate's cities included), optionally by Capcom ID or
+                // name; kept for the data request.
+                let r = ReqLayerUserSearchHead::decode(p)?;
+                let (server, gate, city) = world::parse_path(&r.layer)
+                    .ok_or_else(|| Fault::Client(anyhow!("malformed layer path")))?;
+                let world = shared.world.lock().unwrap();
+                self.search = world
+                    .players_under(server, gate, city)
+                    .into_iter()
+                    .filter(|(id, p)| {
+                        (r.capcom_id.is_empty() || id.as_bytes() == &r.capcom_id[..])
+                            && (r.name.is_empty() || p.name == r.name)
+                    })
+                    .skip(r.first.saturating_sub(1) as usize)
+                    .take(r.count as usize)
+                    .map(|(id, _)| id.to_owned())
+                    .collect();
+                reply(
+                    seq,
+                    &AnsLayerUserSearchHead {
+                        unk: 0,
+                        count: self.search.len() as u32,
+                    },
+                )
+            }
+            ReqLayerUserSearchData::ID => {
+                ReqLayerUserSearchData::decode(p)?;
+                let users = found_users(shared, &self.search);
+                reply(seq, &AnsLayerUserSearchData { unk: 0, users })
+            }
+            ReqLayerUserSearchFoot::ID => {
+                ReqLayerUserSearchFoot::decode(p)?;
+                reply(seq, &AnsLayerUserSearchFoot {})
+            }
+            ReqUserSearchInfo::ID => {
+                // A player's card, if they're in the world.
+                let r = ReqUserSearchInfo::decode(p)?;
+                let id = String::from_utf8_lossy(&r.capcom_id).into_owned();
+                let mut world = shared.world.lock().unwrap();
+                let Some(place) = world.place(&id).cloned() else {
+                    // MH3SP's way of showing an offline player: an alert carrying a card named OFFLINE.
+                    let card = PatData::new()
+                        .with(0x01, Item::String(r.capcom_id))
+                        .with(0x02, Item::String(Bytes::from_static(b"OFFLINE")));
+                    let mut payload = Vec::new();
+                    payload.put_pat_data(&card)?;
+                    payload.put_optional_fields(&OptionalFields::default())?;
+                    let mut alert = Vec::new();
+                    alert.put_u32(1);
+                    alert.put_lp2_string(&payload)?;
+                    return Ok(vec![Frame {
+                        seq,
+                        id: wire::PacketId(AnsUserSearchInfo::ID.0 | 0x01),
+                        payload: alert.into(),
+                    }]);
+                };
+                let language = Language::default();
+                let names = [
+                    world::SERVERS[place.server as usize - 1].0.to_owned(),
+                    place
+                        .gate
+                        .map(|g| text(Text::GateName(g), language).into_owned())
+                        .unwrap_or_default(),
+                    place
+                        .city
+                        .map(|c| text(Text::CityName(c), language).into_owned())
+                        .unwrap_or_default(),
+                ];
+                let (a, b) = search_ids(&id);
+                let info = PatData::new()
+                    .with(0x01, Item::String(r.capcom_id))
+                    .with(0x02, Item::String(place.name.clone()))
+                    .with(
+                        0x03,
+                        Item::Binary(Bytes::copy_from_slice(&place.profile[..])),
+                    )
+                    .with(
+                        0x04,
+                        Item::Binary(Bytes::copy_from_slice(&world::path(
+                            place.server,
+                            place.gate,
+                            place.city,
+                        ))),
+                    )
+                    .with(0x07, Item::Byte(1))
+                    .with(0x08, Item::String(names.join("\t").into()))
+                    .with(0x0b, Item::Byte(1))
+                    // Unknown; MH3SP's values.
+                    .with(0x0c, Item::String(Bytes::from_static(b"StrC")))
+                    .with(0x0d, Item::Long(4))
+                    .with(0x0e, Item::Long(3))
+                    .with(0x0f, Item::Long(a))
+                    .with(0x10, Item::Long(b));
+                reply(
+                    seq,
+                    &AnsUserSearchInfo {
+                        info,
+                        extra: OptionalFields::default(),
+                    },
+                )
+            }
+            NtcCollectionLog::ID => {
+                // The console reporting an error it ran into.
+                let r = NtcCollectionLog::decode(p)?;
+                let code = match r.log.get(0x01) {
+                    Some(Item::Long(code)) => *code,
+                    _ => 0,
+                };
+                warn!(
+                    code = format_args!("{code:#010x}"),
+                    "console reported an error"
+                );
+                Ok(vec![])
             }
             ReqLayerStart::ID => {
                 ReqLayerStart::decode(p)?;
@@ -359,33 +470,7 @@ impl Fmp {
             }
             ReqLayerUserListData::ID => {
                 ReqLayerUserListData::decode(p)?;
-                let mut world = shared.world.lock().unwrap();
-                let mut users = Vec::new();
-                for id in &self.search {
-                    let Some(place) = world.place(id) else {
-                        continue;
-                    };
-                    let record = PatData::new()
-                        .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
-                        .with(0x02, Item::String(place.name.clone()))
-                        .with(
-                            0x03,
-                            Item::Binary(Bytes::copy_from_slice(&world::path(
-                                place.server,
-                                place.gate,
-                                place.city,
-                            ))),
-                        );
-                    // Weapon type and whether on a quest (0 in town, 1 on a quest); HR.
-                    let in_quest = u32::from(place.circle.is_some());
-                    let weapon = u32::from(place.profile[5]);
-                    let hr = u32::from(u16::from_be_bytes([place.profile[0], place.profile[1]]));
-                    let extra = OptionalFields(vec![
-                        (1, Some(weapon << 24 | in_quest)),
-                        (2, Some(hr << 16)),
-                    ]);
-                    users.push((record, extra));
-                }
+                let users = found_users(shared, &self.search);
                 reply(seq, &AnsLayerUserListData { unk: 1, users })
             }
             ReqLayerUserListFoot::ID => {
@@ -962,6 +1047,46 @@ fn layer_in(world: &World, me: &str, seq: u16) -> Result<Frame, Fault> {
             user,
         },
     )
+}
+
+/// Two numbers the game uses to tell players apart in relayed town data: stable per Capcom ID.
+fn search_ids(capcom_id: &str) -> (u32, u32) {
+    let hash = openssl::sha::sha256(capcom_id.as_bytes());
+    let number = |i: usize| u32::from_be_bytes([hash[i], hash[i + 1], hash[i + 2], hash[i + 3]]);
+    (number(0), number(4))
+}
+
+/// Players found by a search, as the lists show them: Capcom ID, name, where they are; then weapon type and whether
+/// on a quest (0 in town, 1 on a quest), and HR.
+fn found_users(shared: &Shared, found: &[String]) -> Vec<(PatData, OptionalFields)> {
+    let mut world = shared.world.lock().unwrap();
+    found
+        .iter()
+        .filter_map(|id| {
+            let place = world.place(id)?;
+            let record = PatData::new()
+                .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
+                .with(0x02, Item::String(place.name.clone()))
+                .with(
+                    0x03,
+                    Item::Binary(Bytes::copy_from_slice(&world::path(
+                        place.server,
+                        place.gate,
+                        place.city,
+                    ))),
+                );
+            let in_quest = u32::from(place.circle.is_some());
+            let weapon = u32::from(place.profile[5]);
+            let hr = u32::from(u16::from_be_bytes([place.profile[0], place.profile[1]]));
+            Some((
+                record,
+                OptionalFields(vec![
+                    (1, Some(weapon << 24 | in_quest)),
+                    (2, Some(hr << 16)),
+                ]),
+            ))
+        })
+        .collect()
 }
 
 /// Who sent relayed game data: an unknown long (MH3SP's 0x12345678, only to the whole layer), Capcom ID, name.

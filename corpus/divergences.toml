@@ -45,3 +45,15 @@ reason = "content versions derive from the bytes (M2 D2)"
 packet = "AnsBlackList"
 offset = 4
 reason = "no blank placeholder entry in the black list (seen on consoles: an empty line)"
+
+# Frames the Rust server doesn't send, on purpose: [[omit]] names the scenario, the connection, the packet and its
+# sequence number, with a reason.
+
+# dev2's second tell ('test') after dev1 blocked them: MH3SP delivered it; the Rust server doesn't deliver to a
+# blocker what their blocked hunters send them (M3 D2).
+[[omit]]
+scenario = "s09-blacklist"
+connection = "dev1-05-fmp"
+packet = "NtcTell"
+seq = 2810
+reason = "blocked hunters' tells aren't delivered (M3 D2)"
