@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT h.capcom_id, h.name FROM friends f\n           JOIN hunters h ON h.id = CASE WHEN f.hunter_a = ?1 THEN f.hunter_b ELSE f.hunter_a END\n           WHERE f.hunter_a = ?1 OR f.hunter_b = ?1 ORDER BY f.created_at, h.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "capcom_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "capcom_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "77d8d21af7f51e1e1b27209be50b48647cfff140e910abbdd6f9512646a0a9a4"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO friends (hunter_a, hunter_b) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "585881b1551b4a5b7024c60f58ec587ed1b89c221f893a4f27a1dc6d6a1dfd94"
+}

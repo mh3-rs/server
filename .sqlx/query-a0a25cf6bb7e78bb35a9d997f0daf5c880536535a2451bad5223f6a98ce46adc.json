@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM friends WHERE hunter_a = ?1 AND hunter_b = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a0a25cf6bb7e78bb35a9d997f0daf5c880536535a2451bad5223f6a98ce46adc"
+}

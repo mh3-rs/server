@@ -63,10 +63,14 @@ impl Players {
         }
     }
 
-    /// Sends a frame to a logged-in player (nothing if it's gone).
-    pub fn send(&self, capcom_id: &str, frame: Frame) {
-        if let Some(mailbox) = self.0.get(capcom_id) {
-            mailbox.send(frame);
+    /// Sends a frame to a logged-in player: `false` if they're not.
+    pub fn send(&self, capcom_id: &str, frame: Frame) -> bool {
+        match self.0.get(capcom_id) {
+            Some(mailbox) => {
+                mailbox.send(frame);
+                true
+            }
+            None => false,
         }
     }
 

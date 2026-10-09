@@ -60,6 +60,42 @@ CREATE TABLE hunters (
 ) STRICT;
 CREATE INDEX hunters_console ON hunters (console_id);
 
+-- Friendships are mutual: one row per pair, the lower hunter id first, so a pair has one order; either side
+-- deleting it ends it for both.
+CREATE TABLE friends (
+    hunter_a    INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    hunter_b    INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (hunter_a, hunter_b),
+    CHECK (hunter_a < hunter_b)
+) STRICT;
+CREATE INDEX friends_b ON friends (hunter_b);
+
+-- Friend requests not answered yet: the game keeps a received one in its inbox, to answer any time later; the
+-- server checks an answer against them, and delivers one to an offline player at their next login.
+CREATE TABLE friend_requests (
+    from_hunter INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    to_hunter   INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    message     BLOB NOT NULL,     -- as the game sends it (may be Shift-JIS)
+    -- Reached the recipient's console (online at once, else at their next login): delivered once.
+    delivered   INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_hunter, to_hunter),
+    CHECK (from_hunter <> to_hunter)
+) STRICT;
+CREATE INDEX friend_requests_to ON friend_requests (to_hunter);
+
+-- Black lists are personal: (a, b) and (b, a) are separate rows, only the blocker removes theirs. The server
+-- doesn't deliver to a blocker what their blocked hunters send them.
+CREATE TABLE blacklist (
+    blocker     INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    blocked     INTEGER NOT NULL REFERENCES hunters (id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (blocker, blocked),
+    CHECK (blocker <> blocked)
+) STRICT;
+CREATE INDEX blacklist_blocked ON blacklist (blocked);
+
 -- Initial data.
 
 -- Terms overrides start at 2: AUTOINCREMENT continues after the sequence's value.

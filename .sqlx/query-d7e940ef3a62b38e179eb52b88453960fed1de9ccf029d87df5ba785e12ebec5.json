@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM blacklist WHERE blocker = ?1 AND blocked = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d7e940ef3a62b38e179eb52b88453960fed1de9ccf029d87df5ba785e12ebec5"
+}

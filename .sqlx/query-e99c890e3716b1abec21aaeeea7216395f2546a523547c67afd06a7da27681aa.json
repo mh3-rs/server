@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT h.capcom_id, h.name FROM blacklist b JOIN hunters h ON h.id = b.blocked\n           WHERE b.blocker = ?1 ORDER BY b.created_at, h.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "capcom_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "capcom_id"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "hunters",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "e99c890e3716b1abec21aaeeea7216395f2546a523547c67afd06a7da27681aa"
+}

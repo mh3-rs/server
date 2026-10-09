@@ -136,17 +136,45 @@ pub async fn use_slot(
     name: &[u8],
 ) -> Result<(String, bool)> {
     for _ in 0..ATTEMPTS {
-        let used = sqlx::query_scalar!(
-            r#"UPDATE hunters SET name = ?3, last_seen_at = CURRENT_TIMESTAMP
-               WHERE console_id = ?1 AND slot = ?2 RETURNING capcom_id"#,
+        let used = sqlx::query!(
+            r#"SELECT id AS "id!", capcom_id, name FROM hunters WHERE console_id = ?1 AND slot = ?2"#,
             console.id,
-            slot,
-            name
+            slot
         )
         .fetch_optional(db)
         .await?;
-        if let Some(capcom_id) = used {
-            return Ok((capcom_id, false));
+        if let Some(used) = used {
+            let mut tx = db.begin().await?;
+            if used.name != name {
+                // Another hunter on the slot: its social links go (the Capcom ID and its moderation records stay).
+                sqlx::query!(
+                    "DELETE FROM friends WHERE hunter_a = ?1 OR hunter_b = ?1",
+                    used.id
+                )
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query!(
+                    "DELETE FROM friend_requests WHERE from_hunter = ?1 OR to_hunter = ?1",
+                    used.id
+                )
+                .execute(&mut *tx)
+                .await?;
+                sqlx::query!(
+                    "DELETE FROM blacklist WHERE blocker = ?1 OR blocked = ?1",
+                    used.id
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+            sqlx::query!(
+                "UPDATE hunters SET name = ?2, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                used.id,
+                name
+            )
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok((used.capcom_id, false));
         }
         let capcom_id = random_id(CAPCOM_ID_LEN);
         let public_id = Uuid::now_v7();
@@ -168,6 +196,169 @@ pub async fn use_slot(
         }
     }
     bail!("no free Capcom ID after {ATTEMPTS} attempts")
+}
+
+/// A hunter known by its Capcom ID: internal id and name.
+pub async fn hunter(db: &SqlitePool, capcom_id: &str) -> Result<Option<(i64, Vec<u8>)>> {
+    Ok(sqlx::query!(
+        r#"SELECT id AS "id!", name FROM hunters WHERE capcom_id = ?1"#,
+        capcom_id
+    )
+    .fetch_optional(db)
+    .await?
+    .map(|r| (r.id, r.name)))
+}
+
+/// Records a friend request (a new one from the same hunter replaces its message).
+pub async fn request_friend(db: &SqlitePool, from: i64, to: i64, message: &[u8]) -> Result<()> {
+    sqlx::query!(
+        r#"INSERT INTO friend_requests (from_hunter, to_hunter, message) VALUES (?1, ?2, ?3)
+           ON CONFLICT (from_hunter, to_hunter) DO UPDATE SET message = ?3, created_at = CURRENT_TIMESTAMP"#,
+        from,
+        to,
+        message
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Answers the request `from` sent `to`: `false` if there was none. Accepted, the two become friends.
+pub async fn answer_friend_request(
+    db: &SqlitePool,
+    from: i64,
+    to: i64,
+    accept: bool,
+) -> Result<bool> {
+    let mut tx = db.begin().await?;
+    let found = sqlx::query!(
+        "DELETE FROM friend_requests WHERE from_hunter = ?1 AND to_hunter = ?2",
+        from,
+        to
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if found && accept {
+        let (a, b) = (from.min(to), from.max(to));
+        sqlx::query!(
+            "INSERT INTO friends (hunter_a, hunter_b) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+            a,
+            b
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(found)
+}
+
+/// Ends a friendship, for both.
+pub async fn unfriend(db: &SqlitePool, one: i64, other: i64) -> Result<()> {
+    let (a, b) = (one.min(other), one.max(other));
+    sqlx::query!(
+        "DELETE FROM friends WHERE hunter_a = ?1 AND hunter_b = ?2",
+        a,
+        b
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// A hunter's friends (Capcom ID and name), in the order they became friends.
+pub async fn friends(db: &SqlitePool, hunter: i64) -> Result<Vec<(String, Vec<u8>)>> {
+    Ok(sqlx::query!(
+        r#"SELECT h.capcom_id, h.name FROM friends f
+           JOIN hunters h ON h.id = CASE WHEN f.hunter_a = ?1 THEN f.hunter_b ELSE f.hunter_a END
+           WHERE f.hunter_a = ?1 OR f.hunter_b = ?1 ORDER BY f.created_at, h.id"#,
+        hunter
+    )
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|r| (r.capcom_id, r.name))
+    .collect())
+}
+
+/// Marks the request `from` sent `to` delivered to the recipient's console.
+pub async fn delivered(db: &SqlitePool, from: i64, to: i64) -> Result<()> {
+    sqlx::query!(
+        "UPDATE friend_requests SET delivered = 1 WHERE from_hunter = ?1 AND to_hunter = ?2",
+        from,
+        to
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// The friend requests a hunter's console hasn't received yet (sender's Capcom ID and name, message), now marked
+/// delivered.
+pub async fn undelivered_requests(
+    db: &SqlitePool,
+    hunter: i64,
+) -> Result<Vec<(String, Vec<u8>, Vec<u8>)>> {
+    Ok(sqlx::query!(
+        r#"UPDATE friend_requests SET delivered = 1 WHERE to_hunter = ?1 AND delivered = 0
+           RETURNING (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS "capcom_id!: String",
+                     (SELECT name FROM hunters WHERE id = from_hunter) AS "name!: Vec<u8>", message"#,
+        hunter
+    )
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|r| (r.capcom_id, r.name, r.message))
+    .collect())
+}
+
+pub async fn block(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<()> {
+    sqlx::query!(
+        "INSERT INTO blacklist (blocker, blocked) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+        blocker,
+        blocked
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+pub async fn unblock(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<()> {
+    sqlx::query!(
+        "DELETE FROM blacklist WHERE blocker = ?1 AND blocked = ?2",
+        blocker,
+        blocked
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Whether `blocker` blocked `blocked`.
+pub async fn blocks(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT 1 AS "x!: i64" FROM blacklist WHERE blocker = ?1 AND blocked = ?2"#,
+        blocker,
+        blocked
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some())
+}
+
+/// A hunter's black list (Capcom ID and name), in the order they were added.
+pub async fn blacklist(db: &SqlitePool, blocker: i64) -> Result<Vec<(String, Vec<u8>)>> {
+    Ok(sqlx::query!(
+        r#"SELECT h.capcom_id, h.name FROM blacklist b JOIN hunters h ON h.id = b.blocked
+           WHERE b.blocker = ?1 ORDER BY b.created_at, h.id"#,
+        blocker
+    )
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|r| (r.capcom_id, r.name))
+    .collect())
 }
 
 #[cfg(test)]

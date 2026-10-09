@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO blacklist (blocker, blocked) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "342402bc12bad8aa40430fc4bc827806c81e1c63671664eaa8e729061dd3d3b6"
+}

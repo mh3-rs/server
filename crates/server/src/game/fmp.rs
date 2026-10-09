@@ -15,6 +15,7 @@ use super::{
     Fault, Handled, PROFILE_SIZE, Session, alert, frame, reply, server_time, unexpected, world,
 };
 use crate::Shared;
+use crate::accounts;
 use crate::content::{self, Binary};
 use crate::text::{Language, Text};
 
@@ -86,8 +87,30 @@ impl Fmp {
                 reply(seq, &NtcLogin { status: LOGGED_IN })
             }
             (None, id) => Err(unexpected(id)),
-            (Some(_), _) => self.request(shared, req),
+            (Some(_), _) => match self.social(shared, req).await {
+                Some(handled) => handled,
+                None => self.request(shared, req),
+            },
         }
+    }
+
+    /// Messages, friends and the black list (they need the database); `None` for anything else.
+    async fn social(&mut self, shared: &Shared, req: &Frame) -> Option<Handled> {
+        let ids = [
+            ReqTell::ID,
+            ReqFriendList::ID,
+            ReqFriendAdd::ID,
+            ReqFriendAccept::ID,
+            ReqFriendDelete::ID,
+            ReqBlackList::ID,
+            ReqBlackAdd::ID,
+            ReqBlackDelete::ID,
+        ];
+        if !ids.contains(&req.id) {
+            return None;
+        }
+        let (session, _) = self.login.as_ref().expect("logged in");
+        Some(social(shared, session, req).await)
     }
 
     fn request(&mut self, shared: &Shared, req: &Frame) -> Handled {
@@ -190,28 +213,6 @@ impl Fmp {
                     })
                     .collect();
                 reply(seq, &AnsLayerUserList { users })
-            }
-            ReqFriendList::ID => {
-                // Friends come with M3.
-                ReqFriendList::decode(p)?;
-                reply(
-                    seq,
-                    &AnsFriendList {
-                        unk: 0,
-                        friends: vec![],
-                    },
-                )
-            }
-            ReqBlackList::ID => {
-                // The black list comes with M3. (MH3SP answers a blank entry: consoles show it as an empty line.)
-                ReqBlackList::decode(p)?;
-                reply(
-                    seq,
-                    &AnsBlackList {
-                        unk: 0,
-                        users: vec![],
-                    },
-                )
             }
             ReqUserStatusSet::ID => {
                 // What the player is doing (searchable, M3).
@@ -752,33 +753,6 @@ impl Fmp {
                     seq,
                 )
             }
-            ReqTell::ID => {
-                // A message to one player, wherever they are on the server; dropped if they're gone.
-                let r = ReqTell::decode(p)?;
-                let me = capcom_id(session);
-                let to = String::from_utf8_lossy(&r.capcom_id).into_owned();
-                let info = set(
-                    set(
-                        set(r.info, 0x02, Item::Long(20)),
-                        0x03,
-                        Item::String(Bytes::copy_from_slice(me.as_bytes())),
-                    ),
-                    0x04,
-                    Item::String(session.name.clone()),
-                );
-                shared.players.send(
-                    &to,
-                    frame(
-                        seq,
-                        &NtcTell {
-                            capcom_id: r.capcom_id,
-                            info,
-                            text: r.text,
-                        },
-                    )?,
-                );
-                reply(seq, &AnsTell {})
-            }
             ReqCircleInfoNoticeSet::ID => {
                 ReqCircleInfoNoticeSet::decode(p)?;
                 reply(seq, &AnsCircleInfoNoticeSet {})
@@ -899,7 +873,9 @@ fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<F
     for player in to {
         match player == me {
             true => out.push(ntc.clone()),
-            false => shared.players.send(player, ntc.clone()),
+            false => {
+                shared.players.send(player, ntc.clone());
+            }
         }
     }
 }
@@ -1078,4 +1054,210 @@ fn binary(shared: &Shared, kind: u8) -> Result<Binary, Fault> {
     content::binary(kind, &ctx)
         .map_err(Fault::Server)?
         .ok_or_else(|| Fault::Client(anyhow!("content type {kind:#x} unknown")))
+}
+
+/// A text message's sender info: the console's fields with the sender filled in, and an unknown 20.
+fn message_info(info: PatData, me: &str, name: &Bytes) -> PatData {
+    let info = set(
+        info,
+        0x03,
+        Item::String(Bytes::copy_from_slice(me.as_bytes())),
+    );
+    set(
+        set(info, 0x04, Item::String(name.clone())),
+        0x02,
+        Item::Long(20),
+    )
+}
+
+/// A list of hunters as the friend and black lists show them: index, Capcom ID, name; `count` from `first`.
+fn hunter_records(list: Vec<(String, Vec<u8>)>, first: u32, count: u32) -> Vec<PatData> {
+    list.into_iter()
+        .zip(1u32..)
+        .skip(first.saturating_sub(1) as usize)
+        .take(count as usize)
+        .map(|((capcom_id, name), index)| {
+            PatData::new()
+                .with(0x01, Item::Long(index))
+                .with(0x02, Item::String(capcom_id.into()))
+                .with(0x03, Item::String(name.into()))
+        })
+        .collect()
+}
+
+/// Messages, friends and the black list. A blocked hunter's tells and friend requests are answered as sent but
+/// never reach the blocker.
+async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
+    let (seq, p) = (req.seq, &req.payload);
+    let db = shared
+        .db
+        .pool()
+        .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
+    let server = |e: anyhow::Error| Fault::Server(e);
+    let me = capcom_id(session);
+    let (my_id, _) = accounts::hunter(db, me)
+        .await
+        .map_err(server)?
+        .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
+    // Who a request names: `None` for an unknown Capcom ID.
+    let named = |capcom_id: &Bytes| String::from_utf8_lossy(capcom_id).into_owned();
+    match req.id {
+        ReqTell::ID => {
+            let r = ReqTell::decode(p)?;
+            let to = named(&r.capcom_id);
+            let blocked = match accounts::hunter(db, &to).await.map_err(server)? {
+                Some((to_id, _)) => accounts::blocks(db, to_id, my_id).await.map_err(server)?,
+                None => false,
+            };
+            if !blocked {
+                let info = message_info(r.info, me, &session.name);
+                shared.players.send(
+                    &to,
+                    frame(
+                        seq,
+                        &NtcTell {
+                            capcom_id: r.capcom_id,
+                            info,
+                            text: r.text,
+                        },
+                    )?,
+                );
+            }
+            reply(seq, &AnsTell {})
+        }
+        ReqFriendList::ID => {
+            // Asked when entering a world server: then the friend requests that came while away are delivered.
+            let r = ReqFriendList::decode(p)?;
+            let list = accounts::friends(db, my_id).await.map_err(server)?;
+            let mut out = vec![frame(
+                seq,
+                &AnsFriendList {
+                    unk: 0,
+                    friends: hunter_records(list, r.first, r.count),
+                },
+            )?];
+            for (from, name, message) in accounts::undelivered_requests(db, my_id)
+                .await
+                .map_err(server)?
+            {
+                let info = message_info(PatData::new(), &from, &Bytes::from(name));
+                let ntc = NtcFriendAccept {
+                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                    info,
+                    text: message.into(),
+                };
+                out.push(frame(seq, &ntc)?);
+            }
+            Ok(out)
+        }
+        ReqFriendAdd::ID => {
+            let r = ReqFriendAdd::decode(p)?;
+            let to = named(&r.capcom_id);
+            let Some((to_id, _)) = accounts::hunter(db, &to).await.map_err(server)? else {
+                return alert(AnsFriendAdd::ID, seq, Text::UnknownCapcomId);
+            };
+            if to_id != my_id && !accounts::blocks(db, to_id, my_id).await.map_err(server)? {
+                accounts::request_friend(db, my_id, to_id, &r.text)
+                    .await
+                    .map_err(server)?;
+                let info = message_info(r.info, me, &session.name);
+                let ntc = frame(
+                    seq,
+                    &NtcFriendAccept {
+                        capcom_id: r.capcom_id,
+                        info,
+                        text: r.text,
+                    },
+                )?;
+                if shared.players.send(&to, ntc) {
+                    accounts::delivered(db, my_id, to_id)
+                        .await
+                        .map_err(server)?;
+                }
+            }
+            reply(seq, &AnsFriendAdd {})
+        }
+        ReqFriendAccept::ID => {
+            // The answer to a request: only one actually sent counts.
+            let r = ReqFriendAccept::decode(p)?;
+            let from = named(&r.capcom_id);
+            let mut out = vec![frame(seq, &AnsFriendAccept {})?];
+            let Some((from_id, from_name)) = accounts::hunter(db, &from).await.map_err(server)?
+            else {
+                return Ok(out);
+            };
+            let accept = r.accepted == 1;
+            if accounts::answer_friend_request(db, from_id, my_id, accept)
+                .await
+                .map_err(server)?
+                && accept
+            {
+                info!("new friends");
+                let card = |id: &str, name: Bytes| {
+                    PatData::new()
+                        .with(0x01, Item::Long(1))
+                        .with(0x02, Item::String(Bytes::copy_from_slice(id.as_bytes())))
+                        .with(0x03, Item::String(name))
+                };
+                let to_them = NtcFriendAdd {
+                    capcom_id: r.capcom_id,
+                    friend: card(me, session.name.clone()),
+                    accepted: 1,
+                };
+                shared.players.send(&from, frame(seq, &to_them)?);
+                let to_me = NtcFriendAdd {
+                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                    friend: card(&from, from_name.into()),
+                    accepted: 1,
+                };
+                out.push(frame(seq, &to_me)?);
+            }
+            Ok(out)
+        }
+        ReqFriendDelete::ID => {
+            let r = ReqFriendDelete::decode(p)?;
+            if let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
+                .await
+                .map_err(server)?
+            {
+                accounts::unfriend(db, my_id, id).await.map_err(server)?;
+            }
+            reply(seq, &AnsFriendDelete {})
+        }
+        ReqBlackList::ID => {
+            let r = ReqBlackList::decode(p)?;
+            let list = accounts::blacklist(db, my_id).await.map_err(server)?;
+            reply(
+                seq,
+                &AnsBlackList {
+                    unk: 0,
+                    users: hunter_records(list, r.first, r.count),
+                },
+            )
+        }
+        ReqBlackAdd::ID => {
+            let r = ReqBlackAdd::decode(p)?;
+            let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
+                .await
+                .map_err(server)?
+            else {
+                return alert(AnsBlackAdd::ID, seq, Text::UnknownCapcomId);
+            };
+            if id != my_id {
+                accounts::block(db, my_id, id).await.map_err(server)?;
+            }
+            reply(seq, &AnsBlackAdd {})
+        }
+        ReqBlackDelete::ID => {
+            let r = ReqBlackDelete::decode(p)?;
+            if let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
+                .await
+                .map_err(server)?
+            {
+                accounts::unblock(db, my_id, id).await.map_err(server)?;
+            }
+            reply(seq, &AnsBlackDelete {})
+        }
+        id => Err(unexpected(id)),
+    }
 }
