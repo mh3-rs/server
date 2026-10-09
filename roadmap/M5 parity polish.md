@@ -55,6 +55,12 @@ MH3SP's tested docstrings or inferred) and MH3SP:
 another): neither MH3SP nor we answer them (on MH3SP these flows hang after the list). And the console only jumps to a
 path whose first `u32` is its own, which is 4 in every recording, where our paths (and MH3SP's) carry the depth (1–3).
 
+**Settled (2026-10-09):** seats and arm wrestling done properly (who holds which seat, per city; a taken seat refused
+with an alert; the others notified; seats freed when their holder leaves); Player Search built; city search and
+Change Gates built together with `ReqLayerInfo` and `ReqLayerJump*` as their own step after M5 (a list one can't act
+on is worse than none); `LayerTell` only if a recording shows the chat menu offers it; `NtcLayerTellLow` never. The
+console sessions to do: `recordings.md`.
+
 ## Decisions
 
 
