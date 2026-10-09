@@ -1680,6 +1680,141 @@ async fn the_relay_forwards_a_pair() {
     running.stop().await;
 }
 
+/// Tier 2, UDP: every scenario's NatNeg and QR datagrams, from all its consoles merged in time order, sent to the
+/// server (`p2p`, as AltWFC answered). Each socket must get what AltWFC sent it (each answer once or more), except
+/// `CONNECT`s, compared per console (which of its sockets gets one differs, the game takes it on either): the same
+/// peer game sockets (recorded ports mapped to the replay's). AltWFC's `CONNECT`s to a peer's NatNeg socket (a port
+/// taken from the wrong `INIT`; the game ignores them) aren't expected.
+#[tokio::test]
+async fn natneg_exchanges_replay() {
+    use std::collections::{BTreeSet, HashMap};
+    use std::net::SocketAddrV4;
+    use testkit::corpus::UdpDir;
+    use wire::natneg::{Body, Record};
+
+    let mut checked = 0;
+    for scenario in scenarios() {
+        let (config, _db) = config();
+        let running = server::start(&config).await.unwrap();
+        let _logged_in = enter_world(&running).await;
+        let to_server = |remote: &str| match remote.rsplit(':').next() {
+            Some("27900") => Some(running.qr.unwrap().port()),
+            Some("27901") => Some(running.natneg.unwrap().port()),
+            _ => None,
+        };
+        // (console, datagram), the server's only, in time order.
+        let mut datagrams: Vec<_> = corpus::load(&scenario)
+            .unwrap()
+            .into_iter()
+            .flat_map(|r| {
+                let console = r.console.clone();
+                r.datagrams.into_iter().map(move |d| (console.clone(), d))
+            })
+            .filter(|(_, d)| to_server(&d.remote).is_some())
+            .collect();
+        datagrams.sort_by_key(|(_, d)| d.t);
+        if datagrams.is_empty() {
+            running.stop().await;
+            continue;
+        }
+        let decode = |payload: &str| Record::decode(&hex::decode(payload).unwrap());
+        let mut sockets = HashMap::new();
+        for local in datagrams
+            .iter()
+            .map(|(_, d)| d.local)
+            .collect::<BTreeSet<_>>()
+        {
+            let socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+            sockets.insert(local, socket);
+        }
+        let port_of: HashMap<u16, u16> = sockets
+            .iter()
+            .map(|(&recorded, s)| (recorded, s.local_addr().unwrap().port()))
+            .collect();
+        // Game sockets: the sources of port type 0 `INIT`s.
+        let games: BTreeSet<u16> = datagrams
+            .iter()
+            .filter(|(_, d)| d.dir == UdpDir::Out)
+            .filter(|(_, d)| {
+                matches!(decode(&d.payload), Ok(Record { body: Body::Init { port, .. }, .. }) if port.kind == 0)
+            })
+            .map(|(_, d)| d.local)
+            .collect();
+        // Expected: per socket (not `CONNECT`), per console (`CONNECT`, recorded peer ports mapped).
+        let mut want: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for (console, d) in datagrams.iter().filter(|(_, d)| d.dir == UdpDir::In) {
+            match decode(&d.payload) {
+                Ok(Record {
+                    cookie,
+                    body: Body::Connect(mut peer),
+                }) => {
+                    let Some(&port) = port_of
+                        .get(&peer.addr.port())
+                        .filter(|_| games.contains(&peer.addr.port()))
+                    else {
+                        continue;
+                    };
+                    peer.addr = SocketAddrV4::new(*peer.addr.ip(), port);
+                    let connect = Record {
+                        cookie,
+                        body: Body::Connect(peer),
+                    }
+                    .encode();
+                    want.entry(console.clone())
+                        .or_default()
+                        .insert(hex::encode(connect));
+                }
+                _ => {
+                    want.entry(d.local.to_string())
+                        .or_default()
+                        .insert(d.payload.clone());
+                }
+            }
+        }
+        let console_of: HashMap<u16, String> = datagrams
+            .iter()
+            .map(|(console, d)| (d.local, console.clone()))
+            .collect();
+        for (_, d) in datagrams.iter().filter(|(_, d)| d.dir == UdpDir::Out) {
+            let to = SocketAddr::from(([127, 0, 0, 1], to_server(&d.remote).unwrap()));
+            sockets[&d.local]
+                .send_to(&hex::decode(&d.payload).unwrap(), to)
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        let mut got: HashMap<String, BTreeSet<String>> = HashMap::new();
+        for (recorded, socket) in &sockets {
+            let mut buf = [0; 1500];
+            while let Ok(Ok(n)) =
+                tokio::time::timeout(Duration::from_millis(200), socket.recv(&mut buf)).await
+            {
+                let key = match Record::decode(&buf[..n]) {
+                    Ok(Record {
+                        body: Body::Connect(_),
+                        ..
+                    }) => console_of[recorded].clone(),
+                    _ => recorded.to_string(),
+                };
+                got.entry(key).or_default().insert(hex::encode(&buf[..n]));
+            }
+        }
+        let keys: BTreeSet<&String> = want.keys().chain(got.keys()).collect();
+        for key in keys {
+            let (g, w) = (
+                got.get(key).cloned().unwrap_or_default(),
+                want.get(key).cloned().unwrap_or_default(),
+            );
+            assert_eq!(g, w, "{}: {key}", scenario.display());
+            checked += w.len();
+        }
+        running.stop().await;
+    }
+    if !scenarios().is_empty() {
+        assert!(checked > 0, "no NatNeg answers checked");
+    }
+}
+
 /// Tier 5, `hybrid`: a pair connects directly; after its failure report, the next pair of those consoles (the
 /// player retrying) goes through the relay. A symmetric NAT is relayed at once.
 #[tokio::test]

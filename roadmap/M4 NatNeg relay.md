@@ -126,7 +126,11 @@ Settled with the user on 2026-10-09.
 - [x] Relay (D4, D5): ports from the range, forwarding by source, limits, idle cleanup.
 - [x] Strategies (D2, D3): `Option<Nat>` per player (by IP); the symmetric-NAT check; a pair relayed if either is
       `Relay`; the failure fallback.
-- [ ] Replay: the harness replays recorded UDP too (NatNeg exchanges; P2P datagrams aren't the server's).
+- [x] Replay (`natneg_exchanges_replay`): every scenario's NatNeg and QR datagrams, all consoles merged in time order,
+      against the server: the same answers per socket; `CONNECT`s compared per console (which socket gets one
+      differs: the game takes either) with the same peer game sockets; AltWFC's `CONNECT`s carrying a peer's NatNeg
+      socket port (a quirk, ignored by the game) not expected. Found on the way: like AltWFC, a pair's `CONNECT`
+      now goes to every socket a console used (a lost one is never asked for again).
 - [ ] Tier 5: fake consoles through NatNeg and P2P in each strategy; simulated NAT; forced failure → relay on retry;
       relay latency (forwarding p99 under 1 ms on one host).
 - [x] Lab, `relay` (run 10, 2026-10-09; AltWFC on NAS only, `lab/altwfc.sh nas`): a city and a quest together, all

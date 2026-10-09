@@ -122,9 +122,13 @@ impl Client {
         self.0[1].and(self.0[2]).and(self.0[0])
     }
 
-    /// Where to send it a `CONNECT` (the game accepts it on either socket).
-    fn reach(&self) -> Option<SocketAddrV4> {
-        self.0[1].or(self.0[0])
+    /// Its sockets (where to send it a `CONNECT`: the game accepts it on either, and a lost one is never asked
+    /// for again, so each gets one, as GameSpy's servers do).
+    fn sockets(&self) -> Vec<SocketAddrV4> {
+        let mut sockets: Vec<SocketAddrV4> = self.0.iter().flatten().copied().collect();
+        sockets.sort_unstable_by_key(|a| (*a.ip(), a.port()));
+        sockets.dedup();
+        sockets
     }
 
     /// Its NAT maps each destination to another port (a symmetric NAT): seen when natneg2 is on another IP than
@@ -169,21 +173,21 @@ fn handle(
             let [Some(first), Some(second)] = n.clients.map(|c| c.game()) else {
                 return out;
             };
-            // Both in: this console learns where its peer is (again on each `INIT`, as GameSpy's servers do: a
-            // lost `CONNECT` is never asked for); the first time, the peer too.
-            let told = match n.told {
-                Some(told) => told,
+            // Both in: once, both consoles learn where their peer is, on every socket they used; then again on each
+            // later `INIT` (resent when an answer was lost).
+            match n.told {
+                Some(told) => out.push((reply(Body::Connect(peer(told[index]))), from)),
                 None => {
                     let (told, relayed) = connect(n.clients, [first, second], connector, players);
                     n.told = Some(told);
                     n.relayed = relayed;
-                    if let Some(to) = n.clients[1 - index].reach() {
-                        out.push((reply(Body::Connect(peer(told[1 - index]))), to));
+                    for (client, told) in n.clients.iter().zip(told) {
+                        for socket in client.sockets() {
+                            out.push((reply(Body::Connect(peer(told))), socket));
+                        }
                     }
-                    told
                 }
-            };
-            out.insert(1, (reply(Body::Connect(peer(told[index]))), from));
+            }
             out
         }
         Body::ConnectAck(..) => {
