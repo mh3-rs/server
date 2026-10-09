@@ -1,0 +1,13 @@
+description = "Chat to one hunter (ReqLayerTell) looked for, against MH3SP: no menu sends it. Gate chat is NtcLayerChat; the friends list's message is an inbox message (ReqTell), the same as the card's, between friends too. In the decomp, ReqLayerTell is chat to a friend outside the console's P2P session (NetworkLayerPat::handleChat, kind 1), reached from no menu of the PAL disc."
+steps = [
+  "both: Online, slot 1, Valor1, City Gate 1; dev1: create City 1; dev2: join it",
+  "dev1: message to dev2 with a friend request; dev2: accept it",
+  "both: leave the city, back to City Gate 1",
+  "both: open the chat; no option to chat to one hunter; dev2: a message from the friends list (an inbox message)",
+  "both: close",
+]
+consoles = 2
+oracle = "sepalani/MH3SP f53b06c"
+recorded = "2026-10-10"
+# Milestone from which the Rust server must replay this scenario cleanly.
+milestone = "M5"

@@ -132,6 +132,12 @@ chat menu offers it; `NtcLayerTellLow` never. The console sessions to do: `recor
   selection's handshake (`FmpInfo2`, `LayerEnd`, `Shut`, a new connection) and `LayerJumpGo` with the ticket places
   it. A missing or expired ticket, or a city that filled meanwhile: an alert, and the console stays at the world
   server's root.
+- **D14 `LayerTell` not built. Settled (2026-10-10, s14).** No menu sends it: gate chat is `NtcLayerChat`, and the
+  friends list's message is an inbox message (`ReqTell`), between friends too. In the decomp it is chat to a friend
+  outside the console's P2P session (`NetworkLayerPat::handleChat`, kind 1, the recipient from the friends list;
+  queued by `network_pat_control.cpp`'s chat queue for a line carrying a friend's ID), reached from no menu of the PAL
+  disc. Kept in mind for M8: `NtcLayerTell` may be a server-to-player channel (a line in chat rather than the inbox),
+  to try then.
 
 ## Work (once the decisions are settled)
 

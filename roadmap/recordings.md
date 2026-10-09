@@ -10,16 +10,6 @@ The lab: `lab/play.sh` boots each console from its save state (the Village or Ci
 
 ## Pending
 
-### s14-layer-tell (record against MH3SP, M5 D1)
-
-Chat to one hunter (`ReqLayerTell`), which only exists in a gate or a world-server lobby (cities go console to
-console), and only if the chat menu offers a recipient. If no menu offers it, `LayerTell` isn't built.
-
-1. both: Online, slot 1, Valor1 (stay at the world server level).
-2. both: open the chat: is there a way to pick one hunter as recipient? If so, dev1 sends dev2 `tell 1`.
-3. both: City Gate 1; the same there (dev2 sends `tell 2`). Does the sender see its own line, once or twice?
-4. both: close.
-
 ### Rust server checks (after building, M5)
 
 - Seats on the Rust server: s13's steps; dev2 is refused dev1's seat; quitting while seated frees it.
@@ -54,3 +44,5 @@ punch), the others direct; a city and a quest with all three. Shows a relayed an
   dev1's seat while dev1 is on it and tells nobody; arm wrestling works; dev1 closing its window while seated leaves
   the seat free (MH3SP never held it). Replays on the Rust server, the refused seat declared (`[[omit]]` with
   `alert`: an answer replaced by a refusal, new in the harness).
+- 2026-10-10, s14-layer-tell (against MH3SP): no chat to one hunter anywhere (the world server level has no chat; a
+  gate's is everyone's), friends or not; the friends list's message is an inbox one. `LayerTell` not built (M5 D14).

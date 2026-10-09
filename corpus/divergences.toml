@@ -163,3 +163,12 @@ packet = "AnsLayerMediationLock"
 seq = 5095
 alert = true
 reason = "one player per seat: a taken seat is refused with an alert (M5)"
+
+# s14: dev1 messages dev2 (from the friends list) while dev2 stands in a gate; MH3SP delivers it at once, the Rust
+# server once dev2 stands in a city (M3 D2), which it never does again.
+[[omit]]
+scenario = "s14-layer-tell"
+connection = "dev2-05-fmp"
+packet = "NtcTell"
+seq = 18888
+reason = "messages are delivered when the recipient stands in a city (M3 D2)"
