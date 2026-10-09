@@ -138,7 +138,8 @@ pub struct Circle {
     pub leader: String,
     /// Player slots (a player's index is its slot + 1).
     slots: Vec<Option<String>>,
-    password: Option<Bytes>,
+    /// The password's argon2 hash (PHC string), until departure (M3 D9): the password itself is never kept.
+    password_hash: Option<String>,
     remarks: Option<Bytes>,
     /// Unknown (from `CircleCreate`).
     unk_0e: u8,
@@ -153,7 +154,7 @@ pub struct Circle {
 
 /// What `CircleCreate` asks for.
 pub struct NewCircle {
-    pub password: Option<Bytes>,
+    pub password_hash: Option<String>,
     pub remarks: Option<Bytes>,
     pub unk_0e: u8,
     pub capacity: u32,
@@ -173,6 +174,38 @@ impl Circle {
         self.members()
             .find(|(_, id)| *id == capcom_id)
             .map(|(i, _)| i)
+    }
+}
+
+/// A player leaving a circle: its index, the members left, and what happened to the circle.
+#[derive(Debug)]
+pub struct Leaving {
+    pub id: CircleId,
+    pub index: u8,
+    pub others: Vec<String>,
+    /// A departed quest's new leader (index, Capcom ID).
+    pub new_leader: Option<(u8, String)>,
+    /// The leader left before departure: the party is over (its other members are out of it).
+    pub broken: bool,
+}
+
+/// Why a quest can't be joined.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CircleRefusal {
+    AlreadyInOne,
+    Missing,
+    Full,
+    Departed,
+}
+
+impl CircleRefusal {
+    pub fn text(&self) -> Text {
+        match self {
+            CircleRefusal::AlreadyInOne | CircleRefusal::Missing | CircleRefusal::Departed => {
+                Text::QuestGone
+            }
+            CircleRefusal::Full => Text::QuestFull,
+        }
     }
 }
 
@@ -436,7 +469,7 @@ impl World {
         let circle = Circle {
             leader: capcom_id.to_owned(),
             slots,
-            password: new.password,
+            password_hash: new.password_hash,
             remarks: new.remarks,
             unk_0e: new.unk_0e,
             quest_id: new.quest_id,
@@ -477,6 +510,8 @@ impl World {
             return Vec::new();
         };
         circle.departed = true;
+        // Nobody joins a departed quest: its password goes.
+        circle.password_hash = None;
         let ready: Vec<(u8, String)> = circle
             .members()
             .filter(|(_, m)| circle.standby.iter().any(|s| s == m))
@@ -486,31 +521,100 @@ impl World {
         ready
     }
 
-    /// The player leaves its circle: a leader leaving ends it. Returns the circle left.
-    pub fn leave_circle(&mut self, capcom_id: &str) -> Option<CircleId> {
+    /// Whether the player is out hunting: in a quest that departed with them.
+    pub fn on_quest(&self, capcom_id: &str) -> bool {
+        self.circle_of(capcom_id)
+            .and_then(|id| self.circles.get(&id))
+            .is_some_and(|c| c.in_quest.iter().any(|m| m == capcom_id))
+    }
+
+    /// A quest's members: index, Capcom ID, name, ready or not.
+    pub fn circle_members(&self, id: CircleId) -> Vec<(u8, String, Bytes, bool)> {
+        let Some(circle) = self.circles.get(&id) else {
+            return Vec::new();
+        };
+        circle
+            .members()
+            .map(|(i, m)| {
+                let name = self
+                    .places
+                    .get(m)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                (i, m.to_owned(), name, circle.standby.iter().any(|s| s == m))
+            })
+            .collect()
+    }
+
+    /// The password hash of a quest that has one.
+    pub fn circle_password(&self, id: CircleId) -> Option<String> {
+        self.circles.get(&id)?.password_hash.clone()
+    }
+
+    /// Puts the player in a quest of its city (the password checked already): its index in the party.
+    pub fn join_circle(&mut self, capcom_id: &str, id: CircleId) -> Result<u8, CircleRefusal> {
+        if self.circle_of(capcom_id).is_some() {
+            return Err(CircleRefusal::AlreadyInOne);
+        }
+        let circle = self.circles.get_mut(&id).ok_or(CircleRefusal::Missing)?;
+        if circle.departed {
+            return Err(CircleRefusal::Departed);
+        }
+        let slot = circle
+            .slots
+            .iter()
+            .position(Option::is_none)
+            .ok_or(CircleRefusal::Full)?;
+        circle.slots[slot] = Some(capcom_id.to_owned());
+        self.places.get_mut(capcom_id).expect("in a city").circle = Some(id.1);
+        Ok(slot as u8 + 1)
+    }
+
+    /// The player leaves its circle. A leader leaving hands a departed quest to the next member, and breaks one not
+    /// departed yet (MH3SP's rules, M3 D7).
+    pub fn leave_circle(&mut self, capcom_id: &str) -> Option<Leaving> {
         let id = self.circle_of(capcom_id)?;
         self.places.get_mut(capcom_id).expect("in a circle").circle = None;
         let circle = self.circles.get_mut(&id)?;
+        let index = circle.index_of(capcom_id).unwrap_or(0);
+        for slot in circle
+            .slots
+            .iter_mut()
+            .filter(|s| s.as_deref() == Some(capcom_id))
+        {
+            *slot = None;
+        }
+        circle.standby.retain(|m| m != capcom_id);
+        circle.in_quest.retain(|m| m != capcom_id);
+        let others: Vec<String> = circle.members().map(|(_, m)| m.to_owned()).collect();
+        let mut leaving = Leaving {
+            id,
+            index,
+            others: others.clone(),
+            new_leader: None,
+            broken: false,
+        };
         if circle.leader == capcom_id {
-            let members: Vec<String> = circle.members().map(|(_, m)| m.to_owned()).collect();
-            self.circles.remove(&id);
-            for m in members {
-                if let Some(p) = self.places.get_mut(&m) {
-                    p.circle = None;
+            let next = circle.members().next().map(|(i, m)| (i, m.to_owned()));
+            match (circle.departed, next) {
+                (true, Some((i, m))) => {
+                    circle.leader = m.clone();
+                    leaving.new_leader = Some((i, m));
+                }
+                _ => {
+                    self.circles.remove(&id);
+                    for m in &others {
+                        if let Some(p) = self.places.get_mut(m) {
+                            p.circle = None;
+                        }
+                    }
+                    leaving.broken = true;
                 }
             }
-        } else {
-            for slot in circle
-                .slots
-                .iter_mut()
-                .filter(|s| s.as_deref() == Some(capcom_id))
-            {
-                *slot = None;
-            }
-            circle.standby.retain(|m| m != capcom_id);
-            circle.in_quest.retain(|m| m != capcom_id);
+        } else if others.is_empty() {
+            self.circles.remove(&id);
         }
-        Some(id)
+        Some(leaving)
     }
 
     /// A circle as lists show it (`CircleInfo`): an empty slot shows its index only.
@@ -523,10 +627,12 @@ impl World {
                 OptionalFields(vec![(1, Some(CIRCLE_CAPACITY)), (2, Some(0))]),
             );
         };
-        if let Some(password) = &circle.password {
+        if circle.password_hash.is_some() {
+            // The flag, and a placeholder where MH3SP put the password itself: it never leaves the server (M3 D9;
+            // whether the console needs field 0x04 at all is to test).
             info = info
                 .with(0x03, Item::Byte(1))
-                .with(0x04, Item::String(password.clone()));
+                .with(0x04, Item::String(Bytes::from_static(b"****")));
         }
         // Per player: Capcom ID at 0x10·i, name at 0x40 + 0x10·i, weapon type at 0x80 + i, a flag at 0x84 + i.
         let mut party = vec![0u8; 0x88];
@@ -776,7 +882,7 @@ mod tests {
             .create_city((1, 1, 1), "AAAAAA", OptionalFields::default())
             .unwrap();
         let new = || NewCircle {
-            password: None,
+            password_hash: None,
             remarks: None,
             unk_0e: 0,
             capacity: 4,

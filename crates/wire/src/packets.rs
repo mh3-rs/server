@@ -469,6 +469,8 @@ packets! {
     AnsUserSearchInfo = 0x66360200 { info: PatData, extra: OptionalFields }
     /// The console reporting an error (field 0x01: its code).
     NtcCollectionLog = 0x60501000 { log: PatData }
+    /// Never recorded: a party broken by its leader leaving before departure (MH3SP's layout: an unknown u32).
+    NtcCircleBreak = 0x65051000 { unk: u32 }
 }
 
 #[cfg(test)]

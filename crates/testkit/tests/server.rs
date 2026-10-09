@@ -199,9 +199,10 @@ fn assert_clean(scenario: &Path, reports: &[ConnectionReport]) {
 }
 
 /// Whole scenarios of the milestone in progress (M3) that replay cleanly already; replaced by `REACHED` once M3 is.
-const CLEAN_SO_FAR: [&str; 6] = [
+const CLEAN_SO_FAR: [&str; 7] = [
     "s04-city-join",
     "s04-city-join-2",
+    "s05-quest-party",
     "s06-disconnect",
     "s07-chat",
     "s08-friends",

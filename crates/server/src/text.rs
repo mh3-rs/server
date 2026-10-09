@@ -57,6 +57,9 @@ pub enum Text {
     CityFull,
     NoQuestSlot,
     UnknownCapcomId,
+    QuestGone,
+    QuestFull,
+    WrongPassword,
     // The town's NPCs (content binary 0x03): MH3SP's texts.
     /// Prices, normal or halved (during Jhen Mohran).
     ToolShop {
@@ -175,6 +178,10 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
         Text::CityFull => "<LF=8><BODY><CENTER>This city is full.<END>",
         Text::NoQuestSlot => "<LF=8><BODY><CENTER>No Quest Slot Available<END>",
         Text::UnknownCapcomId => "<LF=8><BODY><CENTER>Unknown Capcom ID.<END>",
+        Text::QuestGone => "<LF=8><BODY><CENTER>This quest can't be joined any more.<END>",
+        // MH3SP's texts.
+        Text::QuestFull => "<LF=8><BODY><CENTER>Quest is full!<END>",
+        Text::WrongPassword => "<LF=8><BODY><CENTER>Wrong Password!<END>",
         Text::ToolShop { sale: true } | Text::MaterialShop { sale: true } => "Half-off sale!",
         Text::ToolShop { sale: false } | Text::MaterialShop { sale: false } => "Prices are normal.",
         Text::TradingPostOpen => "The Trading Post is open!",

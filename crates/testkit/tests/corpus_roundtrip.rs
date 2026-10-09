@@ -174,7 +174,7 @@ fn typed_packets_reencode() {
             .join("\n")
     );
     if !scenarios().is_empty() {
-        let never_recorded = ["ReqMaintenance", "AnsMaintenance"];
+        let never_recorded = ["ReqMaintenance", "AnsMaintenance", "NtcCircleBreak"];
         let missing: Vec<_> = TYPED
             .iter()
             .map(|(_, name)| *name)

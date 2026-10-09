@@ -96,6 +96,10 @@ impl Fmp {
 
     /// Messages, friends and the black list (they need the database); `None` for anything else.
     async fn social(&mut self, shared: &Shared, req: &Frame) -> Option<Handled> {
+        if req.id == ReqCircleCreate::ID || req.id == ReqCircleJoin::ID {
+            let (session, _) = self.login.as_ref().expect("logged in");
+            return Some(quests(shared, session, req).await);
+        }
         let ids = [
             ReqTell::ID,
             ReqFriendList::ID,
@@ -331,8 +335,18 @@ impl Fmp {
                 reply(seq, &AnsUserStatusSet {})
             }
             ReqUserBinaryNotice::ID => {
-                // Tells the layer the profile changed (to the others: M3).
-                ReqUserBinaryNotice::decode(p)?;
+                // The profile changed: the others at the player's place get the part named.
+                let r = ReqUserBinaryNotice::decode(p)?;
+                let me = capcom_id(session);
+                let start = (r.offset as usize).min(PROFILE_SIZE);
+                let end = start.saturating_add(r.size as usize).min(PROFILE_SIZE);
+                let ntc = NtcUserBinaryNotice {
+                    unk: r.unk,
+                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                    offset: r.offset,
+                    data: Bytes::copy_from_slice(&session.profile[start..end]),
+                };
+                relay(shared, me, &ntc, seq)?;
                 reply(seq, &AnsUserBinaryNotice {})
             }
             ReqLayerChildListHead::ID => {
@@ -608,45 +622,6 @@ impl Fmp {
                     },
                 )
             }
-            ReqCircleCreate::ID => {
-                let r = ReqCircleCreate::decode(p)?;
-                let string = |field| match r.info.get(field) {
-                    Some(Item::String(s)) => Some(s.clone()),
-                    _ => None,
-                };
-                let new = NewCircle {
-                    password: string(0x04),
-                    remarks: string(0x06),
-                    unk_0e: match r.info.get(0x0e) {
-                        Some(Item::Byte(b)) => *b,
-                        _ => 0,
-                    },
-                    capacity: match r.info.get(0x09) {
-                        Some(Item::Long(c)) => *c,
-                        _ => world::CIRCLE_CAPACITY,
-                    },
-                    quest_id: r
-                        .extra
-                        .0
-                        .iter()
-                        .find(|(f, _)| *f == 0x02)
-                        .and_then(|(_, v)| *v)
-                        .unwrap_or(0),
-                };
-                let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
-                if world.circle_of(me).is_some() {
-                    return Err(Fault::Client(anyhow!("a second quest while in one")));
-                }
-                let Some(id) = world.create_circle(me, new) else {
-                    return alert(AnsCircleCreate::ID, seq, Text::NoQuestSlot);
-                };
-                info!(circle = id.1, "created quest");
-                let mut out = Vec::new();
-                list_change(shared, &world, me, id, seq, &mut out)?;
-                out.push(frame(seq, &AnsCircleCreate { circle: id.1 })?);
-                Ok(out)
-            }
             ReqCircleMatchOptionSet::ID => {
                 let r = ReqCircleMatchOptionSet::decode(p)?;
                 let me = capcom_id(session);
@@ -800,12 +775,77 @@ impl Fmp {
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let mut out = Vec::new();
-                if let Some(id) = world.leave_circle(me) {
-                    info!(circle = id.1, "left quest");
-                    list_change(shared, &world, me, id, seq, &mut out)?;
-                }
+                quit_quest(shared, &mut world, me, &session.name, seq, &mut out)?;
                 out.push(frame(seq, &AnsCircleLeave { circle: r.circle })?);
                 Ok(out)
+            }
+            ReqCircleUserList::ID => {
+                // The party: per member, ready or not, index, Capcom ID, name.
+                ReqCircleUserList::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let me = capcom_id(session);
+                let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                let users = world.circle_members(id);
+                drop(world);
+                let users = users
+                    .into_iter()
+                    .map(|(index, id, name, ready)| {
+                        PatData::new()
+                            .with(0x03, Item::Byte(u8::from(ready)))
+                            .with(0x04, Item::Byte(index))
+                            .with(0x05, Item::String(id.into()))
+                            .with(0x06, Item::String(name))
+                    })
+                    .collect();
+                reply(seq, &AnsCircleUserList { users })
+            }
+            ReqCircleHost::ID => {
+                let r = ReqCircleHost::decode(p)?;
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
+                let (index, id, name) = world
+                    .circle_members((city, r.circle))
+                    .into_iter()
+                    .find(|(_, id, _, _)| {
+                        world
+                            .circle((city, r.circle))
+                            .is_some_and(|c| &c.leader == id)
+                    })
+                    .map(|(i, id, name, _)| (i, id, name))
+                    .ok_or_else(|| Fault::Client(anyhow!("no quest {}", r.circle)))?;
+                reply(
+                    seq,
+                    &AnsCircleHost {
+                        circle: r.circle,
+                        leader: index,
+                        capcom_id: id.into(),
+                        name,
+                    },
+                )
+            }
+            NtcCircleBinary2::ID => {
+                // Party data for one member: to them only, the sender filled in.
+                let r = NtcCircleBinary2::decode(p)?;
+                let me = capcom_id(session);
+                let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
+                let world = shared.world.lock().unwrap();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                let in_party = world
+                    .circle((city, r.circle))
+                    .is_some_and(|c| c.index_of(&partner).is_some());
+                drop(world);
+                if in_party {
+                    let mut data = Vec::new();
+                    data.put_pat_data(&sender(me, &session.name, false))?;
+                    data.extend_from_slice(without_sender(&r.data.0)?);
+                    let ntc = NtcCircleBinary2 {
+                        circle: r.circle,
+                        capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                        data: Rest(data.into()),
+                    };
+                    shared.players.send(&partner, frame(seq, &ntc)?);
+                }
+                Ok(vec![])
             }
             NtcLayerChat::ID => {
                 // Chat: to the others at the sender's place, with the sender filled in and the place's colour
@@ -978,6 +1018,14 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     if !world.placed_by(me, conn) {
         return;
     }
+    // Leaving a city (or the game) means leaving its quest first; the requester's own notices are of no use now.
+    let mut ignored = Vec::new();
+    let in_city = world.city_of(me).is_some();
+    let leaves_city =
+        matches!(how, Depart::World) || world.place(me).is_some_and(|p| p.city.is_some());
+    if in_city && leaves_city {
+        let _ = quit_quest(shared, world, me, &Bytes::new(), 0, &mut ignored);
+    }
     let others = world.others(me);
     let city = world.city_of(me);
     let was_host = city.is_some_and(|id| world.city_host(id) == Some(me));
@@ -1063,6 +1111,7 @@ fn found_users(shared: &Shared, found: &[String]) -> Vec<(PatData, OptionalField
     found
         .iter()
         .filter_map(|id| {
+            let on_quest = world.on_quest(id);
             let place = world.place(id)?;
             let record = PatData::new()
                 .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
@@ -1075,7 +1124,7 @@ fn found_users(shared: &Shared, found: &[String]) -> Vec<(PatData, OptionalField
                         place.city,
                     ))),
                 );
-            let in_quest = u32::from(place.circle.is_some());
+            let in_quest = u32::from(on_quest);
             let weapon = u32::from(place.profile[5]);
             let hr = u32::from(u16::from_be_bytes([place.profile[0], place.profile[1]]));
             Some((
@@ -1179,6 +1228,190 @@ fn binary(shared: &Shared, kind: u8) -> Result<Binary, Fault> {
     content::binary(kind, &ctx)
         .map_err(Fault::Server)?
         .ok_or_else(|| Fault::Client(anyhow!("content type {kind:#x} unknown")))
+}
+
+/// Creating and joining quests (async: a quest password is hashed and checked with argon2, off the async threads).
+async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
+    let (seq, p) = (req.seq, &req.payload);
+    let me = capcom_id(session);
+    match req.id {
+        ReqCircleCreate::ID => {
+            let r = ReqCircleCreate::decode(p)?;
+            let string = |field| match r.info.get(field) {
+                Some(Item::String(s)) => Some(s.clone()),
+                _ => None,
+            };
+            let password_hash = match string(0x04).filter(|p| !p.is_empty()) {
+                Some(password) => Some(hash_password(password).await?),
+                None => None,
+            };
+            let new = NewCircle {
+                password_hash,
+                remarks: string(0x06),
+                unk_0e: match r.info.get(0x0e) {
+                    Some(Item::Byte(b)) => *b,
+                    _ => 0,
+                },
+                capacity: match r.info.get(0x09) {
+                    Some(Item::Long(c)) => *c,
+                    _ => world::CIRCLE_CAPACITY,
+                },
+                quest_id: r
+                    .extra
+                    .0
+                    .iter()
+                    .find(|(f, _)| *f == 0x02)
+                    .and_then(|(_, v)| *v)
+                    .unwrap_or(0),
+            };
+            let mut world = shared.world.lock().unwrap();
+            if world.circle_of(me).is_some() {
+                return Err(Fault::Client(anyhow!("a second quest while in one")));
+            }
+            let Some(id) = world.create_circle(me, new) else {
+                return alert(AnsCircleCreate::ID, seq, Text::NoQuestSlot);
+            };
+            info!(circle = id.1, "created quest");
+            let mut out = Vec::new();
+            list_change(shared, &world, me, id, seq, &mut out)?;
+            out.push(frame(seq, &AnsCircleCreate { circle: id.1 })?);
+            Ok(out)
+        }
+        ReqCircleJoin::ID => {
+            let r = ReqCircleJoin::decode(p)?;
+            let city = shared
+                .world
+                .lock()
+                .unwrap()
+                .city_of(me)
+                .ok_or_else(not_in_city)?;
+            let id = (city, r.circle);
+            let hash = shared.world.lock().unwrap().circle_password(id);
+            if let Some(hash) = hash {
+                let typed = match r.info.get(0x04) {
+                    Some(Item::String(s)) => s.clone(),
+                    _ => Bytes::new(),
+                };
+                if !check_password(typed, hash).await? {
+                    return alert(AnsCircleJoin::ID, seq, Text::WrongPassword);
+                }
+            }
+            let mut world = shared.world.lock().unwrap();
+            let index = match world.join_circle(me, id) {
+                Ok(index) => index,
+                Err(refusal) => return alert(AnsCircleJoin::ID, seq, refusal.text()),
+            };
+            info!(circle = id.1, "joined quest");
+            // The others in the party learn of it (state 0: MH3SP's; 2 would count something on the console).
+            let ntc = NtcCircleJoin {
+                circle: id.1,
+                capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                name: session.name.clone(),
+                player: index,
+                state: 0,
+            };
+            let ntc = frame(seq, &ntc)?;
+            for (_, other) in world
+                .circle(id)
+                .map(|c| {
+                    c.members()
+                        .filter(|(_, m)| *m != me)
+                        .map(|(i, m)| (i, m.to_owned()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+            {
+                shared.players.send(&other, ntc.clone());
+            }
+            reply(
+                seq,
+                &AnsCircleJoin {
+                    circle: id.1,
+                    player: index,
+                },
+            )
+        }
+        id => Err(unexpected(id)),
+    }
+}
+
+async fn hash_password(password: Bytes) -> Result<String, Fault> {
+    tokio::task::spawn_blocking(move || {
+        use argon2::password_hash::PasswordHasher;
+        argon2::Argon2::default()
+            .hash_password(&password)
+            .map(|h| h.to_string())
+    })
+    .await
+    .map_err(|e| Fault::Server(e.into()))?
+    .map_err(|e| Fault::Server(anyhow!("argon2: {e}")))
+}
+
+async fn check_password(typed: Bytes, hash: String) -> Result<bool, Fault> {
+    tokio::task::spawn_blocking(move || {
+        use argon2::password_hash::PasswordVerifier;
+        argon2::Argon2::default()
+            .verify_password(&typed, hash.as_str())
+            .is_ok()
+    })
+    .await
+    .map_err(|e| Fault::Server(e.into()))
+}
+
+/// The player leaves its quest, if in one: the city sees the quest change; the other members learn who left
+/// (`NtcCircleLeave`), and the new leader of a departed quest (`NtcCircleHost`) or that the party broke
+/// (`NtcCircleBreak`).
+fn quit_quest(
+    shared: &Shared,
+    world: &mut World,
+    me: &str,
+    _name: &Bytes,
+    seq: u16,
+    out: &mut Vec<Frame>,
+) -> Result<(), Fault> {
+    let Some(leaving) = world.leave_circle(me) else {
+        return Ok(());
+    };
+    info!(circle = leaving.id.1, "left quest");
+    let left = frame(
+        seq,
+        &NtcCircleLeave {
+            circle: leaving.id.1,
+            capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+            player: leaving.index,
+            unk: 0,
+        },
+    )?;
+    for other in &leaving.others {
+        shared.players.send(other, left.clone());
+    }
+    if let Some((index, leader)) = &leaving.new_leader {
+        let name = world
+            .players_under(leaving.id.0.0, Some(leaving.id.0.1), Some(leaving.id.0.2))
+            .into_iter()
+            .find(|(id, _)| id == leader)
+            .map(|(_, p)| p.name.clone())
+            .unwrap_or_default();
+        let host = frame(
+            seq,
+            &NtcCircleHost {
+                unk: 0,
+                leader: *index,
+                capcom_id: leader.clone().into(),
+                name,
+            },
+        )?;
+        for other in &leaving.others {
+            shared.players.send(other, host.clone());
+        }
+    }
+    if leaving.broken {
+        let broken = frame(seq, &NtcCircleBreak { unk: 0 })?;
+        for other in &leaving.others {
+            shared.players.send(other, broken.clone());
+        }
+    }
+    list_change(shared, world, me, leaving.id, seq, out)
 }
 
 /// A text message's sender info: the console's fields with the sender filled in, and an unknown 20.
