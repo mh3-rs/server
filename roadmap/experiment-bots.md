@@ -1,6 +1,6 @@
 # Experiment: quest bots
 
-**Status: sprint 1 (A1–A4) done (2026-10-10)**; sprints 2 (A5–A8) and 3 (B) take their part when they start.
+**Status: sprint 1 (A1–A4) done (2026-10-10); sprint 2 (A5–A8) draft**; sprint 3 (part B, the companion) after it.
 
 A player alone in a quest can be joined by a bot run by the server: it follows the player, tries not to die, and
 attacks what the player attacks, as the companions of the newer games do. Bots exist for quest parties only: never
@@ -151,6 +151,76 @@ player's), chain attacks into combos, dodge what targets it. Its own sprint, onc
 
 - Armor sets: a few, matched to the player's level (neither much lower nor much higher).
 - How a player asks for one: the website, or chat commands (`/bot`, global roadmap's future steps).
+
+### Research for A5–A8 and part B (2026-10-10)
+
+Six reports, outside the repositories (they quote the decomp and the captures at length): `lab/research/sprint2/`:
+`attacks.md` and `damage.md` (the decomp), `captures/report.md` (the long hunt and the two Great Jaggi hunts, its
+scripts beside it), `gamedata/report.md` (the disc, its scripts beside it), `gameplay.md` (Tri's rules, weapons,
+armour, monsters, from the web), `ai.md` (companion AI, the state of the art). Decomp paths are `lab/mhtri-decomp`'s;
+"recorded" means seen in the captures. Read in code or recorded unless marked.
+
+**For A5–A8 (the body):**
+- **An attack is an act the owner replays** (`Pl_net_recv_state`, `pl_frame_sync.cpp:606`; `fn_8025F088`,
+  `pl_act_step.cpp:3272`): a remote hunter's copy plays the act's motion every frame and pushes its attack entries
+  into the shared hit list, so the hitbox and its timing come from the motion on the owner's console. No combo
+  chains on a copy: each swing is its own kind 1, and a new act cuts the previous one. No hit confirmation exists.
+- **What the damage reads**: the weapon class, weapon, armour and skills from the bot's PAT profile (byte 0x05 the
+  class: 0 GS, 1 SnS, 2 hammer, 3 lance, 4–6 bowguns, 7 LS, 8 switch axe); from every kind 1 the hunter's attack value
+  (0x34, f32, trusted up to 700: an anti-cheat hole for M9) and sharpness colour (0x30). 0x26 is the act's random roll
+  (crits, status procs, `pl_act.cpp:7646`): it must stay random.
+- **Sword and shield, recorded** (both hunters, the starter weapon): 22 three-slash combos `4/0` +0.50 s `4/1`
+  +0.40 s `4/2` +1.97 s `0/0`; a single `4/0` back to `0/0` in 1.10 s; `4/15` an ender; the approach `1/0` (moving,
+  drawn) 0.40 s before `4/0`; draw `0/1`, sheathe `0/3`, roll `0/8`, guard 5/x, potion `0/53` then `0/57`. A combo
+  moves the hunter 50–90 units forward. About 1.5 HP off the Jaggi (2160 HP) per act with the starter. Other weapons'
+  act numbers differ (one number, a different move per weapon; no named table in the decomp): a capture per weapon.
+  Bowgun shots: kind 9 carries the aim; whether bullets travel is a capture.
+- **A monster's state** (group 5 kind 1, 108 bytes, on action changes only, 1.7–3.5 s apart): action 0x2A/0x2B
+  (07/xx attacks, only while it targets a hunter), target mode 0x32/0x33 (1/2 a hunter), **targeted slot 0x35** (64
+  of 64 recorded states), target point 0x18, HP 0x48, eight part values 0x56 (an HP drop equals theirs). Reach and
+  damage never travel (per-species tables in `em_data.rso`, not decompiled).
+- **A hit taken, recorded**: lands 0.6–1.1 s after the 07/xx state, on the targeted hunter, the target point 0–360
+  units from it; the Great Jaggi's 07/03 took 17–24, 07/01 and 07/02 30, 07/05 24, 07/00 49 (of 100, starter
+  armour). Reactions 6/2 (knocked back, 1.5 s), 6/3 (down, 1.7 s), 6/26 (big, 2.7 s), 6/0 and 6/1 (flinch); param 12.
+  Only the victim's console changes its HP (`Pl_master_ck`); nothing checks a peer's HP (no kick for a lie). The
+  damage formula (defence, guard, elements, statuses) isn't decompiled.
+- **Faint, recorded**: the victim's state 8/0 HP 0 (param 32) and family 13 kind 6 from its slot; the host answers
+  13/7 naming it, and every console takes the faint penalty off the quest's reward on that 13/7
+  (`quest_reward_faint_penalty`, `quest_entry.cpp:1898`); reward 0 fails the quest (usually 3 faints,
+  `penalty_per_cart` in the event files). Positions at 2 Hz with HP 0, kind 3 to area 0 with 0x1F = 2 at +10 s, idle
+  at the camp with full HP at +17 s. A carted owner hands its monster on if a hunter is in the area.
+- **The end**: the host confirms the objective (13/0x16) and the quest's end (13/0x19, a state byte: 3 complete, 5
+  failed, a guess); abandoning is state 9/4, then `ReqCircleMatchEnd`, `ReqCircleMatchOptionSet` 01030100,
+  `ReqCircleLeave` (the others follow 5–18 s later, with no 9/4). Nothing found waits on every member; the city's P2P
+  session stays up. A completed quest with two consoles isn't recorded.
+- **Party heals** heal each console's own hunter only: the bot restores its own HP when a hunter near it uses one
+  (which acts: a capture).
+- Family 13 seen besides: kinds 10, 11 at the quest's start, 1 and 12 around the supply box, 19 (a subquest?).
+
+**For part B (the behaviour, sprint 3):**
+- **Tri's own companion**: Cha-Cha's AI (`src/ai/ai_npc.cpp`) is a hierarchical state machine: behaviours by distance
+  band, rings around its target, frame timers (a 450-frame approach, a 90-frame guard within 2048 units): constants
+  to borrow. The monsters' AI (`src/enemy/emNNN_ai.cpp`) holds their attacks' reach and timing.
+- **Shipped companions** (`ai.md`): state machines (Ellie, Left 4 Dead's bots with their reason strings, Cha-Cha),
+  utility scoring only for real choices (where to stand, which attack); positions in a ring around the player or
+  slots around the target, never in front, never in the player's way; hysteresis (two thresholds per band: the
+  follow's oscillation); jitter rather than added delay (our 0.5–1 s already exceeds human reaction); deliberately
+  less effective than a player and with switches for "spotlight" actions (Wilds' support hunters). Learned or LLM
+  control doesn't fit (no simulator, seconds per decision); an LLM could turn chat into commands. The crates are
+  Bevy-bound (`big-brain`) or more code than a `match` (`bonsai-bt`). Testing: a pure `tick(world, now, events) ->
+  actions`, two- or three-character scenarios, the captures replayed with invariants.
+- **Tri's rules** (`gameplay.md`): survival before damage (a faint costs the party); weapons don't hurt allies but
+  flinch or launch them (the trips that cart players): never swing with the player in the arc; SnS or lance suit a
+  bot (short, safe), hammer and great sword launch allies; online HR bands (★1 HR 1–8 … ★6 HR 51+) and the armour
+  sets of each, for gear matched to the player; fights in water need depth; Lifepowder, traps, capture (killing a
+  capture target fails it).
+- **The game's data** (`gamedata/report.md`, the PAL disc, `nodtool extract`): not MT Framework, nothing compressed.
+  Every area's **ground and wall collision** (`15/mNNd/*/…-atari.sch`, a simple format, decoded, its heights matching
+  recorded positions: navigation becomes possible); each area's start point; monsters' base HP and weapons' raw in
+  plain tables by export name. Hitzones, attack power per attack and armour are behind pointers (weeks, uncertain);
+  timing and hitboxes are code; no table of exits (learn them from the hunters' area changes). `mh3-data` (MIT code,
+  Capcom's numbers) has Tri's weapons, armour, HP, hitzones, motion values. Either would be read from a folder given
+  at startup, never this repository.
 
 ## Phases
 
@@ -395,3 +465,88 @@ answers; the bot as a PAT client of our own server (before sprint 3); a hidden r
 - **Next time:** read the capture before redesigning a behaviour; write the behaviour's rule down and agree it
   before coding it; check the decomp's verdict before spending a console run on an experiment.
 
+## Sprint 2: A5–A8 (draft)
+
+**Status: draft (2026-10-10)**
+
+Part A's second half, as planned: the bot attacks, takes the monster's hits, faints and carts, and leaves with the
+party, by the game's rules; every action still commanded by hand (typed into the brain), no intelligence. The
+companion (part B) is sprint 3: its research is kept above ("Research for A5–A8 and part B"). The facts this sprint
+builds on: the same section, "For A5–A8".
+
+### Decisions
+
+- **The server plays the game's rules, the brain only the strategy** (2026-10-11; architecture decision 11). The
+  server knows how a move plays out on the wire (an attack's acts and their recorded timings), applies the hits the
+  bot takes, keeps its HP, and faints and carts it, as it already walks it (`Body`) and hands monsters on (A4). The
+  brain names moves (`Attack { bot, combo }`; typed `attack <bot> [1|3]`) and decides when. Rejected: the brain
+  sending and timing acts (the game's mechanics on both sides of the tunnel).
+- **A faint costs the party** (2026-10-11): the bot sends 13/6 and the host's 13/7 takes the penalty off the reward,
+  as for a hunter. A bot is a large advantage; it can have a price. Rejected: a free cart (no 13/6).
+- **Recorded numbers live in the code** (2026-10-11): the damage table and the combo timings are our measurements,
+  like the templates in `body.rs`. The rule against game data is about not copying other projects' or the internet's
+  content into the repository (`mh3-data`, the reports' sources).
+- **The bot's HP goes to the brain** (2026-10-11): a strategy needs it (back off, sprint 3). The server sends the
+  bot's HP when it changes, its faint and its return to the camp.
+- **The bot as a client of our own server is its own sprint** (2026-10-11), after this one, starting by weighing
+  whether it's worth it: the bot going through the normal handlers (every check and cleanup covers it, no
+  duplicated logic or incoherent state) against its cost (a session with no connection, the console's order of
+  requests in the bot).
+
+### Open questions
+
+Most consequential first; each with its options and a recommendation.
+
+**1. Which way an attack faces.**
+- (a) **The server faces the large monster in the bot's area** (its last state's position), straight ahead if none.
+- (b) The command carries a position to face; the server forwards the monsters' states to the brain (the tunnel's
+  planned "monster" event).
+- Recommended **(a)** for this sprint, and it fits the rule above (facing the monster is how a swing is played; which
+  monster to attack is strategy, sprint 3 adds it to the command). By hand in the lab, the operator walks the bot next
+  to the monster (`move`), then types `attack`.
+
+**2. The damage it takes (A6).**
+- (a) **The recorded rule**: a large monster's 07/xx state naming the bot's slot (0x35) hits it 0.8 s later if it is
+  still within ~350 units of the target point, for that action's recorded damage (the Great Jaggi's table; a
+  per-species default for an action not recorded), with the reaction act by damage (6/0 under 10, 6/2 under 30, 6/26
+  above). Walking out in time (`move`) is a dodge that works.
+- (b) The disc's attack power (`em_data`: 1–3 weeks, uncertain) and a defence formula (unverified for Tri).
+- (c) Never hurt, or a fixed fraction a hit.
+- Recommended **(a)**, the Jaggi first (the only one recorded); a capture per monster as we play them; (b) if M9
+  needs the same numbers. Small monsters still can't hurt it (local to each console).
+
+**3. Its equipment.** The owner's damage reads the bot's profile and its kind 1's 0x34 and 0x30.
+- (a) **The starter, as today**: SnS (class 1), the recorded starter weapon and armour, attack 60.0 and sharpness 2
+  (recorded).
+- (b) Gear matched to the player: sprint 3 (the game's numbers from a data folder, part B's research).
+- Recommended **(a)**.
+
+**4. Leaving (A8).**
+- Abandon: the existing path (a party with no hunter takes its bots, sprint 1). Completion and failure (the host's
+  13/0x19): the bot leaves with the party the same way.
+- Recommended: no new code until a capture of a quest completed with the bot shows a console waiting on it (the
+  decomp finds nothing that would); then the bot sends 9/4 and the three requests as a hunter does.
+
+## Tests (sprint 2)
+
+- Body (pure, from recorded messages): `attack` comes out as the recorded acts with their timings, facing the
+  monster; a 07/xx naming the bot hits it inside the radius and misses outside, 0.8 s later; HP, the reaction act;
+  the faint (8/0, 13/6), the cart at +10 s, full HP at +17 s.
+- Brain: `attack` typed becomes the tunnel's message (the existing typed-command test); the tunnel's new messages
+  round-trip (the bot's HP, faint, return).
+- On consoles, a Great Jaggi hunt with a bot, by hand: its combos lower the Jaggi's HP (in the owner's state); it
+  takes hits standing in front, misses them when walked out; it faints and carts (the penalty taken); a quest
+  completed and one abandoned with it.
+
+## Not in this sprint
+
+- The bot as a client of our own server (its own sprint, next).
+- Part B (sprint 3): the companion's behaviour, gear matched to the player, other weapons, navigation, potions and
+  heals, chat.
+
+## Done when (sprint 2)
+
+1. On consoles, a bot's typed combos take HP off a large monster it doesn't own.
+2. It takes the monster's hits by the agreed rule, faints and carts as a hunter does, and the consoles show it.
+3. It leaves with the party after a completed quest and an abandoned one, nothing hung.
+4. `scripts/ci-tests.sh` and CI are green.

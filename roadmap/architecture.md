@@ -211,7 +211,8 @@ Found while building the corpus and the replay harness. Each one is a place wher
 11. **Bots: a body in the server, a brain in its own process** ([`experiment-bots.md`](experiment-bots.md)). A quest
     bot is a hunter to the consoles: the server is its body (its party membership in memory, its NAT negotiation, GT2
     and session with the consoles, its messages on the wire); `mh3sp-brain` decides what it does and never touches the
-    game's protocol (its own repository, `../brain`; the messages in `../tunnel`, which both pin by commit). They talk
+    game's protocol. The server applies the game's rules to the bot (how a move plays out, the hits it takes, its HP,
+    its faint and cart, monster handovers); the brain is only strategy: which move, where, when (its own repository, `../brain`; the messages in `../tunnel`, which both pin by commit). They talk
     over one TCP connection kept open for every bot (localhost, `BOT_PORT`; no setting, no
     bots), in length-prefixed binary frames: commands (create, leave, behaviour) and the party's events (quests,
     hunters, monsters, area changes) from the server, actions (move, change area, attack) from the brain. A bot is
