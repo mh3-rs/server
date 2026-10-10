@@ -1,6 +1,6 @@
 # Experiment: quest bots
 
-**Status: sprint 1 (A1–A4) done (2026-10-10); sprint 2 (A5–A8) draft**; sprint 3 (part B, the companion) after it.
+**Status: sprint 1 (A1–A4) done (2026-10-10); sprint 2 (A5–A8) agreed**; sprint 3 (part B, the companion) after it.
 
 A player alone in a quest can be joined by a bot run by the server: it follows the player, tries not to die, and
 attacks what the player attacks, as the companions of the newer games do. Bots exist for quest parties only: never
@@ -465,9 +465,9 @@ answers; the bot as a PAT client of our own server (before sprint 3); a hidden r
 - **Next time:** read the capture before redesigning a behaviour; write the behaviour's rule down and agree it
   before coding it; check the decomp's verdict before spending a console run on an experiment.
 
-## Sprint 2: A5–A8 (draft)
+## Sprint 2: A5–A8
 
-**Status: draft (2026-10-10)**
+**Status: agreed (2026-10-11)**
 
 Part A's second half, as planned: the bot attacks, takes the monster's hits, faints and carts, and leaves with the
 party, by the game's rules; every action still commanded by hand (typed into the brain), no intelligence. The
@@ -493,39 +493,22 @@ builds on: the same section, "For A5–A8".
   duplicated logic or incoherent state) against its cost (a session with no connection, the console's order of
   requests in the bot).
 
-### Open questions
-
-Most consequential first; each with its options and a recommendation.
-
-**1. Which way an attack faces.**
-- (a) **The server faces the large monster in the bot's area** (its last state's position), straight ahead if none.
-- (b) The command carries a position to face; the server forwards the monsters' states to the brain (the tunnel's
-  planned "monster" event).
-- Recommended **(a)** for this sprint, and it fits the rule above (facing the monster is how a swing is played; which
-  monster to attack is strategy, sprint 3 adds it to the command). By hand in the lab, the operator walks the bot next
-  to the monster (`move`), then types `attack`.
-
-**2. The damage it takes (A6).**
-- (a) **The recorded rule**: a large monster's 07/xx state naming the bot's slot (0x35) hits it 0.8 s later if it is
-  still within ~350 units of the target point, for that action's recorded damage (the Great Jaggi's table; a
-  per-species default for an action not recorded), with the reaction act by damage (6/0 under 10, 6/2 under 30, 6/26
-  above). Walking out in time (`move`) is a dodge that works.
-- (b) The disc's attack power (`em_data`: 1–3 weeks, uncertain) and a defence formula (unverified for Tri).
-- (c) Never hurt, or a fixed fraction a hit.
-- Recommended **(a)**, the Jaggi first (the only one recorded); a capture per monster as we play them; (b) if M9
-  needs the same numbers. Small monsters still can't hurt it (local to each console).
-
-**3. Its equipment.** The owner's damage reads the bot's profile and its kind 1's 0x34 and 0x30.
-- (a) **The starter, as today**: SnS (class 1), the recorded starter weapon and armour, attack 60.0 and sharpness 2
-  (recorded).
-- (b) Gear matched to the player: sprint 3 (the game's numbers from a data folder, part B's research).
-- Recommended **(a)**.
-
-**4. Leaving (A8).**
-- Abandon: the existing path (a party with no hunter takes its bots, sprint 1). Completion and failure (the host's
-  13/0x19): the bot leaves with the party the same way.
-- Recommended: no new code until a capture of a quest completed with the bot shows a console waiting on it (the
-  decomp finds nothing that would); then the bot sends 9/4 and the three requests as a hunter does.
+- **An attack faces the large monster in the bot's area** (2026-10-11): its last state's position, straight ahead
+  if there is none. The target is nearly always that monster; which monster to attack, when there's a choice, is
+  strategy and joins the command in sprint 3. Rejected: a position in the command and the monsters' states sent to
+  the brain now (sprint 3 adds them when the strategy needs them). In the lab the operator walks the bot to the
+  monster (`move`), then types `attack`.
+- **The damage it takes: the recorded rule** (2026-10-11): a large monster's 07/xx state naming the bot's slot (0x35)
+  hits it 0.8 s later if it is still within ~350 units of the target point, for that action's recorded damage (the
+  Great Jaggi's table first; a per-species default for an action not recorded, a capture per monster as we play
+  them), with the reaction act by damage (6/0 under 10, 6/2 under 30, 6/26 above). Walking out in time is a dodge
+  that works. Small monsters can't hurt it (local to each console). Rejected: the disc's attack power (1–3 weeks,
+  uncertain; reconsidered if M9 needs it), never hurt or a fixed fraction (dishonest to the HP bar).
+- **The starter gear, for now** (2026-10-11): SnS (class 1), the recorded starter weapon and armour, attack 60.0 and
+  sharpness 2. A few sets for higher levels later (sprint 3 or after). Rejected for now: gear matched to the player.
+- **Leaving is already handled** (2026-10-11): an abandon takes the bots with the party (sprint 1). Only a quest's
+  end (completed, failed: the host's 13/0x19) is to check in the lab; code only if a console waits on the bot then
+  (it would send 9/4 and the three requests as a hunter does).
 
 ## Tests (sprint 2)
 
@@ -548,5 +531,5 @@ Most consequential first; each with its options and a recommendation.
 
 1. On consoles, a bot's typed combos take HP off a large monster it doesn't own.
 2. It takes the monster's hits by the agreed rule, faints and carts as a hunter does, and the consoles show it.
-3. It leaves with the party after a completed quest and an abandoned one, nothing hung.
+3. A quest completed and one abandoned with the bot end for everyone, nothing hung.
 4. `scripts/ci-tests.sh` and CI are green.
