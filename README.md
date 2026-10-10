@@ -1,8 +1,8 @@
 # mh3sp
 
 A server for *Monster Hunter Tri*'s online mode (Wii), in Rust: login, world servers, gates, cities, quests, chat,
-friends, NAT negotiation and a relay for consoles that can't connect directly. The plan and every decision are in
-[`roadmap/`](roadmap/).
+friends, NAT negotiation and a relay for consoles that can't connect directly. The active plans are in
+[`roadmap/`](roadmap/); the lasting decisions in the `docs` repository.
 
 ## Running it
 
@@ -85,3 +85,7 @@ thousand proxies.
 to an MH3SP checkout's own generator: `tools/reference-content.py <checkout> <out>` (Python 2), then
 `REFERENCE_DIR=<out> CONTENT_DIR=<checkout> cargo test -p server --lib reference`. The working rules are in
 [`CLAUDE.md`](CLAUDE.md).
+
+## License
+
+AGPL-3.0-or-later: [`LICENSE`](LICENSE).

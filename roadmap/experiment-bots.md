@@ -5,9 +5,8 @@
 A player alone in a quest can be joined by a bot run by the server: it follows the player, tries not to die, and
 attacks what the player attacks, as the companions of the newer games do. Bots exist for quest parties only: never
 in world servers or gates, never walking in a city; in the city only as the party's P2P session needs (a place among
-its 4). This repository keeps its decisions in `roadmap/` (lasting ones in
-`architecture.md`). The end-to-end runner is paused (`experiment-e2e.md`), so each step here is checked on consoles
-by hand, like the usual lab runs.
+its 4). Its decisions are kept here (lasting ones in `../docs/architecture.md`). The end-to-end runner was dropped
+(review D3), so each step here is checked on consoles by hand, like the usual lab runs.
 
 ## What exists
 

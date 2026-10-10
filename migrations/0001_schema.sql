@@ -2,7 +2,7 @@
 --
 -- Before 1.0.0 this is the only migration and it is rewritten in place: any change means resetting the database
 -- (`scripts/dev.sh --reset`). From 1.0.0 on, migrations only go forward. The reasoning behind each table is in
--- roadmap/M1 schema.md.
+-- ../docs/schema.md.
 --
 -- Conventions:
 -- - STRICT tables: SQLite enforces the declared column types.

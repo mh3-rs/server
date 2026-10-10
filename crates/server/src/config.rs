@@ -51,7 +51,7 @@ pub struct Config {
     pub content_dir: PathBuf,
     /// Where the quest bots' brain connects (localhost only); none: no bots.
     pub bot_port: Option<u16>,
-    /// Give consoles an encryption key at login (`roadmap/packet encryption.md`).
+    /// Give consoles an encryption key at login (`../docs/history/packet encryption.md`).
     pub encryption: bool,
     /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
     /// at their date, since content depends on it.

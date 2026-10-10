@@ -1,4 +1,4 @@
-//! The game's packet encryption (`roadmap/packet encryption.md`): once a console has a key (`AnsCommonKey` on OPN),
+//! The game's packet encryption (`../docs/history/packet encryption.md`): once a console has a key (`AnsCommonKey` on OPN),
 //! every payload on LMP and FMP is encrypted, both ways; the frame header stays in clear, its size the encrypted
 //! length. Camellia with a 256-bit key, each 16-byte block on its own (ECB), over the payload behind a 4-byte header
 //! (its length, big-endian u16, then two zero bytes), padded to whole blocks. An empty payload stays empty (the game

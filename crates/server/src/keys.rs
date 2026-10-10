@@ -1,4 +1,4 @@
-//! Encryption keys between two connections (`roadmap/packet encryption.md`, E2). Each console gets its own key at
+//! Encryption keys between two connections (`../docs/history/packet encryption.md`, E2). Each console gets its own key at
 //! login (OPN); every later connection of that console is encrypted with it from its first frame. A socket says
 //! nothing about who connects, and the server speaks first, already encrypted. So when a connection ends with
 //! `ReqShut` its key waits here with the console's IP; the next connection from that IP opens with the newest key
