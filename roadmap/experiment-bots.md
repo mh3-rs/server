@@ -1,6 +1,8 @@
 # Experiment: quest bots
 
-**Status: draft (2026-10-10), decisions open.** Before M6, research first.
+**Status: draft (2026-10-10), decisions open.** Before M6, after the end-to-end tests
+([`experiment-e2e.md`](experiment-e2e.md)): each phase below is judged by a real console in a real quest, and a scripted
+run checks it unattended. Research first.
 
 The newer Monster Hunter games let a player bring computer-controlled companions. Idea: a player alone could ask
 for a bot in their quest, with a basic behaviour (follow the player, attack what they attack). Bots exist only in
