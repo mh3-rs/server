@@ -18,6 +18,7 @@ mod content;
 mod database;
 mod game;
 pub mod health;
+mod keys;
 mod metrics;
 mod natneg;
 mod net;
@@ -57,6 +58,8 @@ struct Shared {
     fmp_port: u16,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
+    /// With encryption on: the consoles' keys between two connections (`keys.rs`). Secrets: never logged.
+    keys: Option<keys::Keys>,
     /// Jumps to another world server under way (M5 D13), by ticket: who, and where to.
     jumps: moka::sync::Cache<u32, (String, game::world::Target)>,
     /// Players logged in on FMP, by Capcom ID.
@@ -183,6 +186,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
+        keys: config.encryption.then(keys::Keys::default),
         jumps: moka::sync::Cache::builder().time_to_live(JUMP_TTL).build(),
         players: Players::default(),
         world: Default::default(),

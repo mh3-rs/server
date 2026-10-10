@@ -243,8 +243,10 @@ packets! {
     /// Reads `size` bytes at `address` of the console's memory (the disc's NAT negotiation hostname).
     ReqMemoryCheck = 0x60810100 { data: PatData, address: u32, size: u32 }
     AnsMemoryCheck = 0x60810200 { data: PatData, address: u32, memory: Bytes }
-    /// Answered with `AnsAuthenticationToken`, as MH3SP does; `AnsCommonKey` is never sent.
+    /// Answered with `AnsCommonKey` when encryption is on (the key for every later connection), else with
+    /// `AnsAuthenticationToken`, which the console takes as "no encryption" (MH3SP's answer).
     ReqCommonKey = 0x60700100 {}
+    AnsCommonKey = 0x60700200 { key: Bytes }
 
     // OPN.
     /// Asks the console for an LMP address.

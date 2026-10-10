@@ -74,6 +74,8 @@ pub struct Opn {
     /// Loaded at the first request, so every chunk comes from the same version.
     terms: Option<Terms>,
     subterms: Option<Terms>,
+    /// The console's encryption key, given at `ReqCommonKey` (encryption on): it goes on to its LMP connection.
+    pub key: Option<crate::keys::Key>,
 }
 
 impl Opn {
@@ -86,6 +88,7 @@ impl Opn {
             language: Language::default(),
             terms: None,
             subterms: None,
+            key: None,
         };
         (opn, memory_check(GAME_ID.0, GAME_ID.1).map(|f| vec![f]))
     }
@@ -247,9 +250,20 @@ impl Opn {
                 )
             }
             ReqCommonKey::ID => {
-                // Answering `AnsCommonKey` would turn on the game's encryption; this answer skips it (as MH3SP).
+                // A key turns on the game's encryption for every later connection; `AnsAuthenticationToken` skips it
+                // (MH3SP's answer).
                 ReqCommonKey::decode(p)?;
-                reply(seq, &AnsAuthenticationToken {})
+                if shared.keys.is_none() {
+                    return reply(seq, &AnsAuthenticationToken {});
+                }
+                let key = crate::keys::Keys::draw().map_err(|e| Fault::Server(e.into()))?;
+                self.key = Some(key);
+                reply(
+                    seq,
+                    &AnsCommonKey {
+                        key: Bytes::copy_from_slice(&key),
+                    },
+                )
             }
             ReqLmpConnect::ID => {
                 ReqLmpConnect::decode(p)?;

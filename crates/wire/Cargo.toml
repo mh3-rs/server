@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 bytes = "1.12.1"
+openssl = "0.10.81"
 thiserror = "2.0.21"
 tokio-util = { version = "0.7.19", features = ["codec"] }
 

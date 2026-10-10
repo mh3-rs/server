@@ -4,6 +4,7 @@
 //! game sends and accepts, nothing about what the server does with it.
 
 mod catalogue;
+pub mod crypt;
 mod frame;
 mod id;
 pub mod natneg;

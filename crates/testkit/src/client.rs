@@ -11,13 +11,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
 use tokio_util::codec::Framed;
-use wire::{Frame, FrameCodec};
+use wire::{Frame, FrameCodec, crypt};
 
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 
 pub struct Console {
     framed: Framed<Box<dyn Io>, FrameCodec>,
+    /// The key from `AnsCommonKey`: payloads encrypted both ways, as the game does on LMP and FMP.
+    key: Option<[u8; crypt::KEY_LEN]>,
 }
 
 #[derive(Debug)]
@@ -56,17 +58,33 @@ impl Console {
         };
         Ok(Self {
             framed: Framed::new(io, FrameCodec),
+            key: None,
         })
     }
 
-    pub async fn send(&mut self, frame: Frame) -> Result<()> {
+    /// Encrypts and decrypts every payload from now on.
+    pub fn encrypted(mut self, key: [u8; crypt::KEY_LEN]) -> Self {
+        self.key = Some(key);
+        self
+    }
+
+    pub async fn send(&mut self, mut frame: Frame) -> Result<()> {
+        if let Some(key) = &self.key {
+            frame.payload = crypt::encrypt(key, &frame.payload)?;
+        }
         Ok(self.framed.send(frame).await?)
     }
 
     pub async fn recv(&mut self, timeout: Duration) -> Result<Received> {
         Ok(
             match tokio::time::timeout(timeout, self.framed.next()).await {
-                Ok(Some(frame)) => Received::Frame(frame?),
+                Ok(Some(frame)) => {
+                    let mut frame = frame?;
+                    if let Some(key) = &self.key {
+                        frame.payload = crypt::decrypt(key, &frame.payload)?;
+                    }
+                    Received::Frame(frame)
+                }
                 Ok(None) => Received::Closed,
                 Err(_) => Received::Timeout,
             },

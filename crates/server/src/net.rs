@@ -21,11 +21,12 @@ use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, trace, warn};
 use wire::packets::{AnsLineCheck, AnsShut, Packet, ReqLineCheck, ReqShut};
-use wire::{Frame, FrameCodec};
+use wire::{Frame, FrameCodec, crypt};
 
 use crate::Shared;
 use crate::game::players::Mailbox;
 use crate::game::{Fault, Handled, Handler, Role, frame, reply};
+use crate::keys::Key;
 
 /// A console that hasn't finished its TLS handshake by then is dropped.
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -121,9 +122,16 @@ async fn connection(
         _ = tokio::time::sleep(PAUSE) => {}
     }
     let (mailbox, mut mail, kicked) = Mailbox::new(conn, ip);
+    // With encryption on, every LMP and FMP payload is encrypted with the console's key (OPN has TLS).
+    let encrypted = role != Role::Opn && shared.keys.is_some();
     let (mut handler, first) = Handler::start(role, mailbox);
     let result = serve_frames(
         &mut framed,
+        Crypt {
+            ip,
+            encrypted,
+            key: None,
+        },
         &mut handler,
         first,
         &mut mail,
@@ -137,8 +145,18 @@ async fn connection(
 }
 
 /// Requests in, answers and mail out, until the connection ends.
+/// A connection's encryption: on for LMP and FMP with encryption on, with the console's key once its first frame
+/// told which (`keys.rs`).
+struct Crypt {
+    ip: IpAddr,
+    encrypted: bool,
+    key: Option<Key>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn serve_frames(
     framed: &mut Framed<Box<dyn Io>, FrameCodec>,
+    mut crypt: Crypt,
     handler: &mut Handler,
     first: Handled,
     mail: &mut mpsc::Receiver<Frame>,
@@ -146,7 +164,17 @@ async fn serve_frames(
     shared: &Shared,
     shutdown: &CancellationToken,
 ) -> Result<(), Fault> {
-    if !send(framed, first?).await {
+    // Encrypted, the opening uses the console's likely key (`keys.rs`): with none waiting at its IP, it can't be one
+    // of ours. Another console's key, when several wait at one IP, is harmless: the console ignores the opening's
+    // value (lab, 2026-10-10).
+    let opening = match &shared.keys {
+        Some(keys) if crypt.encrypted => Some(
+            keys.likely(crypt.ip)
+                .ok_or_else(|| Fault::Client(anyhow!("no key in transit")))?,
+        ),
+        _ => None,
+    };
+    if !send(framed, opening.as_ref(), first?).await? {
         return Ok(());
     }
 
@@ -169,7 +197,7 @@ async fn serve_frames(
                 vec![frame(0, &ReqLineCheck {})?]
             }
             received = framed.next() => {
-                let req = match received {
+                let mut req = match received {
                     Some(Ok(req)) => req,
                     Some(Err(e)) => {
                         debug!(error = %e, "connection lost");
@@ -177,6 +205,21 @@ async fn serve_frames(
                     }
                     None => return Ok(()),
                 };
+                match (&crypt.key, &shared.keys) {
+                    (Some(key), _) => {
+                        req.payload = crypt::decrypt(key, &req.payload)
+                            .map_err(|e| Fault::Client(anyhow!("{} undecryptable: {e}", req.id)))?;
+                    }
+                    // The first frame: which console's key.
+                    (None, Some(keys)) if crypt.encrypted => {
+                        let (key, plain) = keys
+                            .take(crypt.ip, &req.payload)
+                            .ok_or_else(|| Fault::Client(anyhow!("no key in transit fits")))?;
+                        crypt.key = Some(key);
+                        req.payload = plain;
+                    }
+                    _ => {}
+                }
                 debug!(packet = %req.id, seq = req.seq, len = req.payload.len(), "recv");
                 trace!(payload = %hex::encode(&req.payload), "recv payload");
                 match req.id {
@@ -187,6 +230,12 @@ async fn serve_frames(
                     }
                     ReqShut::ID => {
                         handler.leave(shared);
+                        // The console's key goes on to its next connection.
+                        if let Some(keys) = &shared.keys
+                            && let Some(key) = crypt.key.or(handler.given_key())
+                        {
+                            keys.put(crypt.ip, key);
+                        }
                         shut(&req)?
                     }
                     _ => {
@@ -198,7 +247,7 @@ async fn serve_frames(
                 }
             }
         };
-        if !send(framed, out).await {
+        if !send(framed, crypt.key.as_ref(), out).await? {
             return Ok(());
         }
     }
@@ -210,21 +259,29 @@ fn shut(req: &Frame) -> Handled {
     reply(req.seq, &AnsShut { kind })
 }
 
-/// Sends frames in order; `false` when the connection is gone.
-async fn send(framed: &mut Framed<Box<dyn Io>, FrameCodec>, frames: Vec<Frame>) -> bool {
-    for frame in frames {
+/// Sends frames in order, encrypted with `key` if any: `false` when the connection is gone.
+async fn send(
+    framed: &mut Framed<Box<dyn Io>, FrameCodec>,
+    key: Option<&[u8; crypt::KEY_LEN]>,
+    frames: Vec<Frame>,
+) -> Result<bool, Fault> {
+    for mut frame in frames {
         debug!(packet = %frame.id, seq = frame.seq, len = frame.payload.len(), "send");
         trace!(payload = %hex::encode(&frame.payload), "send payload");
+        if let Some(key) = key {
+            frame.payload =
+                crypt::encrypt(key, &frame.payload).map_err(|e| Fault::Server(e.into()))?;
+        }
         if let Err(e) = framed.feed(frame).await {
             debug!(error = %e, "connection lost");
-            return false;
+            return Ok(false);
         }
     }
     match framed.flush().await {
-        Ok(()) => true,
+        Ok(()) => Ok(true),
         Err(e) => {
             debug!(error = %e, "connection lost");
-            false
+            Ok(false)
         }
     }
 }

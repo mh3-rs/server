@@ -1988,6 +1988,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "hex",
+ "openssl",
  "proptest",
  "thiserror",
  "tokio-util",

@@ -15,6 +15,7 @@
 //! | `NATNEG_HOSTNAME` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
 //! | `SECRET`, or `SECRET__FILE` naming a file that holds it | none: the pepper of the support codes' HMAC |
 //! | `CONTENT_DIR` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
+//! | `ENCRYPTION` | `off`: `on` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
 //!
 //! Without `EXTERNAL_ADDRESS` or `NATNEG_HOSTNAME` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
@@ -47,6 +48,8 @@ pub struct Config {
     pub natneg_hostname: Option<String>,
     pub secret: Option<Secret>,
     pub content_dir: PathBuf,
+    /// Give consoles an encryption key at login (`roadmap/packet encryption.md`).
+    pub encryption: bool,
     /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
     /// at their date, since content depends on it.
     pub clock_offset: i64,
@@ -86,6 +89,7 @@ impl Config {
             natneg_hostname: optional("NATNEG_HOSTNAME"),
             secret: secret(optional("SECRET"), optional("SECRET__FILE"))?,
             content_dir: get("CONTENT_DIR", "content").into(),
+            encryption: on_off("ENCRYPTION", optional("ENCRYPTION"))?,
             clock_offset: 0,
             maintenance: None,
         })
@@ -124,6 +128,14 @@ fn strategy(value: Option<String>) -> Result<Strategy> {
         Some("p2p") => Strategy::P2p,
         Some("relay") => Strategy::Relay,
         Some(other) => bail!("NATNEG_STRATEGY: {other:?} is not hybrid, p2p or relay"),
+    })
+}
+
+fn on_off(key: &str, value: Option<String>) -> Result<bool> {
+    Ok(match value.as_deref() {
+        None | Some("off") => false,
+        Some("on") => true,
+        Some(other) => bail!("{key}: {other:?} is not on or off"),
     })
 }
 

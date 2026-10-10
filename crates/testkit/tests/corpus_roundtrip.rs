@@ -178,6 +178,7 @@ fn typed_packets_reencode() {
         let never_recorded = [
             "ReqMaintenance",
             "AnsMaintenance",
+            "AnsCommonKey",
             "NtcCircleBreak",
             "NtcCircleChat",
             "ReqLayerMediationLock",

@@ -47,6 +47,7 @@ fn config() -> (Config, tempfile::TempDir) {
         content_dir: std::env::var_os("CONTENT_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| repo().join("../mh3sp")),
+        encryption: false,
         clock_offset: 0,
         maintenance: None,
     };
@@ -96,6 +97,17 @@ async fn opn_login(
     game_id: &[u8],
     natneg_hostnames: &[u8],
 ) -> (u8, Option<String>) {
+    let (mut console, status) = opn_connect(opn, game_id, natneg_hostnames).await;
+    if status != 2 {
+        return (status, None);
+    }
+    send(&mut console, 1, ReqMaintenance {}).await;
+    let text = expect::<AnsMaintenance>(&mut console).await.text;
+    (status, Some(String::from_utf8(text.to_vec()).unwrap()))
+}
+
+/// A console through OPN's disc checks and connection: the connection and its `NtcLogin` status.
+async fn opn_connect(opn: SocketAddr, game_id: &[u8], natneg_hostnames: &[u8]) -> (Console, u8) {
     let mut console = Console::connect(opn, true).await.unwrap();
     let mut memory = game_id;
     loop {
@@ -125,12 +137,116 @@ async fn opn_login(
     )
     .await;
     let status = expect::<NtcLogin>(&mut console).await.status;
-    if status != 2 {
-        return (status, None);
+    (console, status)
+}
+
+/// With encryption on, each console gets its own key at OPN, and every LMP and FMP connection of that console is
+/// encrypted with it from its first frame: the server opens with the newest key in transit from the console's IP,
+/// then reads the answer with that IP's keys. Two consoles behind one IP, crossing; an address without a key closed.
+#[tokio::test]
+async fn encrypted_login() {
+    let (mut config, _db) = config();
+    config.encryption = true;
+    let running = server::start(&config).await.unwrap();
+    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    // OPN, for two consoles at the same address: each its key, which goes on at `ReqShut`.
+    let mut keys = Vec::new();
+    for _ in 0..2 {
+        let (mut opn, _) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        send(&mut opn, 1, ReqCommonKey {}).await;
+        let key: [u8; 32] = expect::<AnsCommonKey>(&mut opn).await.key[..]
+            .try_into()
+            .unwrap();
+        send(&mut opn, 2, ReqShut { kind: 2 }).await;
+        expect::<AnsShut>(&mut opn).await;
+        keys.push(key);
     }
-    send(&mut console, 1, ReqMaintenance {}).await;
-    let text = expect::<AnsMaintenance>(&mut console).await.text;
-    (status, Some(String::from_utf8(text.to_vec()).unwrap()))
+    assert_ne!(keys[0], keys[1]);
+
+    // The first console first, while the second's key is the newest at their address: its opening comes with the
+    // second's key, its answer is read with its own.
+    for key in [keys[0], keys[1]] {
+        // LMP's first visit: a new console gets its support code and a ticket.
+        let mut console = open_encrypted(lmp, key, None, 1).await;
+        let data = PatData::new();
+        send(&mut console, 1, ReqLoginInfo { data }).await;
+        expect::<AnsLoginInfo>(&mut console).await;
+        let first = ticket_and_shut(&mut console, 2).await;
+        // LMP's second visit: a slot, a Capcom ID, the ticket for FMP.
+        let mut console = open_encrypted(lmp, key, Some(first), 2).await;
+        let user = PatData::new().with(0x03, Item::String(Bytes::from_static(b"Aiko")));
+        send(
+            &mut console,
+            1,
+            ReqUserObject {
+                unk: 1,
+                slot: 1,
+                user,
+            },
+        )
+        .await;
+        expect::<AnsUserObject>(&mut console).await;
+        let second = ticket_and_shut(&mut console, 2).await;
+        // FMP, with the same key.
+        open_encrypted(fmp, key, Some(second), 3).await;
+    }
+
+    // No key in transit at an address (every one used): the connection is closed before a word.
+    let mut stranger = Console::connect(lmp, false).await.unwrap();
+    assert!(matches!(
+        stranger.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
+/// An encrypted LMP or FMP connection: the opening, then the console's answer with its key; `NtcLogin`'s status.
+async fn open_encrypted(
+    addr: SocketAddr,
+    key: [u8; 32],
+    ticket: Option<String>,
+    status: u8,
+) -> Console {
+    // The opening may come with another console's key (two in transit at one IP): ignored, as the game does.
+    let mut console = Console::connect(addr, false).await.unwrap();
+    match console.recv(Duration::from_secs(5)).await.unwrap() {
+        Received::Frame(f) if f.id == ReqConnection::ID => {}
+        other => panic!("expected the opening, got {other:?}"),
+    }
+    let mut console = console.encrypted(key);
+    let data = connection_data(None, ticket.as_deref());
+    send(&mut console, 0, AnsConnection { data }).await;
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, status);
+    console
+}
+
+/// A new ticket, then the console leaves for its next connection.
+async fn ticket_and_shut(console: &mut Console, seq: u16) -> String {
+    send(console, seq, ReqTicket {}).await;
+    let ticket = expect::<AnsTicket>(console).await.ticket;
+    send(console, seq + 1, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(console).await;
+    String::from_utf8(ticket.to_vec()).unwrap()
+}
+
+/// With encryption on, OPN gives the console a 32-byte key when asked; off, it skips encryption as MH3SP does.
+#[tokio::test]
+async fn common_key_only_with_encryption() {
+    for encryption in [false, true] {
+        let (mut config, _db) = config();
+        config.encryption = encryption;
+        let running = server::start(&config).await.unwrap();
+        let (mut console, status) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        assert_eq!(status, 5);
+        send(&mut console, 1, ReqCommonKey {}).await;
+        match encryption {
+            true => assert_eq!(expect::<AnsCommonKey>(&mut console).await.key.len(), 32),
+            false => {
+                expect::<AnsAuthenticationToken>(&mut console).await;
+            }
+        }
+        running.stop().await;
+    }
 }
 
 #[tokio::test]

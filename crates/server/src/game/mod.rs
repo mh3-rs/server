@@ -66,6 +66,14 @@ impl Handler {
         }
     }
 
+    /// The encryption key OPN gave the console, if any.
+    pub fn given_key(&self) -> Option<crate::keys::Key> {
+        match self {
+            Handler::Opn(opn) => opn.key,
+            _ => None,
+        }
+    }
+
     pub async fn handle(&mut self, shared: &Shared, req: &Frame) -> Handled {
         match self {
             Handler::Opn(opn) => opn.handle(shared, req).await,
@@ -250,7 +258,7 @@ pub fn unexpected(id: PacketId) -> Fault {
     Fault::Client(anyhow!("unexpected packet {id}"))
 }
 
-/// The first message of every connection but OPN's, which checks the disc first.
+/// The connection's opening (OPN's after its disc checks).
 fn req_connection() -> Result<Frame, Fault> {
     frame(0, &ReqConnection { unk: 0 })
 }
