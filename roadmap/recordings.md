@@ -44,6 +44,24 @@ Then measure the relayed rate per console (the captures, or the relay's metrics)
 
 ## Done
 
+### Who owns a large monster with a bot around (A4, 2026-10-10)
+
+One console and a bot, the Great Jaggi quest: the bot left alone in the Jaggi's area is handed it (and it freezes);
+handing it straight back ping-pongs; keeping it and handing it to the first hunter back in its area works
+(`experiment-bots.md`, A4).
+
+### A long hunt for the bots (2026-10-10, 19:23–19:55)
+
+On the Rust server, gate 3: captures `lab/dolphin-user/Dump/SSL/RMHP08 2026-10-10 19h23m25s.pcap` (dev1) and
+`lab/p2/Dump/SSL/RMHP08 2026-10-10 19h23m25s.pcap` (dev2). Timeline (the user's calls): bot 00LIHJ added 19:25:26,
+left when dev2 entered the city 19:25:50 (verified); departure 19:26:38; dev2's walk, turn, run, weapon, area 1
+and back 19:26:38–19:28; dev1 reached the Great Jaggi alone and fainted (cart) before dev2 arrived; dev1's hits
+19:29–19:31 (dev2 there first); dev2 fainted (cart); a potion 19:33:09; abandoned 19:33:16; a quick quest departed
+19:34:31; dev2 kicked with error 11674 (0x8003003f, a P2P session error; dev1 was speeding Dolphin up with Tab) at
+19:40:36; dev1 finished a subquest and the main quest alone (19:43:41: the console reported 0x80000000 and left the
+quest), rewards, back to the city. The bot's HR showed 0. Not done: dev2's quest end. A side question: in the quick
+quest, the shortcut from area 8 to area 5 showed no trigger (the game's or the quest's, not checked offline).
+
 - 2026-10-09: runs 1–17 (M3, M4, M5): see the milestones' roadmaps.
 - 2026-10-09, s12-player-search (against MH3SP): by name ('dev', both hunters; 'de'; 'zzz', nobody) and by Capcom ID
   all work; the searcher is among the results (grayed out by the console; we leave it out, M5 D9); "Warp to" fails

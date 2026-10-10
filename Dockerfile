@@ -1,12 +1,21 @@
 # mh3sp server image. Configuration: environment variables, each with a default (see
 # crates/server/src/config.rs). The SQLite database lives in the /opt/mh3sp/data volume (mount it to
 # keep it; a website on the same machine shares the file).
+# syntax=docker/dockerfile:1
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /src
 COPY . .
 # FEATURES=prometheus builds the `…-prometheus` image (`/metrics/prometheus`).
 ARG FEATURES=""
-RUN cargo build --release --locked -p server --features "$FEATURES"
+# The quest bots' tunnel is a private git dependency (over SSH in Cargo.toml): fetched over HTTPS with a Gitea token,
+# given as a build secret (`--secret id=gitea,env=GITEA_AUTH`, GITEA_AUTH=user:token) and passed to git through its
+# environment for this one command, so it's in no layer.
+RUN --mount=type=secret,id=gitea,env=GITEA_AUTH \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="url.https://${GITEA_AUTH}@git.pband.ch/.insteadOf" \
+    GIT_CONFIG_VALUE_0="ssh://git@git.pband.ch/" \
+    cargo build --release --locked -p server --features "$FEATURES"
 
 FROM debian:bookworm-slim
 RUN apt-get update \

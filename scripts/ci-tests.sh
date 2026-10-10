@@ -20,7 +20,7 @@ fi
 # Event content for the tests: MH3SP's files at the commit the corpus was recorded with. Never in this repository:
 # CONTENT_DIR if set, else the MH3SP checkout next to it, else a clone in the target folder.
 MH3SP_COMMIT=f53b06c
-if [ -z "${CONTENT_DIR:-}" ] && [ ! -d ../mh3sp/event ]; then
+if [ -z "${CONTENT_DIR:-}" ] && [ ! -d ../reference/event ]; then
   CONTENT_DIR="${CARGO_TARGET_DIR:-target}/mh3sp-$MH3SP_COMMIT"
   if [ ! -d "$CONTENT_DIR/event" ]; then
     git clone --quiet https://github.com/sepalani/MH3SP "$CONTENT_DIR"
@@ -34,6 +34,9 @@ fi
 rustup component add rustfmt clippy >/dev/null 2>&1
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+# The server as shipped (no features): what the `bot` feature gates must leave it clean.
+cargo clippy -p server --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-# The `prometheus` feature's own code (the server's unit tests with it).
+# The features' own code (the server's unit tests with each; testkit's tests run with `bot` already).
 cargo test -p server --lib --features prometheus --locked
+cargo test -p server --lib --features bot --locked

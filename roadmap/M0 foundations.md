@@ -150,7 +150,7 @@ whichever server is on the other end.
 
 ### Recording
 
-Setup: the lab (`../mh3sp/lab`), Python MH3SP pinned at **`dev` @ `f53b06c`**, native AltWFC, hosts redirection on.
+Setup: the lab (`../lab`), Python MH3SP pinned at **`dev` @ `f53b06c`**, native AltWFC, hosts redirection on.
 
 `tools/record-scenario.sh <scenario> [consoles]` (written; first full run with the recordings):
 1. checks hosts redirection, AltWFC and the game image; restarts Python MH3SP on a fresh `mh3sp.db`;

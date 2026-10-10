@@ -761,10 +761,13 @@ impl Fmp {
                 // Game data for the layer: relayed with the sender's Capcom ID and name in front.
                 let r = NtcLayerBinary::decode(p)?;
                 let me = capcom_id(session);
+                let body = without_sender(&r.data.0)?;
+                #[cfg(feature = "bot")]
+                bot::peer_message_from(shared, me, body);
                 let mut data = Vec::new();
                 data.put_lp2_string(me.as_bytes())?;
                 data.put_pat_data(&sender(me, &session.name, true))?;
-                data.extend_from_slice(without_sender(&r.data.0)?);
+                data.extend_from_slice(body);
                 relay(
                     shared,
                     me,
@@ -780,6 +783,10 @@ impl Fmp {
                 let me = capcom_id(session);
                 let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
                 if !shared.world.lock().unwrap().others(me).contains(&partner) {
+                    return Ok(vec![]);
+                }
+                #[cfg(feature = "bot")]
+                if bot::to_bot(shared, me, &partner, without_sender(&r.data.0)?) {
                     return Ok(vec![]);
                 }
                 let mut data = Vec::new();
@@ -964,6 +971,14 @@ impl Fmp {
                 let world = shared.world.lock().unwrap();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let id = (city, r.circle);
+                // Only its leader sets a quest's details: a modified client.
+                if world.circle(id).is_some_and(|c| c.leader != me) {
+                    warn!(
+                        circle = id.1,
+                        "quest details set by a member, not its leader: refused"
+                    );
+                    return reply(seq, &AnsCircleInfoSet { circle: r.circle });
+                }
                 let others: Vec<String> = world
                     .circle(id)
                     .map(|c| {
@@ -992,6 +1007,14 @@ impl Fmp {
                 let me = capcom_id(session);
                 let mut world = shared.world.lock().unwrap();
                 let id = world.circle_of(me).ok_or_else(not_in_circle)?;
+                // Only its leader departs a quest (the game offers no one else the choice): a modified client.
+                if world.circle(id).is_some_and(|c| c.leader != me) {
+                    warn!(
+                        circle = id.1,
+                        "quest departure asked by a member, not its leader: refused"
+                    );
+                    return reply(seq, &AnsCircleMatchStart {});
+                }
                 // Members not ready stay behind: removed from the party (MH3SP's rule, M3 D7).
                 let mut out = Vec::new();
                 let behind: Vec<String> = world
@@ -1049,15 +1072,7 @@ impl Fmp {
                 let mut reader = Reader::new(&r.data.0);
                 reader.pat_data()?;
                 let me = capcom_id(session);
-                let mut data = Vec::new();
-                data.put_lp2_string(me.as_bytes())?;
-                data.put_pat_data(
-                    &PatData::new()
-                        .with(0x01, Item::Long(0x1234_5678))
-                        .with(0x02, Item::String(Bytes::copy_from_slice(me.as_bytes())))
-                        .with(0x03, Item::String(session.name.clone())),
-                )?;
-                data.extend_from_slice(reader.rest());
+                let body = reader.rest();
                 let world = shared.world.lock().unwrap();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let others: Vec<String> = world
@@ -1069,15 +1084,11 @@ impl Fmp {
                             .collect()
                     })
                     .unwrap_or_default();
-                let ntc = frame(
-                    seq,
-                    &NtcCircleBinary {
-                        circle: r.circle,
-                        data: Rest(data.into()),
-                    },
-                )?;
+                let ntc = circle_binary(seq, me, &session.name, r.circle, body)?;
                 let mut out = Vec::new();
                 notify(shared, me, &others, &ntc, &mut out);
+                #[cfg(feature = "bot")]
+                bot::party_sync(shared, &world, me, &others, (seq, r.circle), body, &mut out)?;
                 Ok(out)
             }
             ReqCircleMatchEnd::ID => {
@@ -1334,6 +1345,40 @@ fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<F
     }
 }
 
+#[cfg(feature = "bot")]
+mod bot;
+#[cfg(feature = "bot")]
+pub use bot::{add_bot, bot_says, remove_bot};
+
+/// A party message as the members get it: the sender's Capcom ID and name in front.
+fn circle_binary(
+    seq: u16,
+    sender: &str,
+    name: &Bytes,
+    circle: u32,
+    body: &[u8],
+) -> Result<Frame, Fault> {
+    let mut data = Vec::new();
+    data.put_lp2_string(sender.as_bytes())?;
+    data.put_pat_data(
+        &PatData::new()
+            .with(0x01, Item::Long(0x1234_5678))
+            .with(
+                0x02,
+                Item::String(Bytes::copy_from_slice(sender.as_bytes())),
+            )
+            .with(0x03, Item::String(name.clone())),
+    )?;
+    data.extend_from_slice(body);
+    frame(
+        seq,
+        &NtcCircleBinary {
+            circle,
+            data: Rest(data.into()),
+        },
+    )
+}
+
 /// The player enters gate `gate` of its world server, from the server's root: those there see it arrive.
 fn enter_gate(shared: &Shared, world: &mut World, me: &str, gate: u16, seq: u16) {
     world.place(me).expect("located").gate = Some(gate);
@@ -1354,6 +1399,8 @@ fn enter_city(
     me: &str,
     id: (u32, u16, u16),
 ) -> Result<(), world::CityRefusal> {
+    #[cfg(feature = "bot")]
+    bot::make_room(shared, world, me, id);
     world.join_city(id, me)?;
     info!(gate = id.1, city = id.2, "entered city");
     // Best effort: the player is in.
@@ -1406,6 +1453,8 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     if !world.placed_by(me, conn) {
         return;
     }
+    #[cfg(feature = "bot")]
+    bot::departing(shared, me, conn);
     // Leaving a city (or the game) means leaving its quest first; the requester's own notices are of no use now.
     let mut ignored = Vec::new();
     let in_city = world.city_of(me).is_some();
@@ -1480,6 +1529,10 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
                 shared.players.send(other, ntc.clone());
             }
         }
+    }
+    #[cfg(feature = "bot")]
+    if let Some(id) = city.filter(|_| leaves_city) {
+        bot::left_behind(shared, world, conn, id);
     }
 }
 
@@ -1941,7 +1994,10 @@ fn quit_quest(
         let broken = frame(seq, &NtcCircleBreak { circle: 0 })?;
         notify(shared, requester, &leaving.others, &broken, out);
     }
-    list_change(shared, world, requester, leaving.id, seq, out)
+    let changed = list_change(shared, world, requester, leaving.id, seq, out);
+    #[cfg(feature = "bot")]
+    bot::partyless(shared, world, requester, leaving.id.0);
+    changed
 }
 
 /// A message's sender info: the sender's Capcom ID and name, and an unknown 20; in the order consoles send (and

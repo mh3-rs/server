@@ -37,6 +37,22 @@ pub fn random_id(len: usize) -> String {
     id
 }
 
+/// A player's Capcom ID: never starting with `0`, which marks the quest bots' (`bot_capcom_id`).
+fn player_capcom_id() -> String {
+    loop {
+        let id = random_id(CAPCOM_ID_LEN);
+        if !id.starts_with('0') {
+            return id;
+        }
+    }
+}
+
+/// A quest bot's Capcom ID (`experiment-bots.md`): `0` then five characters, a form no player gets.
+#[cfg(feature = "bot")]
+pub fn bot_capcom_id() -> String {
+    format!("0{}", random_id(CAPCOM_ID_LEN - 1))
+}
+
 fn hmac(secret: &Secret, code: &str) -> Vec<u8> {
     let key = PKey::hmac(&secret.0).expect("HMAC key");
     let mut signer = Signer::new(MessageDigest::sha256(), &key).expect("HMAC-SHA256");
@@ -185,7 +201,7 @@ pub async fn use_slot(
             return Ok((used.capcom_id, false, name.to_vec()));
         }
         let name = name.unwrap_or_default();
-        let capcom_id = random_id(CAPCOM_ID_LEN);
+        let capcom_id = player_capcom_id();
         let public_id = Uuid::now_v7();
         let public_id = public_id.as_bytes().as_slice();
         // A taken Capcom ID, or the slot filled meanwhile: try again.

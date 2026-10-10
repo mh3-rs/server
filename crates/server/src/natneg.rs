@@ -94,6 +94,17 @@ pub async fn serve(
         for (datagram, to) in handle(
             &connector,
             &shared.players,
+            // A pair with a quest bot (`peer.rs`, the `bot` feature): the bot's address when `cookie` pairs one.
+            |cookie| {
+                #[cfg(feature = "bot")]
+                let bot = shared.peers.bot_pair(cookie);
+                #[cfg(not(feature = "bot"))]
+                let bot = {
+                    let _ = cookie;
+                    None
+                };
+                bot
+            },
             &mut negotiations,
             record,
             from,
@@ -144,6 +155,7 @@ impl Client {
 fn handle(
     connector: &Connector,
     players: &Players,
+    bot_pair: impl Fn(u32) -> Option<SocketAddrV4>,
     negotiations: &mut HashMap<u32, Negotiation>,
     record: Record,
     from: SocketAddrV4,
@@ -171,6 +183,11 @@ fn handle(
             });
             n.last = now;
             n.clients[index].0[kind] = Some(from);
+            // A pair with a quest bot (`peer.rs`): its side is in at once, at its socket.
+            let bot = bot_pair(cookie);
+            if let Some(bot) = bot {
+                n.clients[1 - index] = Client([Some(bot); 4]);
+            }
             let mut out = vec![(reply(Body::InitAck(port)), from)];
             let [Some(first), Some(second)] = n.clients.map(|c| c.game()) else {
                 return out;
@@ -180,7 +197,11 @@ fn handle(
             match n.told {
                 Some(told) => out.push((reply(Body::Connect(peer(told[index]))), from)),
                 None => {
-                    let (told, relayed) = connect(n.clients, [first, second], connector, players);
+                    // A bot is the server itself: its pairs are never relayed.
+                    let (told, relayed) = match bot {
+                        Some(_) => ([second, first], false),
+                        None => connect(n.clients, [first, second], connector, players),
+                    };
                     n.told = Some(told);
                     n.relayed = relayed;
                     for (client, told) in n.clients.iter().zip(told) {
@@ -347,6 +368,7 @@ mod tests {
                     for (datagram, _) in handle(
                         &connector,
                         &players,
+                        |_| None,
                         &mut negotiations,
                         init,
                         from,

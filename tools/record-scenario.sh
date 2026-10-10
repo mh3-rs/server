@@ -6,7 +6,7 @@
 # Usage: tools/record-scenario.sh <scenario> [devN ...]   (default: dev1)
 # dev1 is the lab's original profile; other devN are cloned from it without its console
 # identity and network file, so a new devN behaves like a console going online for the first time.
-# Env:   LAB (default ../mh3sp/lab), MH3_GAME (default /Volumes/USB/mh3/rmhp08.rvz)
+# Env:   LAB (default ../lab), REFERENCE (default ../reference), MH3_GAME (default /Volumes/USB/mh3/rmhp08.rvz)
 set -eu
 cd "$(dirname "$0")/.."
 [ $# -ge 1 ] || { echo "usage: $0 <scenario> [devN ...]"; exit 1; }
@@ -14,8 +14,8 @@ SCENARIO=$1
 shift
 [ $# -gt 0 ] || set -- dev1
 CONSOLES=$(for c in "$@"; do echo "${c#dev}"; done)
-LAB=$(cd "${LAB:-../mh3sp/lab}" && pwd)
-MH3SP=$(dirname "$LAB")
+LAB=$(cd "${LAB:-../lab}" && pwd)
+MH3SP=$(cd "${REFERENCE:-../reference}" && pwd)
 GAME=${MH3_GAME:-/Volumes/USB/mh3/rmhp08.rvz}
 
 # devN -> lab profile and MAC (dev1 uses the original profile, others are clones).

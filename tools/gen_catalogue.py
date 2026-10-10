@@ -6,7 +6,7 @@ LMP- and FMP-stage server list packets and for both ticket packets); the Japanes
 name and the English description come from MHTrIDA's PAT.MD (the game's own table).
 
 Usage: tools/gen_catalogue.py [DIR] [MHTRIDA_DIR]
-Defaults: ../mh3sp and ../mh3sp/lab/mhtrida, relative to the repository root.
+Defaults: ../reference and ../lab/mhtrida, relative to the repository root.
 """
 import re
 import sys

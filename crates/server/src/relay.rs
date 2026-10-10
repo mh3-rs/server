@@ -57,6 +57,32 @@ impl Relays {
         })
     }
 
+    #[cfg(feature = "bot")]
+    /// A port of the range for a quest bot's own socket (`peer.rs`): bound, non-blocking; `None` if none is free.
+    pub fn take_port(&self) -> Option<(std::net::UdpSocket, u16)> {
+        let mut free = self.free.lock().unwrap();
+        let mut skipped = Vec::new();
+        let found = loop {
+            let Some(port) = free.ports.pop() else {
+                break None;
+            };
+            match std::net::UdpSocket::bind(("0.0.0.0", port)) {
+                Ok(socket) => break Some((socket, port)),
+                Err(_) => skipped.push(port),
+            }
+        };
+        free.ports.extend(skipped);
+        let (socket, port) = found?;
+        socket.set_nonblocking(true).ok()?;
+        Some((socket, port))
+    }
+
+    #[cfg(feature = "bot")]
+    /// A bot's port back in the range.
+    pub fn give_port(&self, port: u16) {
+        self.free.lock().unwrap().ports.push(port);
+    }
+
     /// Opens a relay between two consoles' game sockets: the address each must be told its peer is at. `None` if no
     /// port is free or a console has too many relayed pairs.
     pub fn open(self: &Arc<Self>, consoles: [SocketAddrV4; 2]) -> Option<SocketAddrV4> {

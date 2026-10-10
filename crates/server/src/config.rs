@@ -14,6 +14,7 @@
 //! | `EXTERNAL_ADDRESS` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
 //! | `NATNEG_HOSTNAME` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
 //! | `SECRET`, or `SECRET__FILE` naming a file that holds it | none: the pepper of the support codes' HMAC |
+//! | `BOT_PORT` | none: the quest bots' brain connects here, on localhost (`mh3sp-brain`); no setting, no bots |
 //! | `CONTENT_DIR` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
 //! | `ENCRYPTION` | `off`: `on` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
 //!
@@ -48,6 +49,8 @@ pub struct Config {
     pub natneg_hostname: Option<String>,
     pub secret: Option<Secret>,
     pub content_dir: PathBuf,
+    /// Where the quest bots' brain connects (localhost only); none: no bots.
+    pub bot_port: Option<u16>,
     /// Give consoles an encryption key at login (`roadmap/packet encryption.md`).
     pub encryption: bool,
     /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
@@ -89,6 +92,12 @@ impl Config {
             natneg_hostname: optional("NATNEG_HOSTNAME"),
             secret: secret(optional("SECRET"), optional("SECRET__FILE"))?,
             content_dir: get("CONTENT_DIR", "content").into(),
+            bot_port: optional("BOT_PORT")
+                .map(|p| {
+                    p.parse::<u16>()
+                        .with_context(|| format!("BOT_PORT: {p:?} is not a port"))
+                })
+                .transpose()?,
             encryption: on_off("ENCRYPTION", optional("ENCRYPTION"))?,
             clock_offset: 0,
             maintenance: None,

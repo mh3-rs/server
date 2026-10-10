@@ -73,6 +73,16 @@ async fn answer(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> {
                 ("200 OK", format!("sent to {players} players\n"))
             }
         },
+        #[cfg(feature = "bot")]
+        ("POST", "/bot/add") => match crate::game::fmp::add_bot(shared, content) {
+            Ok(bot) => ("200 OK", format!("bot {bot} joined {content}'s party\n")),
+            Err(refusal) => ("409 Conflict", format!("{refusal:?}\n")),
+        },
+        #[cfg(feature = "bot")]
+        ("POST", "/bot/remove") => match crate::game::fmp::remove_bot(shared, content) {
+            true => ("200 OK", format!("bot {content} left\n")),
+            false => ("404 Not Found", "no such bot\n".to_owned()),
+        },
         ("POST", "/stop") => match content {
             "cancel" => match crate::stop::cancel(shared) {
                 true => ("200 OK", "stop cancelled\n".to_owned()),
@@ -161,6 +171,23 @@ pub fn announce(addr: SocketAddr, text: &str) -> Result<String> {
         &format!(
             "POST /announce HTTP/1.0\r\nContent-Length: {}\r\n\r\n{text}",
             text.len()
+        ),
+    )?;
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));
+    match head.split_whitespace().nth(1) {
+        Some("200") => Ok(body.trim().to_owned()),
+        _ => bail!("refused: {}", body.trim()),
+    }
+}
+
+/// `mh3sp bot add <player's Capcom ID>` and `mh3sp bot remove <bot>`: what the running server answered.
+#[cfg(feature = "bot")]
+pub fn bot(addr: SocketAddr, verb: &str, who: &str) -> Result<String> {
+    let response = request(
+        addr,
+        &format!(
+            "POST /bot/{verb} HTTP/1.0\r\nContent-Length: {}\r\n\r\n{who}",
+            who.len()
         ),
     )?;
     let (head, body) = response.split_once("\r\n\r\n").unwrap_or((&response, ""));

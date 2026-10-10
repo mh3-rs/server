@@ -7,5 +7,12 @@ steps:
     environment:
       # Separate from the developer's target/ when the local runner mounts the working tree.
       CARGO_TARGET_DIR: target/ci
+      GITEA_USER:
+        from_secret: gitea_user
+      GITEA_TOKEN:
+        from_secret: gitea_token
     commands:
+      # The quest bots' tunnel is a private repository, named over SSH in Cargo.toml: fetched over HTTPS with the
+      # token here.
+      - git config --global url."https://$${GITEA_USER}:$${GITEA_TOKEN}@git.pband.ch/".insteadOf "ssh://git@git.pband.ch/"
       - scripts/ci-tests.sh

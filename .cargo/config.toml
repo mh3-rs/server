@@ -1,0 +1,3 @@
+# Fetch git dependencies (the bots' tunnel, over SSH) with the system git: its SSH keys and credentials.
+[net]
+git-fetch-with-cli = true

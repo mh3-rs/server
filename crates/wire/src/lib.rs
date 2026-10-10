@@ -8,6 +8,7 @@ pub mod crypt;
 mod frame;
 mod id;
 pub mod natneg;
+pub mod p2p;
 pub mod packets;
 mod pat;
 

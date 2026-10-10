@@ -13,10 +13,14 @@ path = "src/main.rs"
 [features]
 # `/metrics/prometheus` on the health port (the image `…-prometheus`).
 prometheus = []
+# The quest bots (`roadmap/experiment-bots.md`): an experiment, off by default.
+bot = ["dep:tunnel"]
 
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.6.0"
+# The quest bots' tunnel, shared with mh3sp-brain: branch main, pinned to this commit (both sides must agree).
+tunnel = { git = "ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git", rev = "1fed8b523166e104ef7bb7d4c338ec0e0c0bc6f8", optional = true }
 bytes = "1.12.1"
 dashmap = "6.2.1"
 dotenvy = "0.15.7"

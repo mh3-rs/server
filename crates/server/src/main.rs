@@ -2,6 +2,8 @@
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
 //! `mh3sp announce "<text>"`  an announcement to every player of the running server
 //! `mh3sp stop <delay|cancel>`  stop the running server with warning (`5min`, `1h30m`, `30s`), or not
+//! `mh3sp bot add <Capcom ID>`  a quest bot joins that player's party (needs the brain, `BOT_PORT`; the `bot` feature)
+//! `mh3sp bot remove <bot>`    the bot leaves
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
@@ -33,9 +35,17 @@ async fn main() -> Result<()> {
             );
             return Ok(());
         }
+        #[cfg(feature = "bot")]
+        ["bot", verb @ ("add" | "remove"), who] => {
+            println!(
+                "{}",
+                server::health::bot(server::config::health()?, verb, who)?
+            );
+            return Ok(());
+        }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | maintenance \"<message>\"]"
+            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | maintenance \"<message>\"]"
         ),
     };
 

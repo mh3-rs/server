@@ -46,8 +46,9 @@ fn config() -> (Config, tempfile::TempDir) {
         // MH3SP's event files (`scripts/ci-tests.sh` provides them).
         content_dir: std::env::var_os("CONTENT_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| repo().join("../mh3sp")),
+            .unwrap_or_else(|| repo().join("../reference")),
         encryption: false,
+        bot_port: None,
         clock_offset: 0,
         maintenance: None,
     };
@@ -1721,7 +1722,12 @@ async fn content_downloads() {
 async fn relay_latency() {
     use std::time::Instant;
     const ROUNDS: u32 = 50;
-    const P99_LIMIT: Duration = Duration::from_millis(2);
+    // 2 ms on a developer's machine; 10 ms in CI, on a shared runner and a debug build where a busy neighbour alone
+    // crossed 2 ms (pipeline 6). Still far under MH3SP's 50–80 ms: a real regression shows either way.
+    let p99_limit = match std::env::var_os("CI") {
+        Some(_) => Duration::from_millis(10),
+        None => Duration::from_millis(2),
+    };
 
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
@@ -1817,7 +1823,7 @@ async fn relay_latency() {
         pct(99),
         samples[samples.len() - 1]
     );
-    assert!(pct(99) < P99_LIMIT, "p99 {:?} over {P99_LIMIT:?}", pct(99));
+    assert!(pct(99) < p99_limit, "p99 {:?} over {p99_limit:?}", pct(99));
     running.stop().await;
 }
 
@@ -1912,6 +1918,383 @@ async fn party(running: &server::Running, gate: u16, depart: bool) -> (Console, 
     drain(&mut a, Duration::from_millis(100)).await;
     drain(&mut b, Duration::from_millis(100)).await;
     (a, b)
+}
+
+/// Every frame a console gets within `time`.
+async fn frames(console: &mut Console, time: Duration) -> Vec<Frame> {
+    let mut out = Vec::new();
+    let end = tokio::time::Instant::now() + time;
+    while let Ok(Ok(Received::Frame(f))) =
+        tokio::time::timeout_at(end, console.recv(Duration::from_secs(5))).await
+    {
+        out.push(f);
+    }
+    out
+}
+
+/// Tier 3, quest bots (`experiment-bots.md`, sprint 1): a bot joins a player's party when the brain is connected, as a
+/// member the other consoles see arrive in the city and the party; the brain is told; it leaves when asked, and when
+/// no hunter is left in its city.
+#[tokio::test]
+async fn bots_join_a_party() {
+    use futures_util::{SinkExt, StreamExt};
+    let (mut config, _db) = config();
+    config.bot_port = Some(0);
+    let running = server::start(&config).await.unwrap();
+    let health = running.health;
+    let bot = |verb: &'static str, who: String| {
+        tokio::task::spawn_blocking(move || server::health::bot(health, verb, &who))
+    };
+    let (mut a, mut b) = party(&running, 3, false).await;
+    let player = own_id(&mut a, 30).await;
+    drain(&mut b, Duration::from_millis(100)).await;
+
+    // No brain yet: refused.
+    let refused = bot("add", player.clone()).await.unwrap().unwrap_err();
+    assert!(refused.to_string().contains("NoBrain"), "{refused}");
+    // Nor without a party.
+    let tunnel = tokio::net::TcpStream::connect(running.bots.unwrap())
+        .await
+        .unwrap();
+    let mut brain = tokio_util::codec::Framed::new(tunnel, tunnel::codec());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(bot("add", "ZZZZZZ".into()).await.unwrap().is_err());
+
+    // Joined: a bot's Capcom ID, the brain told which party, the others see it arrive.
+    let said = bot("add", player.clone()).await.unwrap().unwrap();
+    let id = said.split_whitespace().nth(1).unwrap().to_owned();
+    assert!(id.starts_with('0') && id.len() == 6, "{said}");
+    let created = brain.next().await.unwrap().unwrap();
+    match tunnel::decode::<tunnel::ToBrain>(&created).unwrap() {
+        tunnel::ToBrain::Create { bot, party } => {
+            assert_eq!(
+                (
+                    bot.as_str(),
+                    party.server,
+                    party.gate,
+                    party.city,
+                    party.circle
+                ),
+                (id.as_str(), 1, 3, 1, 1)
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    let seen = frames(&mut b, Duration::from_millis(300)).await;
+    let names = |id: wire::PacketId| seen.iter().filter(move |f| f.id == id).count();
+    assert_eq!(names(NtcLayerIn::ID), 1);
+    // Ready at once.
+    let ready = seen
+        .iter()
+        .find(|f| f.id == NtcCircleMatchOptionSet::ID)
+        .unwrap();
+    let ready = NtcCircleMatchOptionSet::decode(&ready.payload).unwrap();
+    assert_eq!(ready.options.get(0x03), Some(&Item::Byte(1)));
+    let joined = seen.iter().find(|f| f.id == NtcCircleJoin::ID).unwrap();
+    let joined = NtcCircleJoin::decode(&joined.payload).unwrap();
+    assert_eq!(
+        (
+            String::from_utf8(joined.capcom_id.to_vec()).unwrap(),
+            joined.player
+        ),
+        (id.clone(), 3)
+    );
+    send(&mut b, 31, ReqLayerUserList { fields: vec![] }).await;
+    assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 3);
+
+    // A peer of the city's session: its record (kind 6) after its arrival, its port from the relay's range...
+    let peer_record = |body: &mut wire::Reader| {
+        body.u16().unwrap();
+        let record = body.pat_data().unwrap();
+        let field = |f| record.get(f).cloned();
+        (field(0x01), field(0x06))
+    };
+    let announced = seen.iter().find(|f| f.id == NtcLayerBinary::ID).unwrap();
+    let announced = NtcLayerBinary::decode(&announced.payload).unwrap();
+    let mut body = wire::Reader::new(&announced.data.0);
+    assert_eq!(body.lp2_string().unwrap(), id.as_bytes());
+    body.pat_data().unwrap();
+    match peer_record(&mut body) {
+        (Some(Item::Byte(6)), Some(Item::Word(port))) => {
+            assert!(config.relay_ports.contains(&port))
+        }
+        other => panic!("{other:?}"),
+    }
+    // A peer message as a console sends it: an empty sender, a length, the record.
+    let peer_message = |record: &PatData| {
+        let mut encoded = Vec::new();
+        wire::PatWrite::put_pat_data(&mut encoded, record).unwrap();
+        let mut data = Vec::new();
+        wire::PatWrite::put_pat_data(&mut data, &PatData::new()).unwrap();
+        data.put_u16(encoded.len() as u16);
+        data.extend_from_slice(&encoded);
+        Rest(data.into())
+    };
+    // ...and a console's record answered with kind 7, as the consoles do.
+    let record = wire::PatData::new()
+        .with(0x01, Item::Byte(6))
+        .with(0x03, Item::Long(0x1111_2222))
+        .with(0x04, Item::Long(1))
+        .with(0x05, Item::Long(2))
+        .with(0x06, Item::Word(3000));
+    send(
+        &mut b,
+        32,
+        NtcLayerBinary {
+            data: peer_message(&record),
+        },
+    )
+    .await;
+    let answer = expect::<NtcLayerBinary2>(&mut b).await;
+    assert_eq!(answer.capcom_id, id.as_bytes());
+    let mut body = wire::Reader::new(&answer.data.0);
+    body.pat_data().unwrap();
+    assert!(matches!(peer_record(&mut body).0, Some(Item::Byte(7))));
+    // A link's kind 5 to the bot, answered kind 4 as a city's host does.
+    let linked = PatData::new()
+        .with(0x01, Item::Byte(5))
+        .with(0x02, Item::Long(0));
+    send(
+        &mut b,
+        33,
+        NtcLayerBinary2 {
+            capcom_id: Bytes::copy_from_slice(id.as_bytes()),
+            data: peer_message(&linked),
+        },
+    )
+    .await;
+    let answer = expect::<NtcLayerBinary2>(&mut b).await;
+    let mut body = wire::Reader::new(&answer.data.0);
+    body.pat_data().unwrap();
+    assert!(matches!(peer_record(&mut body).0, Some(Item::Byte(4))));
+
+    // The party's messages: the bot's on joining (kind 2), and its own after a departure when the others send theirs
+    // (kind 3: each member waits for everyone's).
+    let circle_kind = |f: &wire::Frame| {
+        let ntc = NtcCircleBinary::decode(&f.payload).unwrap();
+        let mut body = wire::Reader::new(&ntc.data.0);
+        let from = body.lp2_string().unwrap();
+        body.pat_data().unwrap();
+        (from, peer_record(&mut body).0)
+    };
+    let joined = seen.iter().find(|f| f.id == NtcCircleBinary::ID).unwrap();
+    assert_eq!(
+        circle_kind(joined),
+        (Bytes::from(id.clone()), Some(Item::Byte(2)))
+    );
+    let departed = PatData::new()
+        .with(0x01, Item::Byte(3))
+        .with(0x02, Item::Long(3));
+    send(
+        &mut a,
+        35,
+        NtcCircleBinary {
+            circle: 1,
+            data: peer_message(&departed),
+        },
+    )
+    .await;
+    for c in [&mut a, &mut b] {
+        let got = frames(c, Duration::from_millis(200)).await;
+        assert!(
+            got.iter()
+                .filter(|f| f.id == NtcCircleBinary::ID)
+                .any(|f| circle_kind(f) == (Bytes::from(id.clone()), Some(Item::Byte(3))))
+        );
+    }
+
+    // The bot connects as the pair's "to" side, also when the console's pings come before the host's announcement of
+    // the pair (seen in the lab: the pings then end with NAT negotiation, before the bot knows its side).
+    let mut body = wire::Reader::new(&announced.data.0);
+    body.lp2_string().unwrap();
+    body.pat_data().unwrap();
+    body.u16().unwrap();
+    let bot_record = body.pat_data().unwrap();
+    let (Some(Item::Long(bot_peer)), Some(Item::Word(bot_port))) =
+        (bot_record.get(0x03).cloned(), bot_record.get(0x06).cloned())
+    else {
+        panic!("{bot_record:?}")
+    };
+    let console_peer = 0x1111_2222;
+    let game = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let ping = wire::natneg::Record {
+        cookie: console_peer ^ bot_peer,
+        body: wire::natneg::Body::Ping(wire::natneg::Peer {
+            addr: "127.0.0.1:1".parse().unwrap(),
+            got_your_data: 0,
+            finished: 0,
+        }),
+    };
+    game.send_to(&ping.encode(), ("127.0.0.1", bot_port))
+        .await
+        .unwrap();
+    let mut buf = [0u8; 2048];
+    let n = tokio::time::timeout(Duration::from_secs(1), game.recv(&mut buf))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(buf[..n].starts_with(&wire::natneg::MAGIC));
+    let pair = PatData::new()
+        .with(0x01, Item::Byte(8))
+        .with(0x07, Item::Long(console_peer))
+        .with(0x08, Item::Long(bot_peer))
+        .with(0x09, Item::Byte(2));
+    send(
+        &mut b,
+        34,
+        NtcLayerBinary {
+            data: peer_message(&pair),
+        },
+    )
+    .await;
+    let challenge = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let n = game.recv(&mut buf).await.unwrap();
+            if buf[..n].starts_with(&[0xfe, 0xfe, 0x01]) {
+                return buf[7..n].to_vec();
+            }
+        }
+    })
+    .await
+    .expect("the bot's GT2 challenge");
+    assert!(wire::p2p::gt2_valid_challenge(
+        &challenge[..].try_into().unwrap()
+    ));
+    drain(&mut a, Duration::from_millis(100)).await;
+    drain(&mut b, Duration::from_millis(100)).await;
+    drain(&mut a, Duration::from_millis(100)).await;
+
+    // Asked to leave: gone, the brain told.
+    assert!(bot("remove", id.clone()).await.unwrap().is_ok());
+    let left = brain.next().await.unwrap().unwrap();
+    assert_eq!(
+        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
+        tunnel::ToBrain::Leave { bot: id.clone() }
+    );
+    assert!(bot("remove", id).await.unwrap().is_err());
+
+    // Only the leader departs: B can't.
+    drain(&mut a, Duration::from_millis(100)).await;
+    drain(&mut b, Duration::from_millis(100)).await;
+    send(&mut b, 41, ReqCircleMatchStart {}).await;
+    expect::<AnsCircleMatchStart>(&mut b).await;
+    let seen = frames(&mut a, Duration::from_millis(200)).await;
+    assert!(seen.iter().all(|f| f.id != NtcCircleMatchStart::ID));
+
+    // Its party broken (the leader leaves before departure): it goes.
+    bot("add", player.clone()).await.unwrap().unwrap();
+    brain.next().await.unwrap().unwrap();
+    send(&mut a, 42, ReqCircleLeave { circle: 1 }).await;
+    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
+        tunnel::ToBrain::Leave { .. }
+    ));
+
+    // Its quest departed, then its last hunter left it (a departed quest passes to its next member): it goes.
+    send(
+        &mut a,
+        44,
+        ReqCircleCreate {
+            info: PatData::new().with(0x09, Item::Long(4)),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    bot("add", player.clone()).await.unwrap().unwrap();
+    brain.next().await.unwrap().unwrap();
+    send(
+        &mut a,
+        45,
+        ReqCircleMatchOptionSet {
+            options: PatData::new().with(0x03, Item::Byte(1)),
+        },
+    )
+    .await;
+    send(&mut a, 46, ReqCircleMatchStart {}).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    send(&mut a, 47, ReqCircleLeave { circle: 1 }).await;
+    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
+        tunnel::ToBrain::Leave { .. }
+    ));
+
+    // A hunter walking into the city: the bot makes room, out of the city and the party.
+    send(
+        &mut a,
+        48,
+        ReqCircleCreate {
+            info: PatData::new().with(0x09, Item::Long(4)),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    bot("add", player.clone()).await.unwrap().unwrap();
+    brain.next().await.unwrap().unwrap();
+    let mut c = enter_world(&running).await;
+    for (seq, layer) in [(10, 3), (11, 1)] {
+        send(
+            &mut c,
+            seq,
+            ReqLayerDown {
+                layer,
+                info: PatData::new(),
+            },
+        )
+        .await;
+    }
+    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
+        tunnel::ToBrain::Leave { .. }
+    ));
+    send(&mut a, 49, ReqCircleLeave { circle: 1 }).await;
+    send(&mut c, 12, ReqLayerUp {}).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Left alone in the city with no hunter: it goes too.
+    send(
+        &mut a,
+        43,
+        ReqCircleCreate {
+            info: PatData::new().with(0x09, Item::Long(4)),
+            extra: Default::default(),
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let said = bot("add", player).await.unwrap().unwrap();
+    let id = said.split_whitespace().nth(1).unwrap().to_owned();
+    brain.next().await.unwrap().unwrap();
+    for c in [&mut a, &mut b] {
+        send(c, 40, ReqLayerUp {}).await;
+    }
+    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
+        tunnel::ToBrain::Leave { bot: id }
+    );
+    let _ = brain.close().await;
+    running.stop().await;
 }
 
 /// The step `step` of two consoles meeting, A leading: 1 the gate, 2 A's city, 3 B in it, 4 A's quest, 5 B in it,

@@ -13,6 +13,8 @@
 //!   Slow work (argon2) runs on `spawn_blocking`.
 
 mod accounts;
+#[cfg(feature = "bot")]
+mod bots;
 pub mod config;
 mod content;
 mod database;
@@ -22,6 +24,8 @@ mod keys;
 mod metrics;
 mod natneg;
 mod net;
+#[cfg(feature = "bot")]
+mod peer;
 mod relay;
 mod stop;
 mod text;
@@ -58,6 +62,9 @@ struct Shared {
     fmp_port: u16,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
+    /// The quest bots' brain, when connected (`bots.rs`).
+    #[cfg(feature = "bot")]
+    brain: bots::Brain,
     /// With encryption on: the consoles' keys between two connections (`keys.rs`). Secrets: never logged.
     keys: Option<keys::Keys>,
     /// Jumps to another world server under way (M5 D13), by ticket: who, and where to.
@@ -75,6 +82,11 @@ struct Shared {
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
     metrics: Arc<metrics::Metrics>,
+    /// The relay's port range (M4): relayed pairs, and the quest bots' sockets.
+    relays: Option<Arc<Relays>>,
+    /// Peer IDs: consoles' and the quest bots' (`peer.rs`).
+    #[cfg(feature = "bot")]
+    peers: peer::Peers,
     /// A stop under way (`stop.rs`): cancelling it lifts it.
     stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
@@ -110,6 +122,8 @@ pub struct Running {
     /// UDP; off in maintenance mode.
     pub qr: Option<SocketAddr>,
     pub natneg: Option<SocketAddr>,
+    /// Where the bots' brain connects, when set.
+    pub bots: Option<SocketAddr>,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
     shared: Arc<Shared>,
@@ -178,6 +192,31 @@ pub async fn start(config: &Config) -> Result<Running> {
             content::check(&config.content_dir);
         }
     }
+    let metrics: Arc<metrics::Metrics> = Default::default();
+    // The relay's range (M4), also where quest bots get their sockets (`peer.rs`).
+    let relays = match (
+        &config.maintenance,
+        config
+            .external_address
+            .as_deref()
+            .map(str::parse::<Ipv4Addr>),
+    ) {
+        (None, Some(Ok(external))) => Some(Relays::new(
+            external,
+            config.relay_ports.clone(),
+            metrics.clone(),
+            shutdown.clone(),
+        )),
+        (None, _) => {
+            if config.strategy != Strategy::P2p {
+                error!(
+                    "the relay needs EXTERNAL_ADDRESS as an IPv4 address: consoles connect directly"
+                );
+            }
+            None
+        }
+        (Some(_), _) => None,
+    };
     let shared = Arc::new(Shared {
         config: config.clone(),
         db,
@@ -186,13 +225,18 @@ pub async fn start(config: &Config) -> Result<Running> {
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
+        #[cfg(feature = "bot")]
+        brain: Default::default(),
         keys: config.encryption.then(keys::Keys::default),
         jumps: moka::sync::Cache::builder().time_to_live(JUMP_TTL).build(),
         players: Players::default(),
         world: Default::default(),
         started: SystemTime::now(),
         stop: Default::default(),
-        metrics: Default::default(),
+        metrics,
+        relays,
+        #[cfg(feature = "bot")]
+        peers: Default::default(),
         shutdown: shutdown.clone(),
     });
     if config.maintenance.is_none() && !shared.configured() {
@@ -230,29 +274,9 @@ pub async fn start(config: &Config) -> Result<Running> {
             .with_context(|| format!("bind NatNeg on {}", config.natneg))?;
         natneg = Some(socket.local_addr()?);
         info!(role = "natneg", addr = %socket.local_addr()?, "listening");
-        let relays = match config
-            .external_address
-            .as_deref()
-            .map(str::parse::<Ipv4Addr>)
-        {
-            Some(Ok(external)) => Some(Relays::new(
-                external,
-                config.relay_ports.clone(),
-                shared.metrics.clone(),
-                shutdown.clone(),
-            )),
-            _ => {
-                if config.strategy != Strategy::P2p {
-                    error!(
-                        "the relay needs EXTERNAL_ADDRESS as an IPv4 address: consoles connect directly"
-                    );
-                }
-                None
-            }
-        };
         let connector = natneg::Connector {
             strategy: config.strategy,
-            relays,
+            relays: shared.relays.clone(),
             metrics: shared.metrics.clone(),
         };
         tasks.spawn(natneg::serve(
@@ -262,6 +286,30 @@ pub async fn start(config: &Config) -> Result<Running> {
             shutdown.clone(),
         ));
     }
+
+    // The quest bots' brain (localhost only), when set; the `bot` feature.
+    #[cfg(not(feature = "bot"))]
+    let bots = {
+        if config.bot_port.is_some() {
+            tracing::warn!(
+                "BOT_PORT is set, but this server is built without the quest bots (the `bot` feature): ignored"
+            );
+        }
+        None
+    };
+    #[cfg(feature = "bot")]
+    let bots = match (config.bot_port, &config.maintenance) {
+        (Some(port), None) => {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+                .await
+                .with_context(|| format!("bind the bot port {port}"))?;
+            net::announce("bots", &listener)?;
+            let address = listener.local_addr()?;
+            tasks.spawn(bots::serve(listener, shared.clone(), shutdown.clone()));
+            Some(address)
+        }
+        _ => None,
+    };
 
     let listener = TcpListener::bind(config.health)
         .await
@@ -278,6 +326,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         health,
         qr,
         natneg,
+        bots,
         shutdown,
         tasks,
         shared,

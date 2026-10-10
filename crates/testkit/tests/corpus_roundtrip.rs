@@ -240,3 +240,51 @@ fn natneg_records_reencode() {
         );
     }
 }
+
+/// Every recorded console-to-console datagram that isn't NAT negotiation is GT2's or the game's frames: each decodes
+/// (the frames' CRC checked, their messages read) and re-encodes byte for byte (the quest bots speak it,
+/// `experiment-bots.md`).
+#[test]
+fn p2p_datagrams_reencode() {
+    use wire::p2p::{Frame, Gt2, Message};
+    let (mut gt2, mut frames) = (0, 0);
+    for scenario in scenarios() {
+        for rec in corpus::load(&scenario).unwrap() {
+            for d in &rec.datagrams {
+                let payload = hex::decode(&d.payload).unwrap();
+                if payload.starts_with(&wire::natneg::MAGIC)
+                    || d.remote.ends_with(":27900")
+                    || d.remote.ends_with(":27901")
+                {
+                    continue;
+                }
+                let at = || format!("{}: {}", scenario.display(), d.payload);
+                if Gt2::is_gt2(&payload) {
+                    let packet = Gt2::decode(&payload).unwrap_or_else(|e| panic!("{}: {e}", at()));
+                    assert_eq!(packet.encode()[..], payload[..], "{}", at());
+                    gt2 += 1;
+                    continue;
+                }
+                let decoded =
+                    Frame::decode_datagram(&payload).unwrap_or_else(|e| panic!("{}: {e}", at()));
+                // Each frame's keys, read back from the datagram to re-encode the same bytes.
+                let mut keyed = Vec::new();
+                let mut offset = 0;
+                for frame in decoded {
+                    let len = usize::from(bytes::Buf::get_u16(&mut &payload[offset..]));
+                    let keys = [payload[offset + 2 + 20], payload[offset + 2 + 21]];
+                    let messages = Message::decode_all(&frame.payload)
+                        .unwrap_or_else(|e| panic!("{}: {e}", at()));
+                    assert_eq!(Message::encode_all(&messages), frame.payload, "{}", at());
+                    keyed.push((frame, keys));
+                    offset += 2 + len;
+                    frames += 1;
+                }
+                assert_eq!(Frame::encode_datagram(&keyed)[..], payload[..], "{}", at());
+            }
+        }
+    }
+    if !scenarios().is_empty() {
+        assert!(gt2 > 0 && frames > 0, "{gt2} GT2 packets, {frames} frames");
+    }
+}

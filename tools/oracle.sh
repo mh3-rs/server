@@ -1,11 +1,11 @@
 #!/bin/sh
 # (Re)start the reference server, Python MH3SP, on a fresh database, so recordings and replays
 # all start from the same server state. Returns once it listens.
-# Env: LAB (default ../mh3sp/lab); LOG (default $LAB/server.log)
+# Env: LAB (default ../lab), REFERENCE (default ../reference); LOG (default $LAB/server.log)
 set -eu
 cd "$(dirname "$0")/.."
-LAB=$(cd "${LAB:-../mh3sp/lab}" && pwd)
-MH3SP=$(dirname "$LAB")
+LAB=$(cd "${LAB:-../lab}" && pwd)
+MH3SP=$(cd "${REFERENCE:-../reference}" && pwd)
 LOG=${LOG:-$LAB/server.log}
 
 pkill -f 'master_server.py -- --log-to-window' || true

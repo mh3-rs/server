@@ -130,6 +130,14 @@ pub struct Place {
     arrival: u64,
 }
 
+/// The connection number of the quest bots (`experiment-bots.md`): they have no connection, and no console gets 0.
+pub const BOT_CONN: u64 = 0;
+
+/// A quest bot's place (`BOT_CONN`): never, without the `bot` feature.
+fn is_bot(place: &Place) -> bool {
+    cfg!(feature = "bot") && place.conn == BOT_CONN
+}
+
 #[derive(Debug)]
 pub struct City {
     pub leader: String,
@@ -179,6 +187,12 @@ impl Circle {
             .iter()
             .enumerate()
             .filter_map(|(i, s)| s.as_deref().map(|id| (i as u8 + 1, id)))
+    }
+
+    #[cfg(feature = "bot")]
+    /// How many players it takes.
+    pub fn capacity(&self) -> usize {
+        self.slots.len()
     }
 
     pub fn index_of(&self, capcom_id: &str) -> Option<u8> {
@@ -376,12 +390,18 @@ impl World {
         self.tidy(id);
     }
 
-    /// Whether a player can walk into the city: it exists, isn't being created and has room.
+    /// Whether a player can walk into the city: it exists, isn't being created and has room. Its quest bots don't
+    /// count: a hunter walking in sends them away (`fmp::enter_city`).
     pub fn can_join(&self, id: CityId) -> Result<(), CityRefusal> {
         let Some(city) = self.cities.get(&id) else {
             return Err(CityRefusal::Missing);
         };
-        if city.reserved_by.is_some() || self.city_population(id) >= CITY_CAPACITY {
+        let hunters = self
+            .city_players(id)
+            .iter()
+            .filter(|p| !self.places.get(*p).is_some_and(is_bot))
+            .count() as u32;
+        if city.reserved_by.is_some() || hunters >= CITY_CAPACITY {
             return Err(CityRefusal::Full);
         }
         Ok(())
@@ -791,7 +811,8 @@ impl World {
             .sum()
     }
 
-    /// Removes a city nobody is in or about to create; gives a leaderless city to its earliest player.
+    /// Removes a city nobody is in or about to create; gives a leaderless city to its earliest player, never a bot (it
+    /// can't host a session; bots alone in a city leave it, `fmp::depart`).
     fn tidy(&mut self, id: CityId) {
         let mut members: Vec<(&String, &Place)> = self
             .places
@@ -799,12 +820,16 @@ impl World {
             .filter(|(_, p)| p.server == id.0 && p.gate == Some(id.1) && p.city == Some(id.2))
             .collect();
         members.sort_by_key(|(_, p)| p.arrival);
-        let first = members.first().map(|(cid, _)| (*cid).clone());
+        let empty = members.is_empty();
+        let first = members
+            .iter()
+            .find(|(_, p)| !is_bot(p))
+            .map(|(cid, _)| (*cid).clone());
         let Some(city) = self.cities.get_mut(&id) else {
             return;
         };
         match first {
-            None if city.reserved_by.is_none() => {
+            None if empty && city.reserved_by.is_none() => {
                 self.cities.remove(&id);
             }
             Some(first) if city.leader.is_empty() => city.leader = first,
@@ -958,7 +983,8 @@ mod tests {
     fn world_with(players: &[&str]) -> World {
         let mut world = World::default();
         for (conn, id) in players.iter().enumerate() {
-            world.enter(id, conn as u64, 1, Bytes::new(), Profile::default());
+            // From 1: 0 is the bots' (`BOT_CONN`).
+            world.enter(id, conn as u64 + 1, 1, Bytes::new(), Profile::default());
             world.place(id).unwrap().gate = Some(1);
         }
         world
@@ -982,6 +1008,30 @@ mod tests {
         world.leave_city("AAAAAA");
         assert_eq!(world.cities[&id].leader, "BBBBBB");
         world.leave_city("BBBBBB");
+        assert!(world.cities.is_empty());
+    }
+
+    #[cfg(feature = "bot")]
+    #[test]
+    fn a_bot_never_hosts_a_city() {
+        let mut world = world_with(&["AAAAAA", "BBBBBB"]);
+        world.enter("0BOT01", BOT_CONN, 1, Bytes::new(), Profile::default());
+        world.place("0BOT01").unwrap().gate = Some(1);
+        let id = (1, 1, 1);
+        world.reserve_city(id, "AAAAAA").unwrap();
+        world
+            .create_city(id, "AAAAAA", OptionalFields::default())
+            .unwrap();
+        world.release_city(id, "AAAAAA");
+        // The bot arrived before B: B leads all the same.
+        world.join_city(id, "0BOT01").unwrap();
+        world.join_city(id, "BBBBBB").unwrap();
+        world.leave_city("AAAAAA");
+        assert_eq!(world.city_host(id), Some("BBBBBB"));
+        // The bot alone: no host, the city stays until it leaves too.
+        world.leave_city("BBBBBB");
+        assert_eq!(world.city_host(id), None);
+        world.leave_city("0BOT01");
         assert!(world.cities.is_empty());
     }
 
@@ -1009,7 +1059,7 @@ mod tests {
     fn a_reservation_goes_with_its_player() {
         let mut world = world_with(&["AAAAAA"]);
         world.reserve_city((1, 1, 2), "AAAAAA").unwrap();
-        world.leave("AAAAAA", 0);
+        world.leave("AAAAAA", 1);
         assert!(world.cities.is_empty() && world.places.is_empty());
     }
 }
