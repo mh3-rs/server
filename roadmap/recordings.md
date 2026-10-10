@@ -25,6 +25,23 @@ seats, searches. Nothing should error or feel slower than MH3SP.
 A Dolphin on a second machine (its own IP), on the Rust server in `hybrid`: one console forced to the relay (a failed
 punch), the others direct; a city and a quest with all three. Shows a relayed and a direct pair side by side.
 
+### Voice chat through the relay (later)
+
+The game's Wii Speak voice goes console to console, in the P2P session (the decomp: `NetworkLayerPat`'s voice
+buffers, `NetworkWiiMediator`'s microphone and encoder), so through our relay for relayed pairs. The relay caps each
+console at 20 kB/s per pair (M4 D5, `relay.rs`), sized on game traffic measured without voice (~0.23 kB/s): voice must
+fit under it, or it gets cut silently.
+
+Setup: the Rust server in `relay` (every pair relayed); Dolphin's emulated Wii Speak on both consoles (the Mac's
+microphone; recent Dolphin versions).
+1. both: Online, slot 1, Valor1, City Gate 1. dev1: create City 1. dev2: join it.
+2. both: talk for a minute (speak into the Mac's microphone): does each hear the other?
+3. both: a quest together, talk again during the hunt.
+4. both: close.
+
+Then measure the relayed rate per console (the captures, or the relay's metrics) against the cap; no `warn`
+"over its rate" in the log.
+
 ## Done
 
 - 2026-10-09: runs 1–17 (M3, M4, M5): see the milestones' roadmaps.
