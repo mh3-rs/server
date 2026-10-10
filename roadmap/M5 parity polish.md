@@ -139,6 +139,12 @@ chat menu offers it; `NtcLayerTellLow` never. The console sessions to do: `recor
   disc. Kept in mind for M8: `NtcLayerTell` may be a server-to-player channel (a line in chat rather than the inbox),
   to try then.
 
+- **D15 What isn't built answers "nothing" when it can. Settled (2026-10-10).** A request the game may send that we
+  don't build, and that isn't critical, gets a harmless answer rather than a dropped connection (MH3SP answers them):
+  city search (`LayerDetailSearchHead/Data/Foot`) finds no city (test: `city_search_finds_nothing`). The rest stays
+  unanswered because no console can send it: `LayerTell` (no menu, D14), `ReqLayerInfo` (only after a city search
+  result), the Japanese-only requests (the Japanese disc is refused at login).
+
 ## Work (once the decisions are settled)
 
 - [x] `roadmap/unk.md`: renames (no change on the wire); `NtcUserBinaryNotice` with `target` 1 to its one player

@@ -535,6 +535,26 @@ impl Fmp {
                     },
                 )
             }
+            ReqLayerDetailSearchHead::ID => {
+                // City search, not built (M5 D10): no city found, rather than a dropped connection (M5 D15).
+                ReqLayerDetailSearchHead::decode(p)?;
+                reply(
+                    seq,
+                    &AnsLayerDetailSearchHead {
+                        unk: 0,
+                        count: 0,
+                        unk2: 0,
+                    },
+                )
+            }
+            ReqLayerDetailSearchData::ID => {
+                ReqLayerDetailSearchData::decode(p)?;
+                reply(seq, &AnsLayerDetailSearchData { unk: 0, count: 0 })
+            }
+            ReqLayerDetailSearchFoot::ID => {
+                ReqLayerDetailSearchFoot::decode(p)?;
+                reply(seq, &AnsLayerDetailSearchFoot {})
+            }
             ReqLayerSiblingListFoot::ID => {
                 ReqLayerSiblingListFoot::decode(p)?;
                 reply(seq, &AnsLayerSiblingListFoot {})

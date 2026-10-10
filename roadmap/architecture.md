@@ -16,6 +16,8 @@ The lasting part of the roadmap: the reference policy, the facts the game impose
   "different by mistake".
 - When Python and the game disagree (a Python bug the game tolerates), the game wins, and the corpus records
   the reason in the divergence entry.
+- **What isn't built answers "nothing" when it can** (M5 D15): a request the game may send for a feature we don't
+  build, and that isn't critical, gets a harmless empty answer rather than a dropped connection.
 
 ## Goals
 

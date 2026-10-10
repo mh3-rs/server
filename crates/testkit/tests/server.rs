@@ -1021,6 +1021,36 @@ async fn jumps_within_a_world_server() {
     running.stop().await;
 }
 
+/// City search isn't built (M5 D10): a console asking finds no city instead of being dropped (M5 D15).
+#[tokio::test]
+async fn city_search_finds_nothing() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = enter_world(&running).await;
+    let search = Rest(Bytes::from_static(&[
+        1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0, 0,
+    ]));
+    send(&mut console, 10, ReqLayerDetailSearchHead { search }).await;
+    assert_eq!(
+        expect::<AnsLayerDetailSearchHead>(&mut console).await.count,
+        0
+    );
+    send(
+        &mut console,
+        11,
+        ReqLayerDetailSearchData { first: 1, count: 1 },
+    )
+    .await;
+    assert_eq!(
+        expect::<AnsLayerDetailSearchData>(&mut console).await.count,
+        0
+    );
+    let rest = Rest(Bytes::new());
+    send(&mut console, 12, ReqLayerDetailSearchFoot { rest }).await;
+    expect::<AnsLayerDetailSearchFoot>(&mut console).await;
+    running.stop().await;
+}
+
 /// Tier 3, a jump to another world server (M5 D13): a ticket, the server selection's handshake, then the ticket
 /// places the player there, once.
 #[tokio::test]

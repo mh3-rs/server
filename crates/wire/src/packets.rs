@@ -346,6 +346,14 @@ packets! {
     ReqLayerSiblingListData = 0x64280100 { first: u32, count: u32 }
     AnsLayerSiblingListData = 0x64280200 { first: u32, siblings: Vec<(PatData, OptionalFields)> }
     ReqLayerSiblingListFoot = 0x64290100 {}
+    // City search (the cities matching settings): no menu found that sends it (M5 D10); answered "none found" so a
+    // console that does isn't dropped (M5 D15). The requests aren't read.
+    ReqLayerDetailSearchHead = 0x64900100 { search: Rest }
+    AnsLayerDetailSearchHead = 0x64900200 { unk: u32, count: u32, unk2: u32 }
+    ReqLayerDetailSearchData = 0x64910100 { first: u32, count: u32 }
+    AnsLayerDetailSearchData = 0x64910200 { unk: u32, count: u32 }
+    ReqLayerDetailSearchFoot = 0x64920100 { rest: Rest }
+    AnsLayerDetailSearchFoot = 0x64920200 {}
     AnsLayerSiblingListFoot = 0x64290200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
     ReqLayerChildInfo = 0x64230100 { layer: u16, fields: Vec<u8>, rest: Rest }
