@@ -30,6 +30,8 @@ struct Table {
     nas_pr: u32,
     available: u32,
     natneg: [u32; 3],
+    /// `DWCi_Auth_StartRequest`'s call that adds a second `Host` header (`DWCi_Np_CPUCopyFast.c:666`).
+    nas_host: u32,
 }
 
 const PAL: Table = Table {
@@ -40,6 +42,7 @@ const PAL: Table = Table {
     nas_pr: 0x8063_09a0,
     available: 0x8063_1118,
     natneg: [0x8063_11a8, 0x8063_11c4, 0x8063_11e0],
+    nas_host: 0x8050_9a70,
 };
 
 const US: Table = Table {
@@ -50,6 +53,7 @@ const US: Table = Table {
     nas_pr: 0x8063_00e0,
     available: 0x8063_0858,
     natneg: [0x8063_08e8, 0x8063_0904, 0x8063_0920],
+    nas_host: 0x8050_93f0,
 };
 
 /// Each string's room, NUL included: what the patch fills (the rest with NULs).
@@ -57,6 +61,11 @@ const OPN_ROOM: usize = 40;
 const NAS_ROOM: usize = 36;
 const AVAILABLE_ROOM: usize = 40;
 const NATNEG_ROOM: usize = 28;
+/// The Nintendo login sends `Host` twice: its HTTP library writes one from the URL (`d_nhttp.c:1930`), and the login
+/// adds its own. Our server takes both; a reverse proxy refuses them (Go's HTTP server, Traefik's: 400, the game's
+/// error 23400). The patch drops the second: its `bl NHTTPAddHeaderField` (the same on both discs) becomes a `nop`.
+const HOST_CALL: [u8; 4] = [0x48, 0x01, 0x15, 0x39];
+const NOP: [u8; 4] = [0x60, 0x00, 0x00, 0x00];
 /// NatNeg's three servers, `mh3uswii.<label>.<domain>` once the game adds its name (`DWCi_NatNeg.c:761`).
 const NATNEG_LABELS: [&str; 3] = ["a", "b", "c"];
 
@@ -108,7 +117,7 @@ struct Edit {
     address: u32,
     value: Vec<u8>,
     /// What must be there: the patch skips a disc that doesn't match. None for the CA: its original is Nintendo's.
-    original: Option<&'static str>,
+    original: Option<&'static [u8]>,
     what: &'static str,
 }
 
@@ -120,22 +129,23 @@ fn edits(region: Region, domain: &str, ca: &[u8]) -> Result<Vec<Edit>> {
         tls::CA_SIZE
     );
     let t = region.table();
-    let string = |address, room: usize, text: String, original, what| -> Result<Edit> {
-        ensure!(
-            text.len() < room,
-            "{what}: {text:?} is longer than the game's {} bytes",
-            room - 1
-        );
-        let mut value = Vec::with_capacity(room);
-        value.put_slice(text.as_bytes());
-        value.put_bytes(0, room - text.len());
-        Ok(Edit {
-            address,
-            value,
-            original: Some(original),
-            what,
-        })
-    };
+    let string =
+        |address, room: usize, text: String, original: &'static str, what| -> Result<Edit> {
+            ensure!(
+                text.len() < room,
+                "{what}: {text:?} is longer than the game's {} bytes",
+                room - 1
+            );
+            let mut value = Vec::with_capacity(room);
+            value.put_slice(text.as_bytes());
+            value.put_bytes(0, room - text.len());
+            Ok(Edit {
+                address,
+                value,
+                original: Some(original.as_bytes()),
+                what,
+            })
+        };
     let mut edits = vec![
         Edit {
             address: t.ca,
@@ -186,6 +196,12 @@ fn edits(region: Region, domain: &str, ca: &[u8]) -> Result<Vec<Edit>> {
             "NAT negotiation",
         )?);
     }
+    edits.push(Edit {
+        address: t.nas_host,
+        value: NOP.to_vec(),
+        original: Some(&HOST_CALL),
+        what: "Nintendo login, one Host header",
+    });
     Ok(edits)
 }
 
@@ -346,7 +362,7 @@ mod tests {
         assert_eq!(LONGEST.len(), DOMAIN_MAX);
         for region in Region::ALL {
             let edits = edits(region, LONGEST, &ca()).unwrap();
-            assert_eq!(edits.len(), 8);
+            assert_eq!(edits.len(), 9);
             let natneg = edits
                 .iter()
                 .find(|e| e.address == region.natneg_names_at())
@@ -365,7 +381,8 @@ mod tests {
 
     #[test]
     fn each_string_fills_its_room_and_names_its_original() {
-        for edit in edits(Region::Pal, "mh3.example.org", &ca()).unwrap() {
+        let strings = edits(Region::Pal, "mh3.example.org", &ca()).unwrap();
+        for edit in strings.into_iter().filter(|e| e.value != NOP) {
             match edit.original {
                 None => assert_eq!(edit.value, ca(), "only the CA has no original"),
                 Some(original) => {
@@ -385,6 +402,22 @@ mod tests {
     }
 
     #[test]
+    fn the_second_host_header_is_dropped_on_both_discs() {
+        for (region, address) in [(Region::Pal, 0x8050_9a70), (Region::Us, 0x8050_93f0)] {
+            let edits = edits(region, "mh3.example.org", &ca()).unwrap();
+            let host = edits.iter().find(|e| e.address == address).unwrap();
+            assert_eq!(
+                (host.value.as_slice(), host.original),
+                (&NOP[..], Some(&HOST_CALL[..]))
+            );
+            let xml = riivolution(region, "mh3.example.org", &ca()).unwrap();
+            assert!(xml.contains(&format!(
+                "offset=\"0x{address:08X}\" value=\"60000000\" original=\"48011539\""
+            )));
+        }
+    }
+
+    #[test]
     fn a_ca_of_another_size_is_refused() {
         assert!(edits(Region::Pal, "mh3.example.org", &[0; 925]).is_err());
     }
@@ -393,7 +426,7 @@ mod tests {
     fn riivolution_names_its_disc_and_carries_every_edit() {
         let xml = riivolution(Region::Us, "mh3.example.org", &ca()).unwrap();
         assert!(xml.contains("<id game=\"RMHE\" developer=\"08\" />"));
-        assert_eq!(xml.matches("<memory ").count(), 8);
+        assert_eq!(xml.matches("<memory ").count(), 9);
         assert!(xml.contains(&format!("value=\"{}\"", hex::encode_upper(ca()))));
         assert!(xml.contains(&hex::encode_upper("opn.mh3.example.org")));
         assert_eq!(
@@ -402,7 +435,7 @@ mod tests {
             "referenced and defined"
         );
         let wit = wit(Region::Us, "mh3.example.org", &ca()).unwrap();
-        assert_eq!(wit.matches("<memory ").count(), 8);
+        assert_eq!(wit.matches("<memory ").count(), 9);
         assert!(wit.contains("offset=\"0x80571EA0\""));
     }
 

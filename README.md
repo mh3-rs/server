@@ -146,19 +146,31 @@ Open them in the firewall and forward them from the router, unchanged:
 
 ### Port 80
 
-The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP, no other port possible. If the host already
-serves websites on port 80, put the server on another `nas_port` and let your reverse proxy forward the domain to it.
-The game sends the `Host` header (from its HTTP library's code; not yet seen with a console), and the server doesn't
-need the client's address. Keep it plain HTTP: the game can't follow a redirect to HTTPS (Caddy redirects unless the
-site is written `http://…`). Only `<domain>` goes through the proxy; the other names aren't HTTP.
+The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP. If the host already serves websites on port
+80, let your reverse proxy forward `<domain>` to the server's `nas_port`; only that name goes through it, the others
+aren't HTTP. The server doesn't need the client's address there.
 
-```nginx
-server {
-    listen 80;
-    server_name mh3.example.org;
-    location / { proxy_pass http://127.0.0.1:8080; }   # nas_port = 8080
-}
+- **Plain HTTP for the game**: no redirect to HTTPS (the game can't follow one), so no HSTS either on that route.
+  Serve the same route on HTTPS too, for browsers opening the player guide (`/patch`).
+- **The patch from this version on**: the game sends its `Host` header twice, which every common proxy refuses (a
+  400, the game's error 23400); the patch drops the second. Players with an older patch download it again.
+
+With Traefik (its docker labels; `web` and `websecure` your entrypoints):
+
+```yaml
+- traefik.http.services.mh3sp.loadbalancer.server.port=80   # nas_port
+- traefik.http.routers.mh3sp-http.rule=Host(`mh3.example.org`)
+- traefik.http.routers.mh3sp-http.entrypoints=web
+- traefik.http.routers.mh3sp-http.service=mh3sp
+- traefik.http.routers.mh3sp-https.rule=Host(`mh3.example.org`)
+- traefik.http.routers.mh3sp-https.entrypoints=websecure
+- traefik.http.routers.mh3sp-https.tls.certresolver=<yours>
+- traefik.http.routers.mh3sp-https.service=mh3sp
 ```
+
+If `web` redirects everything to HTTPS (`entrypoints.web.http.redirections.entryPoint.to`), that redirect outranks
+every router: lower it with `--entrypoints.web.http.redirections.entryPoint.priority=1`, and check that your other
+routers name their entrypoints (a router without one also listens on `web`).
 
 ### Limits
 

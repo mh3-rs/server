@@ -28,7 +28,9 @@ steps:
     settings:
       registry: git.pband.ch
       repo: git.pband.ch/${CI_REPO}
-      platforms: linux/amd64,linux/arm64
+      # amd64 only while we iterate on the deployment (arm64 under emulation multiplies the build time); arm64 comes
+      # back for the release.
+      platforms: linux/amd64
       dockerfile: Dockerfile
       tags_file: .tags
       username:
