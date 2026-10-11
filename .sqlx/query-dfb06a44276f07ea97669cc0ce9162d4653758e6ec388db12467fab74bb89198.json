@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT p.hr AS \"hr!: u16\" FROM hunter_profiles p JOIN hunters h ON h.id = p.hunter_id\n           WHERE h.capcom_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "hr!: u16",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "hunter_profiles",
+            "name": "hr"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dfb06a44276f07ea97669cc0ce9162d4653758e6ec388db12467fab74bb89198"
+}

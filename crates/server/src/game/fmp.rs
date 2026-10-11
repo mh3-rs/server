@@ -1379,6 +1379,12 @@ impl Fmp {
             }
             ReqFmpInfo2::ID => {
                 let r = ReqFmpInfo2::decode(p)?;
+                // At FMP the console has sent its profile (after `ReqLayerStart`): HR 0 is none yet.
+                let hr = Some(session.profile.hr).filter(|&hr| hr > 0);
+                if let Some(refusal) = world::hr_refusal(r.index, hr) {
+                    info!(index = r.index, "world server refused: HR limit");
+                    return alert(AnsFmpInfo2::ID, seq, refusal);
+                }
                 let data = world::fmp_info(shared, r.index, &r.fields)?;
                 session.world_server = Some(r.index);
                 info!(

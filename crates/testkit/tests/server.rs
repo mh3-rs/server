@@ -2509,6 +2509,87 @@ async fn player_search() {
     running.stop().await;
 }
 
+/// World servers keep to their type's HR (the descriptions): at FMP from the session's profile, at LMP's first pick
+/// (before any profile) from the one stored last time; a hunter never online here passes.
+#[tokio::test]
+async fn world_servers_keep_to_their_hr_limits() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = Lmp::of(&running);
+    let (code, _, _) = first_visit(lmp, None).await;
+    let code = code.as_str();
+    let (beginners, veterans) = (5, 7);
+    // Never online: no HR known, Beginners1 lets it in.
+    let lmp_pick = move |index| async move {
+        let ticket = login(lmp, code, 1).await;
+        let mut console = Console::connect(lmp.addr, false).await.unwrap();
+        expect::<ReqConnection>(&mut console).await;
+        let data = connection_data(None, Some(&ticket));
+        send(&mut console, 0, AnsConnection { data }).await;
+        expect::<NtcLogin>(&mut console).await;
+        send(
+            &mut console,
+            1,
+            ReqUserObject {
+                unk: 1,
+                slot: 1,
+                user: PatData::new(),
+            },
+        )
+        .await;
+        expect::<AnsUserObject>(&mut console).await;
+        send(
+            &mut console,
+            2,
+            ReqFmpInfo {
+                index,
+                fields: vec![2, 3],
+            },
+        )
+        .await;
+        match console.recv(Duration::from_secs(5)).await.unwrap() {
+            Received::Frame(f) if f.id == AnsFmpInfo::ID => None,
+            Received::Frame(f) if f.id.0 == AnsFmpInfo::ID.0 | 0x01 => {
+                Some(String::from_utf8_lossy(&f.payload).into_owned())
+            }
+            other => panic!("expected AnsFmpInfo or its alert, got {other:?}"),
+        }
+    };
+    assert_eq!(lmp_pick(beginners).await, None, "HR unknown");
+
+    // HR 50, at FMP: Beginners refused, Veterans taken.
+    let mut a = play(&running, code).await;
+    send(
+        &mut a,
+        10,
+        ReqUserBinarySet {
+            offset: 0,
+            data: vec![0, 50].into(),
+        },
+    )
+    .await;
+    expect::<AnsUserBinarySet>(&mut a).await;
+    let pick = |index| ReqFmpInfo2 {
+        index,
+        fields: vec![2, 3],
+    };
+    send(&mut a, 11, pick(beginners)).await;
+    assert!(
+        expect_alert(&mut a, AnsFmpInfo2::ID)
+            .await
+            .contains("HR 30 or lower")
+    );
+    send(&mut a, 12, pick(veterans)).await;
+    expect::<AnsFmpInfo2>(&mut a).await;
+    drop(a);
+
+    // The next session's first pick, at LMP: HR 50 as stored.
+    let refused = lmp_pick(beginners).await.expect("refused at LMP");
+    assert!(refused.contains("HR 30 or lower"), "{refused}");
+    assert_eq!(lmp_pick(veterans).await, None);
+    running.stop().await;
+}
+
 /// Tier 3: profile writes are validated; an invalid one is refused and others keep seeing the previous block.
 #[tokio::test]
 async fn invalid_profiles_are_refused() {

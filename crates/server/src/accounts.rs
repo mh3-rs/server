@@ -278,6 +278,18 @@ pub async fn hunter(db: &SqlitePool, capcom_id: &str) -> Result<Option<(i64, Vec
     .map(|r| (r.id, r.name)))
 }
 
+/// A hunter's HR as last stored (`save_profile`): none if it has never sent its profile.
+pub async fn stored_hr(db: &SqlitePool, capcom_id: &str) -> Result<Option<u16>> {
+    let hr = sqlx::query_scalar!(
+        r#"SELECT p.hr AS "hr!: u16" FROM hunter_profiles p JOIN hunters h ON h.id = p.hunter_id
+           WHERE h.capcom_id = ?1"#,
+        capcom_id
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(hr)
+}
+
 /// Messages waiting for one recipient, at most: more are dropped (a console can't fill the database).
 const INBOX: i64 = 100;
 

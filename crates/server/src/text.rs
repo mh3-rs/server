@@ -64,6 +64,9 @@ pub enum Text {
     TooFast,
     /// A console banned (`/ban`, `access.rs`).
     Banned,
+    /// A world server's HR limit (`world::hr_refusal`).
+    RookiesOnly,
+    ExpertsOnly,
     /// A console that didn't log in through this server's Nintendo login (`nas.rs`): another server's patch, or a
     /// token expired. An alert (LMP).
     UnknownLogin,
@@ -180,6 +183,8 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
         Text::NotSupported => "<LF=8><BODY><CENTER>Not available on this server.<END>",
         Text::TooFast => "<LF=8><BODY><CENTER>Too fast: please wait a moment.<END>",
         Text::Banned => "<LF=8><BODY><CENTER>This console is banned from this server.<END>",
+        Text::RookiesOnly => "<LF=8><BODY><CENTER>Only hunters HR 30 or lower may enter.<END>",
+        Text::ExpertsOnly => "<LF=8><BODY><CENTER>Only hunters HR 31 or higher may enter.<END>",
         Text::UnknownLogin => {
             "<LF=8><BODY><CENTER>Log in again: your login wasn't through this server (check the patch).<END>"
         }

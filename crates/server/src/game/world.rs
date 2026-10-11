@@ -31,6 +31,22 @@ pub const SERVERS: [(&str, u64); 12] = [
     ("Greed4", 4),
 ];
 pub const SERVER_CAPACITY: u32 = 2000;
+/// The highest HR of a rookie server, the lowest of an expert one minus one (the types' descriptions, `text.rs`).
+const ROOKIE_MAX_HR: u16 = 30;
+
+/// Why a hunter of this HR may not enter world server `index` (1-based): rookie servers take HR 30 or lower, expert
+/// ones HR 31 or higher, as their descriptions say. An unknown HR (a hunter never online here yet) is let through.
+/// The game checks this itself and never asks (the lab, 2026-10-11): only a modified console meets this refusal,
+/// whose alert no console has shown yet.
+pub fn hr_refusal(index: u32, hr: Option<u16>) -> Option<Text> {
+    let hr = hr?;
+    let (_, kind) = SERVERS.get(index.checked_sub(1)? as usize)?;
+    match kind {
+        2 if hr > ROOKIE_MAX_HR => Some(Text::RookiesOnly),
+        3 if hr <= ROOKIE_MAX_HR => Some(Text::ExpertsOnly),
+        _ => None,
+    }
+}
 pub const LIST_VERSION: u32 = 1;
 
 /// The world server list (`AnsFmpListData`, `AnsFmpListData2`): `count` servers from `first` (1-based).
@@ -976,6 +992,28 @@ pub fn cities(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rookies_and_experts_by_hr() {
+        let (open, rookie, expert, recruiting) = (1, 5, 7, 9);
+        for (index, hr, refused) in [
+            (rookie, 30, None),
+            (rookie, 31, Some(Text::RookiesOnly)),
+            (expert, 30, Some(Text::ExpertsOnly)),
+            (expert, 31, None),
+            (open, 999, None),
+            (recruiting, 1, None),
+        ] {
+            assert_eq!(
+                hr_refusal(index, Some(hr)),
+                refused,
+                "server {index}, HR {hr}"
+            );
+        }
+        assert_eq!(hr_refusal(rookie, None), None, "unknown HR passes");
+        assert_eq!(hr_refusal(0, Some(99)), None);
+        assert_eq!(hr_refusal(13, Some(99)), None);
+    }
 
     fn world_with(players: &[&str]) -> World {
         let mut world = World::default();

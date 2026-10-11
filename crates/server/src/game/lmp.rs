@@ -302,6 +302,28 @@ impl Lmp {
             }
             (Stage::SecondVisit, ReqFmpInfo::ID) => {
                 let r = ReqFmpInfo::decode(p)?;
+                // The first pick comes before the console sends its profile: the HR stored last time, if any.
+                let session = self.session(req)?;
+                let hr = match session.profile.hr {
+                    0 => {
+                        let capcom_id = session
+                            .capcom_id
+                            .as_deref()
+                            .ok_or_else(|| Fault::Client(anyhow!("no Capcom ID chosen")))?;
+                        let db = shared
+                            .db
+                            .pool()
+                            .ok_or_else(|| Fault::Database(anyhow!("database not opened")))?;
+                        accounts::stored_hr(db, capcom_id)
+                            .await
+                            .map_err(Fault::Database)?
+                    }
+                    hr => Some(hr),
+                };
+                if let Some(refusal) = world::hr_refusal(r.index, hr) {
+                    info!(index = r.index, "world server refused: HR limit");
+                    return alert(AnsFmpInfo::ID, seq, refusal);
+                }
                 let data = world::fmp_info(shared, r.index, &r.fields)?;
                 reply(seq, &AnsFmpInfo { data })
             }
