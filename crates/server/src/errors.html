@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name}: known errors and error codes</title>
+<style>
+  body { max-width: 46rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; color: #222; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #ddd; background: #181818; } a { color: #8ab4f8; } }
+  table { border-collapse: collapse; } td, th { padding: .25rem .5rem; border: 1px solid rgba(127, 127, 127, .4); vertical-align: top; text-align: left; }
+</style>
+
+<h1>Known errors and error codes</h1>
+<p>What the numbers <i>Monster Hunter Tri</i> shows mean on <b>{name}</b>, and what to do about them. The server's own
+  refusals are a sentence, not a number (below). "Seen" marks a cause we met on a console; "likely", one read from the
+  game's code. Back to <a href="/patch">playing online</a>.</p>
+
+<h2>Logging in (the Nintendo login)</h2>
+<table>
+  <tr><th>Code</th><th>What happened</th><th>What to try</th></tr>
+  <tr><td>20100</td><td>The login couldn't reach the server (no connection, a missing or wrong patch, the server down).
+    Seen.</td><td>Check the patch (this server's, your disc's) and the Internet connection</td></tr>
+  <tr><td>23xxx</td><td>The login answered with a web error (23404: not found, 23500: a server error). Seen.</td>
+    <td>Tell the operator, with the number</td></tr>
+  <tr><td>20101</td><td>The login's answer couldn't be read. Likely.</td><td>Tell the operator</td></tr>
+</table>
+
+<h2>Connecting to the server</h2>
+<table>
+  <tr><th>Code</th><th>What happened</th><th>What to try</th></tr>
+  <tr><td>11601</td><td>The server's name couldn't be looked up. Likely.</td>
+    <td>Check the Internet connection; if it lasts, tell the operator (their DNS records)</td></tr>
+  <tr><td>11602–11611, 11618</td><td>The secure connection failed: the game doesn't trust the server's certificate
+    (11604–11607: its name, authority, chain or date). Likely.</td>
+    <td>Get this server's patch again: yours is missing, another server's, or an old one</td></tr>
+  <tr><td>11617</td><td>The server couldn't be reached. Likely.</td><td>An unpatched game, or the server is down</td></tr>
+  <tr><td>11612, 11613</td><td>The server closed or reset the connection. Seen.</td>
+    <td>Retry; if it lasts, tell the operator</td></tr>
+  <tr><td>11614–11616</td><td>The connection dropped. Likely.</td><td>Check the connection, retry</td></tr>
+  <tr><td>11620–11625</td><td>The link to the server was lost (11625: any other reason). Seen, after a server
+    stop.</td><td>Retry; if many players see it, the server is down or restarting</td></tr>
+</table>
+
+<h2>Cities and hunts (console to console)</h2>
+<p>Hunts are console to console: the server only introduces you, and relays your traffic when your router can't.</p>
+<table>
+  <tr><th>Code</th><th>What happened</th><th>What to try</th></tr>
+  <tr><td>11669</td><td>Entering a city, its host never answered. Seen when entering a city at the very moment it
+    is created (its host is still setting it up): rare.</td><td>Retry a few seconds later</td></tr>
+  <tr><td>11674</td><td>No word from the host or the server in time. Seen: Dolphin fast-forwarded (the game's time
+    runs ahead), a connection cut for more than 15 seconds, the server stopped during a quest.</td>
+    <td>In Dolphin, never fast-forward; otherwise rejoin</td></tr>
+  <tr><td>11682</td><td>Joining, your console couldn't open its connection. Seen with two Dolphins on the same
+    computer that picked the same port by chance: rare, and not the server.</td><td>Retry</td></tr>
+  <tr><td>11688</td><td>Joining another player: no direct path between you. Seen.</td>
+    <td>Retry: the server relays such pairs</td></tr>
+  <tr><td>11686</td><td>Joining another player: they never showed up. Likely.</td><td>Retry</td></tr>
+  <tr><td>11687</td><td>Joining another player: the server's NAT negotiation didn't answer. Likely.</td>
+    <td>Your network must not block UDP; the server may be down</td></tr>
+  <tr><td>11668, 11676, 11677, 11679</td><td>Another player's link was lost, or they left. Likely.</td>
+    <td>Retry</td></tr>
+  <tr><td>Any other 116xx</td><td>Your console's own network trouble. Never seen with this server.</td>
+    <td>Retry; if it comes back, tell the operator, with the number</td></tr>
+</table>
+
+<h2>Sentences instead of a number</h2>
+<p>When the server refuses something, it says why, under its name: an unconfigured or not-ready server, a disc
+  version not supported (Monster Hunter Tri, European or US), a game not patched for this server, a console not
+  allowed or banned, a login not through this server (check the patch), maintenance (the operator's text). In the
+  game, short messages: a city full or gone, a quest full or gone, a wrong password, a seat taken, "You can't go there
+  now", "Too fast: please wait a moment", a world server's HR limit.</p>
+</html>

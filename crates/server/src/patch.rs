@@ -285,15 +285,17 @@ pub fn write(out: &Path, domain: &str, tls_dir: &Path) -> Result<Vec<String>> {
     Ok(records(domain))
 }
 
-/// The player guide, with the patch's files (`GET /patch` on the NAS port, the domain's port 80): `patch.html`.
-/// `name` is the server's (`name` in `mh3sp.toml`), escaped for HTML; the domain is checked already (`config.rs`).
-/// The error table's sources: the decomp (`DWCi/dwc_nasfunc.c`, `MH3GetSessionErrorCode`, `NetworkPeerBase.h`,
-/// `GameSpyInterfaceThread.cpp`), MHTrIDA's `server/ERROR.md` (it disagrees on 11620: the decomp was trusted), the lab.
-pub(crate) fn page(name: &str, domain: &str) -> String {
-    let name = name
-        .replace('&', "&amp;")
+/// The server's name (`name` in `mh3sp.toml`) escaped for HTML: it is the operator's text.
+fn html_name(name: &str) -> String {
+    name.replace('&', "&amp;")
         .replace('<', "&lt;")
-        .replace('>', "&gt;");
+        .replace('>', "&gt;")
+}
+
+/// The player guide, with the patch's files (`GET /patch` on the NAS port, the domain's port 80): `patch.html`.
+/// The domain is checked already (`config.rs`).
+pub(crate) fn page(name: &str, domain: &str) -> String {
+    let name = html_name(name);
     let link = |path: String, label: &str| format!("<a href=\"/patch/{path}\">{label}</a>");
     let both = |path: &dyn Fn(&str) -> String| {
         format!(
@@ -312,6 +314,21 @@ pub(crate) fn page(name: &str, domain: &str) -> String {
         .replace("{codes}", &both(&|id| format!("codes/{id}.gct")))
         .replace("{domain}", domain)
         .replace("{name}", &name)
+}
+
+/// Known errors and error codes (`GET /errors`, beside the guide): `errors.html`.
+///
+/// How the game turns its internal errors into the number on screen (the decomp, `getNetErrorMessageId` and
+/// `MH3GetSessionErrorCode`, `net_session_close.cpp:1791`): an error is {code, detail, reason}; with detail 50–75
+/// (reason not 0x80000000) or 95, the screen shows `reason` itself (GameSpy and NatNeg store 0x80000007 / 95 / 116xx);
+/// otherwise the code maps: 0x80000002 → 11620, 0x80050012 / 0x80050011 (detail 0x70) → 11621 / 11622, 0x80050037 →
+/// 11623, 0x80020001 → 11624, 0x80030031–0x80030044 → 11660 + (n − 0x31) (0x8003003A = 11669, 0x8003003F = 11674),
+/// anything else 11625. The Nintendo login shows −20100 (no answer), −(23000 + HTTP status), −20101 (no return code),
+/// −(20000 + returncd) for returncd ≥ 100 (`DWCi/dwc_nasfunc.c`). MHTrIDA's `server/ERROR.md` differs in places
+/// (0x8000000A, detail 110): the decomp was trusted. "Seen" causes are the lab's (`../docs/recordings.md`,
+/// `../docs/history/`), 11669 and 11682 from the run of 2026-10-11.
+pub(crate) fn errors(name: &str) -> String {
+    include_str!("errors.html").replace("{name}", &html_name(name))
 }
 
 #[cfg(test)]

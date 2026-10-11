@@ -51,6 +51,7 @@ pub(crate) async fn serve(listener: TcpListener, shared: Arc<Shared>, shutdown: 
     let app = Router::new()
         .route("/ac", post(ac))
         .route("/patch", get(patch_page))
+        .route("/errors", get(errors_page))
         .route("/patch/{*path}", get(patch_file))
         // A form is a few hundred bytes.
         .layer(DefaultBodyLimit::max(4096))
@@ -70,6 +71,11 @@ async fn patch_page(State(shared): State<Arc<Shared>>) -> Response {
     };
     let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
     (html, crate::patch::page(&shared.config.name, domain)).into_response()
+}
+
+async fn errors_page(State(shared): State<Arc<Shared>>) -> Response {
+    let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
+    (html, crate::patch::errors(&shared.config.name)).into_response()
 }
 
 async fn patch_file(State(shared): State<Arc<Shared>>, Path(path): Path<String>) -> Response {

@@ -67,21 +67,5 @@ wit copy mh3-patched mh3-patched.wbfs</pre>
 
 <h2>Errors</h2>
 <p>The game shows a number; the server's own refusals (an unpatched game, maintenance, a ban…) are a sentence
-  instead. "Probably" marks a cause inferred, not seen.</p>
-<table>
-  <tr><th>Code</th><th>What happened</th><th>What to try</th></tr>
-  <tr><td>20100</td><td>The Nintendo login failed before reaching the server</td><td>Check the patch (this server's, your disc's) and the Internet connection; the server may be down</td></tr>
-  <tr><td>23xxx, 2xxxx</td><td>The login answered with an error (23404: a web error)</td><td>Probably down or misconfigured: tell the operator</td></tr>
-  <tr><td>11601</td><td>The server's name couldn't be looked up</td><td>Check the Internet connection; if it lasts, the server's DNS records are wrong: tell the operator</td></tr>
-  <tr><td>11602–11611, 11618</td><td>The secure connection failed</td><td>Probably the patch missing, another server's, or an old one: download it again</td></tr>
-  <tr><td>11617</td><td>The server couldn't be reached</td><td>Probably an unpatched game, or the server is down</td></tr>
-  <tr><td>11612, 11613</td><td>The server closed or reset the connection</td><td>Retry; if it lasts, tell the operator</td></tr>
-  <tr><td>11614–11616</td><td>The connection dropped</td><td>Check the connection, retry</td></tr>
-  <tr><td>11620–11625</td><td>The link to the server was lost</td><td>Retry; if many players see it, the server is down or restarting</td></tr>
-  <tr><td>11674</td><td>No word from the host or the server in time</td><td>In Dolphin, never fast-forward; otherwise the hunt's host left or the server stopped: rejoin</td></tr>
-  <tr><td>11668, 11676, 11677, 11679</td><td>Another player's link was lost, or they left</td><td>Retry</td></tr>
-  <tr><td>11686</td><td>Joining another player: they never showed up</td><td>Retry</td></tr>
-  <tr><td>11687</td><td>Joining another player: the server's NAT negotiation didn't answer</td><td>UDP must not be blocked; the server may be down</td></tr>
-  <tr><td>11688</td><td>Joining another player: no direct path between you</td><td>The server relays such pairs; if it lasts, tell the operator</td></tr>
-</table>
+  instead. What each number means, and what to try: <a href="/errors">known errors and error codes</a>.</p>
 </html>

@@ -103,7 +103,7 @@ new one, and a new patch for every player.
 
 - **The player guide and the patch**: `http://<domain>/patch` (the Nintendo login's port), a page made from your
   `name`, `domain` and CA: the files for each disc and way of playing, how to apply them, Dolphin's settings, the
-  support code, the game's error codes. Point your players there. `mh3sp patch <dir>` writes the same files, to publish
+  support code; and `http://<domain>/errors`, the known errors and error codes. Point your players there. `mh3sp patch <dir>` writes the same files, to publish
   yourself: `riivolution/` (Dolphin, a Wii booting the disc), `wit/` (for `wit dolpatch`, an image for USB loaders),
   `codes/` (Gecko codes for USB loaders with Ocarina, untested on a Wii). PAL and US discs. It holds no game data. A
   new `domain` means a new patch; a new IP doesn't.

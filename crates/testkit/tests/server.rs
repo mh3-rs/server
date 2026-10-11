@@ -531,6 +531,16 @@ async fn the_patch_downloads_from_the_nas_port() {
     let running = server::start(&config).await.unwrap();
     let (status, page) = http_get(running.nas, "/patch").await;
     assert_eq!(status, "200");
+    assert!(
+        page.contains("href=\"/errors\""),
+        "the guide links the errors"
+    );
+    let (status, errors) = http_get(running.nas, "/errors").await;
+    assert_eq!(status, "200");
+    assert!(
+        errors.contains("<td>11669</td>") && errors.contains("Test Server"),
+        "{errors}"
+    );
     let written = dir.path().join("patch");
     server::patch::write(&written, DOMAIN, &config.tls_dir).unwrap();
     let paths: Vec<&str> = page
