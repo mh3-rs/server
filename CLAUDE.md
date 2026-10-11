@@ -6,10 +6,6 @@ The server (`core`). Plans: `roadmap/` (`00. global.md` first). Lasting decision
 
 ## Rules
 
-- A feature deferred hides behind a function with its final signature (architecture decision 10).
-- No internal primary keys in users' hands (UUID public ids); support codes stored only as HMAC-SHA256 with the configuration's `secret`.
 - The schema is `migrations/0001_schema.sql` (its reasoning: `../docs/schema.md`); `scripts/dev.sh --reset` after
   changing it. After changing a query or the schema, `scripts/sqlx-prepare.sh`.
-- The CI script is `scripts/ci-tests.sh` (not `scripts/ci.sh`). It takes `../reference` as the content when it
-  exists: that checkout must be at the corpus's commit (`f53b06c`), or the content tests fail; else set `CONTENT_DIR`
-  to a worktree at that commit.
+- The CI script is `scripts/ci-tests.sh` (not `scripts/ci.sh`).

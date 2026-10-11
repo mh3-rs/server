@@ -20,15 +20,19 @@ if [ "${1:-}" = "--woodpecker" ]; then
 fi
 
 # Event content for the tests: MH3SP's files at the commit the corpus was recorded with. Never in this repository:
-# CONTENT_DIR if set, else the MH3SP checkout next to it, else a clone in the target folder.
+# CONTENT_DIR if set, else the MH3SP checkout next to it when it is at that commit (any other commit fails the content
+# tests), else a clone at that commit in the target folder (from that checkout when there is one: no network).
 MH3SP_COMMIT=f53b06c
 if [ -z "${CONTENT_DIR:-}" ]; then
-  if [ -d ../reference/event ]; then
+  at_commit() { [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$(git -C "$1" rev-parse "$MH3SP_COMMIT^{commit}" 2>/dev/null)" ]; }
+  if [ -d ../reference/event ] && at_commit ../reference; then
     CONTENT_DIR=../reference
   else
     CONTENT_DIR="${CARGO_TARGET_DIR:-target}/mh3sp-$MH3SP_COMMIT"
     if [ ! -d "$CONTENT_DIR/event" ]; then
-      git clone --quiet https://github.com/sepalani/MH3SP "$CONTENT_DIR"
+      source=https://github.com/sepalani/MH3SP
+      [ -d ../reference/.git ] && source=../reference
+      git clone --quiet "$source" "$CONTENT_DIR"
       git -C "$CONTENT_DIR" checkout --quiet "$MH3SP_COMMIT"
     fi
   fi
