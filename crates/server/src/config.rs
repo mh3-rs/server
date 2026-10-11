@@ -14,17 +14,17 @@
 //! | `qr_port`, `natneg_port` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
 //! | `natneg_strategy` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
 //! | `relay_ports` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
-//! | `tls_cert`, `tls_key` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
+//! | `tls_dir` | `data/tls`: the deployment's CA and OPN's certificate, created at the first start (`tls.rs`) |
 //! | `database_url` | `sqlite://data/mh3sp.db` |
 //! | `external_address` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
-//! | `natneg_hostname` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
+//! | `domain` | none: the players' patch points the game's hostnames under it (`patch.rs`, at most 25 characters) |
 //! | `secret`, or `secret__file` | none: the pepper of the support codes' HMAC |
 //! | `bot_port` | none: the quest bots' brain connects here, on localhost (`mh3sp-brain`); no setting, no bots |
 //! | `content_dir` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
 //! | `admins` | `[]`: Capcom IDs allowed the admins' chat commands (`game::commands`) |
 //! | `encryption` | `false`: `true` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
 //!
-//! Without `external_address` or `natneg_hostname` the server runs but refuses every console ("not configured").
+//! Without `external_address` or `domain` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
 //! consoles have registered: none of them would be recognised.
 
@@ -52,11 +52,11 @@ pub struct Config {
     pub natneg: SocketAddr,
     pub strategy: Strategy,
     pub relay_ports: RangeInclusive<u16>,
-    pub tls_cert: PathBuf,
-    pub tls_key: PathBuf,
+    pub tls_dir: PathBuf,
     pub database_url: String,
     pub external_address: Option<String>,
-    pub natneg_hostname: Option<String>,
+    /// Lowercase, checked: it goes into the game's memory (`patch.rs`).
+    pub domain: Option<String>,
     pub secret: Option<Secret>,
     pub content_dir: PathBuf,
     /// Where the quest bots' brain connects (localhost only); none: no bots.
@@ -106,11 +106,10 @@ struct File {
     natneg_port: Option<u16>,
     natneg_strategy: Option<Strategy>,
     relay_ports: Option<String>,
-    tls_cert: Option<PathBuf>,
-    tls_key: Option<PathBuf>,
+    tls_dir: Option<PathBuf>,
     database_url: Option<String>,
     external_address: Option<String>,
-    natneg_hostname: Option<String>,
+    domain: Option<String>,
     secret: Option<String>,
     #[serde(rename = "secret__file")]
     secret_file: Option<PathBuf>,
@@ -160,13 +159,12 @@ impl Config {
             natneg: listen("natneg_port", f.natneg_port, 27901)?,
             strategy: f.natneg_strategy.unwrap_or(Strategy::Hybrid),
             relay_ports: ports(f.relay_ports.as_deref().unwrap_or("40000-40999"))?,
-            tls_cert: f.tls_cert.unwrap_or_else(|| "certs/dev/server.crt".into()),
-            tls_key: f.tls_key.unwrap_or_else(|| "certs/dev/server.key".into()),
+            tls_dir: f.tls_dir.unwrap_or_else(|| "data/tls".into()),
             database_url: f
                 .database_url
                 .unwrap_or_else(|| "sqlite://data/mh3sp.db".into()),
             external_address: empty(f.external_address),
-            natneg_hostname: empty(f.natneg_hostname),
+            domain: empty(f.domain).map(|d| domain(&d)).transpose()?,
             secret: secret(empty(f.secret), f.secret_file)?,
             content_dir: f.content_dir.unwrap_or_else(|| "content".into()),
             bot_port: f.bot_port,
@@ -178,6 +176,28 @@ impl Config {
             maintenance: None,
         })
     }
+}
+
+/// A name the game can hold: letters, digits, `-` and `.` (no `%`: some of its hostnames are format strings).
+fn domain(value: &str) -> Result<String> {
+    let value = value.to_ascii_lowercase();
+    let max = crate::patch::DOMAIN_MAX;
+    if value.len() > max {
+        bail!(
+            "domain: {value:?} has {} characters, the patch fits {max}",
+            value.len()
+        );
+    }
+    let label = |l: &str| {
+        !l.is_empty()
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    };
+    if !value.split('.').all(label) {
+        bail!("domain: {value:?} is not a domain name");
+    }
+    Ok(value)
 }
 
 fn listen(key: &str, port: Option<u16>, default: u16) -> Result<SocketAddr> {
@@ -258,7 +278,13 @@ mod tests {
         assert_eq!(c.health, SocketAddr::from(([127, 0, 0, 1], 8280)));
         assert_eq!(c.strategy, Strategy::Hybrid);
         assert_eq!(c.relay_ports, 40000..=40999);
-        assert!(c.secret.is_none() && c.external_address.is_none() && !c.encryption);
+        assert!(
+            c.secret.is_none()
+                && c.external_address.is_none()
+                && c.domain.is_none()
+                && !c.encryption
+        );
+        assert_eq!(c.tls_dir, PathBuf::from("data/tls"));
     }
 
     #[test]
@@ -266,7 +292,7 @@ mod tests {
         let c = Config::parse(
             r#"
             external_address = "203.0.113.10"
-            natneg_hostname = ""
+            domain = "MH3.Example.org"
             secret = "s"
             natneg_strategy = "relay"
             relay_ports = "41000-41010"
@@ -278,7 +304,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.external_address.as_deref(), Some("203.0.113.10"));
-        assert!(c.natneg_hostname.is_none(), "empty is unset");
+        assert_eq!(c.domain.as_deref(), Some("mh3.example.org"), "lowercase");
         assert_eq!(c.secret.unwrap().0, b"s");
         assert_eq!(c.strategy, Strategy::Relay);
         assert_eq!(c.relay_ports, 41000..=41010);
@@ -294,9 +320,17 @@ mod tests {
             "opn_port = 70000",
             "health_address = \"localhost\"",
             "encryption = \"on\"",
+            "domain = \"abcdefghijklmn.example.org\"",
+            "domain = \"%s.example.org\"",
+            "domain = \"example..org\"",
+            "domain = \"-a.example.org\"",
+            "tls_cert = \"gone\"",
+            "natneg_hostname = \"gone\"",
         ] {
             assert!(Config::parse(wrong).is_err(), "{wrong} accepted");
         }
+        let longest = Config::parse("domain = \"abcdefghijklm.example.org\"").unwrap();
+        assert_eq!(longest.domain.unwrap().len(), crate::patch::DOMAIN_MAX);
         let error = Config::parse("encryption = false\nsecret = hunter2").unwrap_err();
         assert!(!format!("{error:#}").contains("hunter2"), "{error:#}");
         assert!(format!("{error:#}").starts_with("line 2:"), "{error:#}");

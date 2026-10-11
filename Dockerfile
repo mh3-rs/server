@@ -23,7 +23,6 @@ COPY --from=build /src/target/release/mh3sp /usr/local/bin/mh3sp
 # The Nintendo login listens on port 80 (the patched game calls plain HTTP there), below 1024: the binary may bind it
 # without running as root.
 RUN setcap cap_net_bind_service=+ep /usr/local/bin/mh3sp
-COPY certs/dev certs/dev
 RUN mkdir data && chown mh3sp data
 VOLUME /opt/mh3sp/data
 USER mh3sp

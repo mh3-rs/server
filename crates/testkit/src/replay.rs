@@ -23,6 +23,8 @@
 //!   console of the scenario.
 //! - With [`Targets::nas`], each recorded OPN session logs in to that Nintendo login first: the token it gets
 //!   replaces the recorded one (`../docs/history/nintendo login.md`), which the server would refuse.
+//! - With [`Targets::domain`], the NatNeg names a disc shows OPN are our patch's for that domain, not the recorded
+//!   ones (MH3SP's patch, which our server refuses).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -32,7 +34,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 use futures_util::future::join_all;
 use tokio::sync::Notify;
 use wire::packets::{Packet, ReqAuthenticationToken};
@@ -49,6 +51,20 @@ pub const RECV_TIMEOUT: Duration = Duration::from_secs(5);
 /// With [`Targets::nudge`], how long a wait may stall before the harness sends a nudge.
 const STALL: Duration = Duration::from_millis(500);
 
+/// The NatNeg names OPN reads on a disc with MH3SP's patch (the corpus's).
+const MH3SP_NATNEG: &[u8] = b"natneg1.gs.nintendowifi.net\0natneg2.gs.nintendowifi.net\0";
+
+/// What OPN reads on a disc with our patch for `domain`: its first two NatNeg names, 28 bytes each.
+pub fn natneg_memory(domain: &str) -> Vec<u8> {
+    let mut memory = Vec::new();
+    for label in ["a", "b"] {
+        let name = format!("{label}.{domain}");
+        memory.put_slice(name.as_bytes());
+        memory.put_bytes(0, 28 - name.len());
+    }
+    memory
+}
+
 /// Where each server role listens.
 #[derive(Clone, Debug)]
 pub struct Targets {
@@ -57,6 +73,8 @@ pub struct Targets {
     pub fmp: SocketAddr,
     /// Our Nintendo login (`nas.rs`): none against Python MH3SP, whose AltWFC doesn't check its tokens.
     pub nas: Option<SocketAddr>,
+    /// Our server's `domain` (`patch.rs`): none against Python MH3SP, which checks no patch.
+    pub domain: Option<String>,
     /// Python MH3SP only: it reads one frame per socket readiness event from a buffered reader,
     /// so frames that arrive together stay stuck in its buffer until more data comes in. When a
     /// wait stalls, send a harmless `AnsLineCheck` to wake it up. Never used against our server.
@@ -71,6 +89,7 @@ impl Targets {
             lmp: SocketAddr::new(ip, 8201),
             fmp: SocketAddr::new(ip, 8202),
             nas: None,
+            domain: None,
             nudge: false,
         }
     }
@@ -397,6 +416,14 @@ async fn run(
             }
             let mut payload = hex::decode(&step.record.payload)?;
             shared.bindings.lock().unwrap().apply(&mut payload);
+            if let Some(domain) = &shared.targets.domain
+                && step.record.name == "AnsMemoryCheck"
+                && let Some(at) = payload
+                    .windows(MH3SP_NATNEG.len())
+                    .position(|w| w == MH3SP_NATNEG)
+            {
+                payload[at..at + MH3SP_NATNEG.len()].copy_from_slice(&natneg_memory(domain));
+            }
             let frame = Frame {
                 seq: step.record.seq,
                 id: PacketId(id_of(step.record)),

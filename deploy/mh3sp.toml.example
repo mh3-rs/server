@@ -2,12 +2,11 @@
 
 # The address consoles reach this server at (handed out for LMP, FMP and the relay).
 external_address = "203.0.113.10"
-# The NAT negotiation hostname the players' patch writes into the game (MH3SP's patch: this one).
-natneg_hostname = "natneg1.gs.nintendowifi.net"
+# The domain the players' patch points the game at (at most 25 characters): `mh3sp patch` lists its DNS records.
+domain = "mh3.example.org"
 # The support codes' pepper, from the compose secret (never in this file).
 secret__file = "/run/secrets/mh3sp"
 content_dir = "/opt/mh3sp/content"
 
-# Optional: natneg_strategy, relay_ports, health_address, the ports. With your own certificate mounted:
-# tls_cert = "/opt/mh3sp/certs/own/server.crt"
-# tls_key = "/opt/mh3sp/certs/own/server.key"
+# Optional: natneg_strategy, relay_ports, health_address, the ports, tls_dir (default data/tls: the CA, created at the
+# first start; back it up with the database).

@@ -1,6 +1,6 @@
 //! OPN (TLS, port 8200): the first server a console meets. It checks the disc (game id, then the NAT negotiation
-//! hostname our patch writes), then the token of our Nintendo login (`nas.rs`): issued by it, and its Wii not
-//! banned. It shows the terms and the announce, then hands out LMP's address.
+//! hostname our patch writes, under the `domain`), then the token of our Nintendo login (`nas.rs`): issued by it, and
+//! its Wii not banned. It shows the terms and the announce, then hands out LMP's address.
 //!
 //! A refused console gets `NtcLogin` status 1, sends its token anyway, asks `ReqMaintenance` and shows the text it
 //! gets back: the game's own refusal path (decision D4), for every reason (`PatInterface.cpp:1250-1275`). The token's
@@ -15,11 +15,13 @@ use wire::{Frame, Item, PatData};
 
 use super::{Fault, Handled, allowed, frame, reply, unexpected};
 use crate::Shared;
+use crate::patch::{Region, natneg_name};
 use crate::text::{Language, Terms, TermsKind, Text, terms, text};
 
 /// Where every disc keeps its game id (`RMHP08`, …).
 const GAME_ID: (u32, u32) = (0x8000_0000, 6);
-/// The NAT negotiation hostnames: two NUL-terminated strings (`natneg1…`, `natneg2…`) in 56 bytes.
+/// The NAT negotiation hostnames: two NUL-terminated strings in 28 bytes each (`a.<domain>`, `b.<domain>` once
+/// patched).
 const NATNEG_HOSTNAMES_SIZE: u32 = 56;
 
 /// `NtcLogin` statuses on OPN: the game's login state (`patState_8254`). 1 is a refusal that ends the login after
@@ -27,29 +29,6 @@ const NATNEG_HOSTNAMES_SIZE: u32 = 56;
 /// (found in the console run of 2026-10-11: every refusal sent 2 until then, and none ever showed on a console).
 const LOGIN_OK: u8 = 5;
 const LOGIN_REFUSED: u8 = 1;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Region {
-    Pal,
-    Us,
-}
-
-impl Region {
-    fn from_game_id(id: &[u8]) -> Option<Self> {
-        match id {
-            b"RMHP08" => Some(Region::Pal),
-            b"RMHE08" => Some(Region::Us),
-            _ => None,
-        }
-    }
-
-    fn natneg_hostnames(self) -> u32 {
-        match self {
-            Region::Pal => 0x8063_11a8,
-            Region::Us => 0x8063_08e8,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
@@ -117,7 +96,7 @@ impl Opn {
                         self.region = Some(region);
                         self.stage = Stage::NatnegHostname(region);
                         Ok(vec![memory_check(
-                            region.natneg_hostnames(),
+                            region.natneg_names_at(),
                             NATNEG_HOSTNAMES_SIZE,
                         )?])
                     }
@@ -128,11 +107,11 @@ impl Opn {
                 }
             }
             (Stage::NatnegHostname(region), AnsMemoryCheck::ID) => {
-                let ans = self.memory(req, region.natneg_hostnames())?;
+                let ans = self.memory(req, region.natneg_names_at())?;
                 let hostname = ans.memory.split(|&b| b == 0).next().unwrap_or_default();
                 // Unset: every console is refused at `AnsConnection` anyway (not configured).
-                if let Some(accepted) = &shared.config.natneg_hostname
-                    && hostname != accepted.as_bytes()
+                if let Some(domain) = &shared.config.domain
+                    && hostname != natneg_name(domain).as_bytes()
                 {
                     self.disc = Some(Refusal::Unpatched);
                 }

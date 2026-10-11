@@ -1,6 +1,7 @@
-# mh3sp for an operator (README.md, "Running it"): the server, its data, the content, the secret, the certificate.
+# mh3sp for an operator (README.md, "Running it"): the server, its data, the content, the secret.
 # Next to this file: mh3sp.toml (from mh3sp.toml.example), secret (openssl rand -hex 32), content/ (MH3SP's
-# event-quest-rotation-full checkout), data/ (owned by uid 999, the image's user: `mkdir data && sudo chown 999 data`).
+# event-quest-rotation-full checkout), data/ (owned by uid 999, the image's user: `mkdir data && sudo chown 999 data`;
+# the server creates its CA in data/tls at the first start).
 services:
   mh3sp:
     # main's image, from the private Gitea registry until the release on Docker Hub (`docker login git.pband.ch`).
@@ -14,8 +15,6 @@ services:
       - ./mh3sp.toml:/opt/mh3sp/mh3sp.toml:ro
       - ./data:/opt/mh3sp/data
       - ./content:/opt/mh3sp/content:ro
-      # Your own certificate, once a patch trusts its CA (README, "TLS"); the image's certs/dev until then.
-      # - ./certs:/opt/mh3sp/certs/own:ro
 
 secrets:
   mh3sp:

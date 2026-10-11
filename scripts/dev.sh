@@ -20,14 +20,14 @@ echo "$DEFAULTS" | while IFS= read -r line; do
   grep -q "^$key=" .env || { echo "$line" >> .env; echo "added $key to .env"; }
 done
 
-# The addresses suit the lab: Dolphin on this machine, an unpatched disc whose NAT negotiation goes to AltWFC through
-# the hosts file; the content is the live branch's worktree beside this repository. The secret of an older `.env` is
-# kept: the dev database's consoles stay recognised.
+# The addresses suit the lab: Dolphin on this machine, our patch for `mh3sp.test` (a reserved test domain, answered
+# by a local resolver: `mh3sp patch` lists the records); the CA in data/tls; the content is the live branch's
+# worktree beside this repository. The secret of an older `.env` is kept: the dev database's consoles stay recognised.
 if [ ! -f mh3sp.toml ]; then
   secret=$(sed -n 's/^SECRET=//p' .env)
   cat > mh3sp.toml <<TOML
 external_address = "127.0.0.1"
-natneg_hostname = "natneg1.gs.nintendowifi.net"
+domain = "mh3sp.test"
 secret = "${secret:-$(openssl rand -hex 32)}"
 content_dir = "../content"
 TOML

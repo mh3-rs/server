@@ -143,7 +143,7 @@ async fn not_ready(shared: &Shared) -> Option<String> {
     }
     let mut reasons = String::new();
     if !shared.configured() {
-        reasons += "not configured: external_address and natneg_hostname must be set\n";
+        reasons += "not configured: external_address and domain must be set\n";
     }
     if let Some(reason) = shared.db.not_ready().await {
         reasons += &reason;

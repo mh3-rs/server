@@ -15,7 +15,11 @@ use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
 /// What the recorded consoles' discs hold (the lab's hosts file points it at AltWFC).
-const NATNEG_HOSTNAMES: &[u8] = b"natneg1.gs.nintendowifi.net\0natneg2.gs.nintendowifi.net\0";
+/// The tests' `domain`.
+const DOMAIN: &str = "mh3.example.org";
+/// What OPN reads on a disc with our patch for [`DOMAIN`].
+static NATNEG_HOSTNAMES: std::sync::LazyLock<Vec<u8>> =
+    std::sync::LazyLock::new(|| testkit::replay::natneg_memory(DOMAIN));
 
 fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -38,12 +42,11 @@ fn config() -> (Config, tempfile::TempDir) {
         natneg: any,
         strategy: server::config::Strategy::P2p,
         relay_ports: 41000..=41099,
-        tls_cert: repo().join("certs/dev/server.crt"),
-        tls_key: repo().join("certs/dev/server.key"),
+        tls_dir: dir.path().join("tls"),
         database_url: format!("sqlite://{}", dir.path().join("mh3sp.db").display()),
         // Where most recordings were made; a replay uses its scenario's own (`recorded_address`).
         external_address: Some("192.168.110.150".into()),
-        natneg_hostname: Some("natneg1.gs.nintendowifi.net".into()),
+        domain: Some(DOMAIN.into()),
         secret: Some(server::config::Secret(b"test secret".to_vec())),
         // MH3SP's event files (`scripts/ci-tests.sh` provides them).
         content_dir: std::env::var_os("CONTENT_DIR")
@@ -67,16 +70,27 @@ async fn http_status(addr: SocketAddr, path: &str) -> String {
 
 /// A `GET` on the health port: status code and body.
 async fn http_get(addr: SocketAddr, path: &str) -> (String, String) {
+    let (status, body) = http_bytes(addr, path).await;
+    (status, String::from_utf8(body).unwrap())
+}
+
+/// A `GET`: status code and body as bytes (a `.gct` isn't text).
+async fn http_bytes(addr: SocketAddr, path: &str) -> (String, Vec<u8>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
     s.write_all(format!("GET {path} HTTP/1.0\r\n\r\n").as_bytes())
         .await
         .unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    let status = out.split_whitespace().nth(1).unwrap_or_default().to_owned();
-    let body = out.split_once("\r\n\r\n").map_or("", |(_, b)| b).to_owned();
-    (status, body)
+    let mut out = Vec::new();
+    s.read_to_end(&mut out).await.unwrap();
+    let end = out.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    let head = String::from_utf8_lossy(&out[..end]);
+    let status = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned();
+    (status, out[end + 4..].to_vec())
 }
 
 /// The next frame, which must be a `P`.
@@ -168,7 +182,7 @@ async fn encrypted_login() {
     // OPN, for two consoles at the same address: each its key, which goes on at `ReqShut`.
     let mut keys = Vec::new();
     for _ in 0..2 {
-        let (mut opn, _) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        let (mut opn, _) = opn_connect(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
         send(&mut opn, 1, ReqCommonKey {}).await;
         let key: [u8; 32] = expect::<AnsCommonKey>(&mut opn).await.key[..]
             .try_into()
@@ -252,7 +266,7 @@ async fn common_key_only_with_encryption() {
         let (mut config, _db) = config();
         config.encryption = encryption;
         let running = server::start(&config).await.unwrap();
-        let (mut console, status) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        let (mut console, status) = opn_connect(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
         assert_eq!(status, 5);
         send(&mut console, 1, ReqCommonKey {}).await;
         match encryption {
@@ -334,6 +348,7 @@ async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
         lmp: running.lmp.unwrap(),
         fmp: running.fmp.unwrap(),
         nas: Some(running.nas),
+        domain: Some(DOMAIN.into()),
         nudge: false,
     };
     let reports = replay::replay(scenario, &targets, &masks).await.unwrap();
@@ -400,11 +415,11 @@ async fn refuses_discs_without_our_patch() {
     let running = server::start(&config).await.unwrap();
     let opn = running.opn;
     let (ok, unpatched, unsupported) = tokio::join!(
-        opn_login(opn, b"RMHE08", NATNEG_HOSTNAMES),
+        opn_login(opn, b"RMHE08", &NATNEG_HOSTNAMES),
         opn_login(
             opn,
             b"RMHP08",
-            b"natneg1.gs.example.com\0natneg2.gs.example.com\0"
+            b"natneg1.gs.nintendowifi.net\0natneg2.gs.nintendowifi.net\0"
         ),
         opn_login(opn, b"RMHJ08", b""),
     );
@@ -416,12 +431,103 @@ async fn refuses_discs_without_our_patch() {
     assert!(unsupported.1.unwrap().contains("not supported"));
 }
 
+/// The CA a written patch carries: the value written at the PAL CA's address.
+fn patch_ca(patch: &Path) -> openssl::x509::X509 {
+    let xml =
+        std::fs::read_to_string(patch.join(format!("riivolution/{DOMAIN}-RMHP08.xml"))).unwrap();
+    let hex = xml
+        .split("offset=\"0x80572840\" value=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    openssl::x509::X509::from_der(&hex::decode(hex).unwrap()).unwrap()
+}
+
+/// What a patched console checks: OPN's certificate comes from the CA the patch carries, under the name the game
+/// asks for. Every other test's client checks nothing (`client.rs`).
+#[tokio::test]
+async fn opn_s_certificate_verifies_against_the_patch_s_ca() {
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
+    let (config, dir) = config();
+    let running = server::start(&config).await.unwrap();
+    let patch = dir.path().join("patch");
+    server::patch::write(&patch, DOMAIN, &config.tls_dir).unwrap();
+    let ca = patch_ca(&patch);
+    let handshake = |ca: openssl::x509::X509, name: &'static str| async move {
+        let mut builder = SslConnector::builder(SslMethod::tls_client()).unwrap();
+        builder.set_security_level(0);
+        builder
+            .set_max_proto_version(Some(SslVersion::TLS1))
+            .unwrap();
+        builder.set_cipher_list("AES128-SHA:@SECLEVEL=0").unwrap();
+        builder.set_verify(SslVerifyMode::PEER);
+        builder.cert_store_mut().add_cert(ca).unwrap();
+        let ssl = builder.build().configure().unwrap().into_ssl(name).unwrap();
+        let tcp = tokio::net::TcpStream::connect(running.opn).await.unwrap();
+        let mut stream = tokio_openssl::SslStream::new(ssl, tcp).unwrap();
+        std::pin::Pin::new(&mut stream).connect().await.is_ok()
+    };
+    assert!(handshake(ca.clone(), "mh.capcom.co.jp").await);
+    assert!(
+        !handshake(ca, "opn.mh3.example.org").await,
+        "the name the game checks, not the host"
+    );
+    let other = tempfile::tempdir().unwrap();
+    server::patch::write(
+        &other.path().join("patch"),
+        DOMAIN,
+        &other.path().join("tls"),
+    )
+    .unwrap();
+    let other_ca = patch_ca(&other.path().join("patch"));
+    assert!(
+        !handshake(other_ca, "mh.capcom.co.jp").await,
+        "another deployment's patch"
+    );
+    running.stop().await;
+}
+
+/// Players download the patch from the domain's port 80, the Nintendo login's: each file as `mh3sp patch` writes it.
+#[tokio::test]
+async fn the_patch_downloads_from_the_nas_port() {
+    let (mut config, dir) = config();
+    let running = server::start(&config).await.unwrap();
+    let (status, page) = http_get(running.nas, "/patch").await;
+    assert_eq!(status, "200");
+    let written = dir.path().join("patch");
+    server::patch::write(&written, DOMAIN, &config.tls_dir).unwrap();
+    let paths: Vec<&str> = page
+        .split("href=\"/patch/")
+        .skip(1)
+        .filter_map(|r| r.split('"').next())
+        .collect();
+    assert_eq!(paths.len(), 6, "{page}");
+    for path in paths {
+        let (status, body) = http_bytes(running.nas, &format!("/patch/{path}")).await;
+        assert_eq!(status, "200", "{path}");
+        assert_eq!(body, std::fs::read(written.join(path)).unwrap(), "{path}");
+    }
+    assert_eq!(
+        http_status(running.nas, "/patch/codes/RMHJ08.gct").await,
+        "404"
+    );
+    running.stop().await;
+    config.domain = None;
+    let running = server::start(&config).await.unwrap();
+    assert_eq!(
+        http_status(running.nas, "/patch").await,
+        "404",
+        "not configured"
+    );
+    running.stop().await;
+}
+
 #[tokio::test]
 async fn refuses_everyone_when_not_configured() {
     let (mut config, _db) = config();
-    config.natneg_hostname = None;
+    config.domain = None;
     let running = server::start(&config).await.unwrap();
-    let (status, text) = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    let (status, text) = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(status, 1);
     assert!(text.unwrap().contains("not configured"));
     assert_eq!(http_status(running.health, "/health/live").await, "200");
@@ -435,7 +541,7 @@ async fn maintenance_mode_refuses_with_the_message() {
     config.maintenance = Some("Back at 18:00 UTC".into());
     let running = server::start(&config).await.unwrap();
     assert_eq!((running.lmp, running.fmp), (None, None));
-    let login = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    let login = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(login, (1, Some("Back at 18:00 UTC".into())));
     assert_eq!(http_status(running.health, "/health/live").await, "200");
     assert_eq!(http_status(running.health, "/health/ready").await, "503");
@@ -452,7 +558,7 @@ async fn waits_for_the_database_at_startup() {
     config.database_url = format!("sqlite://{}", folder.join("mh3sp.db").display());
     let running = server::start(&config).await.unwrap();
     assert_eq!(http_status(running.health, "/health/live").await, "503");
-    let (status, text) = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    let (status, text) = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(status, 1);
     assert!(text.unwrap().contains("not ready"));
 
@@ -467,7 +573,7 @@ async fn waits_for_the_database_at_startup() {
     }
     assert_eq!(http_status(running.health, "/health/ready").await, "200");
     assert_eq!(
-        opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await,
+        opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await,
         (5, None)
     );
     running.stop().await;
@@ -1301,7 +1407,7 @@ async fn the_per_address_limits_hold() {
     let running = server::start(&config).await.unwrap();
     let (opn, lmp) = (running.opn, Lmp::of(&running));
     assert!(login_info(lmp, None).await.is_none(), "LMP before OPN");
-    let (mut console, status) = opn_connect(opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    let (mut console, status) = opn_connect(opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(status, 5);
     send(&mut console, 1, ReqLmpConnect {}).await;
     expect::<AnsLmpConnect>(&mut console).await;
@@ -2130,7 +2236,7 @@ async fn stopping_warns_and_can_be_cancelled() {
     );
     // Nothing refused meanwhile: a new login goes through.
     assert_eq!(
-        opn_login(running.opn, b"RMHE08", NATNEG_HOSTNAMES).await.0,
+        opn_login(running.opn, b"RMHE08", &NATNEG_HOSTNAMES).await.0,
         5
     );
     // The 5 s reminder, then cancelled.
@@ -3779,7 +3885,7 @@ async fn our_nintendo_login() {
 
     // OPN: a token from another login is refused (a second `NtcLogin`) with a text; ours is accepted, only looked at.
     for (token, ours) in [(vec![b'N'; 83], false), (token.clone(), true)] {
-        let (mut opn, status) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        let (mut opn, status) = opn_connect(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
         assert_eq!(status, 5);
         let token = token.into();
         send(&mut opn, 1, ReqAuthenticationToken { token }).await;
@@ -3855,7 +3961,7 @@ async fn a_ban_holds_on_its_wii() {
     let token = testkit::nas::svcloc(running.nas, "0017ab000384", "LEH000000900")
         .await
         .unwrap();
-    let (mut opn, _) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    let (mut opn, _) = opn_connect(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     send(
         &mut opn,
         1,

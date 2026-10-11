@@ -8,9 +8,10 @@
 //!   Compares two recordings of the same scenario and prints, per packet, the byte ranges that
 //!   differ: the candidates for `corpus/masks.toml`.
 //!
-//! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge] [--retries <n>]`
+//! `corpus replay <scenario-dir>... [--host <ip>] [--domain <domain>] [--before <command>] [--nudge] [--retries <n>]`
 //!   Replays the scenarios against a server (default 127.0.0.1, ports 8200-8202, its Nintendo login on 80) and reports
-//!   every server frame that differs from the recording. Exits 1 if any does. `--before` runs a
+//!   every server frame that differs from the recording. Exits 1 if any does. Our server needs `--domain`, its
+//!   `domain`: the discs then show our patch's NatNeg names, not the recorded MH3SP ones. `--before` runs a
 //!   command before each scenario, to give it a fresh server (e.g. `tools/oracle.sh`). `--nudge`
 //!   works around Python MH3SP's stalled reads (see `Targets::nudge`); use it only against Python.
 //!   `--retries <n>` re-runs a failing scenario up to n more times (each after `--before`): Python
@@ -73,6 +74,7 @@ async fn replay_all(args: &[String]) -> Result<bool> {
     let mut host = "127.0.0.1".parse()?;
     let mut before = None;
     let mut nudge = false;
+    let mut domain = None;
     let mut retries = 0;
     let mut scenarios = Vec::new();
     let mut it = args.iter();
@@ -80,6 +82,7 @@ async fn replay_all(args: &[String]) -> Result<bool> {
         match arg.as_str() {
             "--host" => host = it.next().context("--host needs an ip")?.parse()?,
             "--nudge" => nudge = true,
+            "--domain" => domain = Some(it.next().context("--domain needs a domain")?.clone()),
             "--retries" => retries = it.next().context("--retries needs a number")?.parse()?,
             "--before" => before = Some(it.next().context("--before needs a command")?.clone()),
             _ => scenarios.push(PathBuf::from(arg)),
@@ -89,6 +92,7 @@ async fn replay_all(args: &[String]) -> Result<bool> {
     let targets = Targets {
         nudge,
         nas: (!nudge).then(|| std::net::SocketAddr::new(host, 80)),
+        domain,
         ..Targets::host(host)
     };
     // Masks live next to the scenarios: corpus/masks.toml, corpus/divergences.toml.

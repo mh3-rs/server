@@ -8,6 +8,8 @@
 //! `mh3sp user password <email>`  sets that user's password (read from stdin), for the website's sign-in
 //! `mh3sp token add <email>`   another CLI token for that user (printed once)
 //! `mh3sp token revoke <key>`  revokes a token (its key: the part before the dot)
+//! `mh3sp patch <dir>`      the players' patch for this deployment (`domain`, the CA in `tls_dir`, created if
+//!                      missing), and the DNS records it needs
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
@@ -76,9 +78,30 @@ async fn main() -> Result<()> {
             println!("revoked");
             return Ok(());
         }
+        ["patch", dir] => {
+            let config = Config::load()?;
+            let domain = config
+                .domain
+                .ok_or_else(|| anyhow::anyhow!("domain: unset in the configuration"))?;
+            let records = server::patch::write(dir.as_ref(), &domain, &config.tls_dir)?;
+            println!(
+                "Written in {dir}: riivolution/ (Dolphin, a Wii booting the disc), wit/ (an image for USB loaders), codes/ (USB loaders with Ocarina). Players can also download them from http://{domain}/patch."
+            );
+            println!(
+                "DNS records, each pointing to this server ({}):",
+                config
+                    .external_address
+                    .as_deref()
+                    .unwrap_or("external_address")
+            );
+            for name in records {
+                println!("  {name}");
+            }
+            return Ok(());
+        }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | maintenance \"<message>\"]"
+            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | maintenance \"<message>\"]"
         ),
     };
 

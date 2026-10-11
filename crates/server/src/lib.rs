@@ -27,6 +27,7 @@ mod metrics;
 mod nas;
 mod natneg;
 mod net;
+pub mod patch;
 #[cfg(feature = "bot")]
 mod peer;
 mod relay;
@@ -128,7 +129,7 @@ impl Shared {
     }
 
     fn configured(&self) -> bool {
-        self.config.external_address.is_some() && self.config.natneg_hostname.is_some()
+        self.config.external_address.is_some() && self.config.domain.is_some()
     }
 }
 
@@ -267,15 +268,14 @@ pub async fn start(config: &Config) -> Result<Running> {
         admission: game::Admission::new(config.loopback_exempt),
     });
     if config.maintenance.is_none() && !shared.configured() {
-        error!(
-            "not configured: external_address and natneg_hostname must be set; every console is refused"
-        );
+        error!("not configured: external_address and domain must be set; every console is refused");
     }
 
+    tls::prepare(&config.tls_dir)?;
     let mut tasks = JoinSet::new();
     for (role, listener) in listeners {
         let tls = match role {
-            Role::Opn => Some(tls::context(&config.tls_cert, &config.tls_key)?),
+            Role::Opn => Some(tls::context(&config.tls_dir)?),
             _ => None,
         };
         tasks.spawn(net::serve(
