@@ -77,29 +77,10 @@ add to `deploy/` stays out of git.
 ### Configuration
 
 `mh3sp.toml` in the server's working directory (`/opt/mh3sp` in the image), or the file `MH3SP_CONFIG` names. Every
-key has a default (the reference: [`crates/server/src/config.rs`](crates/server/src/config.rs)); an unknown key
-stops the server, so a typo can't pass for a default.
-
-| Key | What |
-|---|---|
-| `external_address` | The IPv4 address consoles reach this server at (handed out for LMP, FMP and the relay). Required. |
-| `domain` | The domain the players' patch points the game at, at most 25 characters (below). Required. |
-| `secret` or `secret__file` | The pepper of the support codes' HMAC (below); `secret__file` names a file that holds it, such as a Docker secret. Required. |
-| `content_dir` | The event content (above). Default `content`. |
-| `database_url` | `sqlite://data/mh3sp.db` (default). |
-| `tls_dir` | The deployment's CA and OPN's certificate (below). Default `data/tls`. |
-| `nas_port` | The Nintendo login, plain HTTP. Default 80, the port the patched game calls. |
-| `natneg_strategy` | `hybrid` (default): direct, the relay for consoles that can't; `p2p` or `relay`: one way for everyone. |
-| `relay_ports` | `40000-40999` (default): one UDP port per relayed pair of consoles. |
-| `opn_port`, `lmp_port`, `fmp_port`, `health_port` | 8200, 8201, 8202, 8280. Consoles are handed the LMP and FMP ports the server listens on: change them here, never in a port mapping. |
-| `health_address` | `127.0.0.1` (default): where the health port listens (below). |
-| `api_port`, `api_address` | 8281, `127.0.0.1` (default): the API (below). |
-| `admins` | `[]` (default): the Capcom IDs allowed the admins' chat commands (below). |
-| `encryption` | `false` (default); `true` turns on the game's packet encryption (an experiment). |
-| `name` | Your server's name, atop its refusal screens (maintenance aside: that message is yours whole) and its patch's page. Default `Monster Hunter Tri`. |
-| `announce`, `no_charge` | Your texts after the terms, at every login: your welcome, then a short notice. In the game's markup (`<BR>` a new line, `<CENTER>`, `<SIZE=n>`, `<C=n>` a colour, `<END>` last; see `crates/server/src/text.rs`). Default: one sentence each. |
-| `terms`, `subterms` | The terms every console accepts (plain text). A new text shows them again to every console. Default: one sentence each. |
-| `guildmaster` | The Guildmaster's notice in the city (plain text, `\n` between lines). Default: one sentence. |
+key, its default and what it does: [`deploy/mh3sp.toml.example`](deploy/mh3sp.toml.example). Copy it; a key left
+commented out has the default shown. An unknown key stops the server, so a typo can't pass for a default. Three keys
+are required (`external_address`, `domain`, the secret); the texts (`name`, the welcome, the terms, the
+Guildmaster's notice) are yours to write.
 
 Logs: the `RUST_LOG` environment variable, `info,sqlx=warn` by default. They are anonymous: IDs, never names or
 addresses; never a secret.
@@ -120,8 +101,9 @@ deployment has its own: the server creates it in `tls_dir` at its first start (`
 and certificate from it (`server.key`, `server.crt`). **Back `tls_dir` up with the database**: losing the CA means a
 new one, and a new patch for every player.
 
-- **The patch**: players download it from `http://<domain>/patch` (the Nintendo login's port), a page with one file
-  per disc and platform, made from your `domain` and CA. `mh3sp patch <dir>` writes the same files, to publish
+- **The player guide and the patch**: `http://<domain>/patch` (the Nintendo login's port), a page made from your
+  `name`, `domain` and CA: the files for each disc and way of playing, how to apply them, Dolphin's settings, the
+  support code, the game's error codes. Point your players there. `mh3sp patch <dir>` writes the same files, to publish
   yourself: `riivolution/` (Dolphin, a Wii booting the disc), `wit/` (for `wit dolpatch`, an image for USB loaders),
   `codes/` (Gecko codes for USB loaders with Ocarina, untested on a Wii). PAL and US discs. It holds no game data. A
   new `domain` means a new patch; a new IP doesn't.
@@ -136,7 +118,7 @@ new one, and a new patch for every player.
 The patch points every name the game looks up at your `domain`. Create these records (A, to `external_address`);
 `mh3sp patch` prints them for your domain:
 
-- `<domain>`: the Nintendo login (port 80 of this name belongs to the server, not to a website);
+- `<domain>`: the Nintendo login and the player guide, on port 80 (below);
 - `opn.<domain>`: OPN;
 - `mh3uswii.available.<domain>`: the availability check;
 - `mh3uswii.a.<domain>`, `mh3uswii.b.<domain>`, `mh3uswii.c.<domain>`: NAT negotiation's three servers.
@@ -161,6 +143,22 @@ Open them in the firewall and forward them from the router, unchanged:
 | 40000–40999 | UDP | the relay (`relay_ports`) |
 | 8281 | TCP | the API: not to open as such, behind a reverse proxy with TLS |
 | 8280 | TCP | not to open: health, metrics and operator commands, on 127.0.0.1 (`health_address`; with `0.0.0.0` for a metrics scraper elsewhere, keep it behind a firewall: its commands have no authentication yet) |
+
+### Port 80
+
+The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP, no other port possible. If the host already
+serves websites on port 80, put the server on another `nas_port` and let your reverse proxy forward the domain to it.
+The game sends the `Host` header (from its HTTP library's code; not yet seen with a console), and the server doesn't
+need the client's address. Keep it plain HTTP: the game can't follow a redirect to HTTPS (Caddy redirects unless the
+site is written `http://…`). Only `<domain>` goes through the proxy; the other names aren't HTTP.
+
+```nginx
+server {
+    listen 80;
+    server_name mh3.example.org;
+    location / { proxy_pass http://127.0.0.1:8080; }   # nas_port = 8080
+}
+```
 
 ### Limits
 

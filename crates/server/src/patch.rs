@@ -285,8 +285,10 @@ pub fn write(out: &Path, domain: &str, tls_dir: &Path) -> Result<Vec<String>> {
     Ok(records(domain))
 }
 
-/// The page players download the patch from (`GET /patch` on the NAS port, the domain's port 80).
+/// The player guide, with the patch's files (`GET /patch` on the NAS port, the domain's port 80): `patch.html`.
 /// `name` is the server's (`name` in `mh3sp.toml`), escaped for HTML; the domain is checked already (`config.rs`).
+/// The error table's sources: the decomp (`DWCi/dwc_nasfunc.c`, `MH3GetSessionErrorCode`, `NetworkPeerBase.h`,
+/// `GameSpyInterfaceThread.cpp`), MHTrIDA's `server/ERROR.md` (it disagrees on 11620: the decomp was trusted), the lab.
 pub(crate) fn page(name: &str, domain: &str) -> String {
     let name = name
         .replace('&', "&amp;")
@@ -300,20 +302,16 @@ pub(crate) fn page(name: &str, domain: &str) -> String {
             link(path(Region::Us.game_id()), "US disc (RMHE08)")
         )
     };
-    format!(
-        "<!doctype html>\n<meta charset=\"utf-8\">\n<title>{name}: the patch</title>\n\
-         <h1>{name}</h1>\n\
-         <p>The patch for this server, {domain}: it points the game here and makes it trust this server's certificate. Take the \
-         file for your disc and the way you play.</p>\n<ul>\n\
-         <li><b>Dolphin, or a Wii booting the disc</b> (Riivolution): {}. Into the <code>riivolution</code> folder \
-         of the SD card (Dolphin: <code>Load/Riivolution/riivolution</code> in its user folder).</li>\n\
-         <li><b>A USB loader</b>, patching your image once on a computer with <code>wit dolpatch</code>: {}.</li>\n\
-         <li><b>A USB loader with Ocarina</b> (untested): {}. Into <code>codes</code> on the SD card, Ocarina on.</li>\n\
-         </ul>\n",
-        both(&|id| format!("riivolution/{domain}-{id}.xml")),
-        both(&|id| format!("wit/{domain}-{id}.xml")),
-        both(&|id| format!("codes/{id}.gct")),
-    )
+    // The name last: it is the operator's text, and may hold a `{…}` of its own.
+    include_str!("patch.html")
+        .replace(
+            "{riivolution}",
+            &both(&|id| format!("riivolution/{domain}-{id}.xml")),
+        )
+        .replace("{wit}", &both(&|id| format!("wit/{domain}-{id}.xml")))
+        .replace("{codes}", &both(&|id| format!("codes/{id}.gct")))
+        .replace("{domain}", domain)
+        .replace("{name}", &name)
 }
 
 #[cfg(test)]
@@ -426,6 +424,10 @@ mod tests {
         assert!(page.contains("<h1>Tom &amp; Jerry's &lt;server&gt;</h1>"));
         for (path, _) in files("mh3.example.org", &ca()).unwrap() {
             assert!(page.contains(&format!("href=\"/patch/{path}\"")), "{path}");
+        }
+        assert!(page.contains("xml=mh3.example.org-RMHP08.xml"));
+        for placeholder in ["{name}", "{domain}", "{riivolution}", "{wit}", "{codes}"] {
+            assert!(!page.contains(placeholder), "{placeholder}");
         }
     }
 

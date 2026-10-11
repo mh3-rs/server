@@ -1,18 +1,78 @@
-# mh3sp's configuration (README.md, "Configuration"): copy to mh3sp.toml. Every key not set here has its default.
+# mh3sp's configuration: copy to mh3sp.toml. This file is the reference: every key the server reads is here. A key
+# left commented out has the default shown; an unknown key stops the server, so a typo can't pass for a default.
+# Without external_address or domain the server runs but refuses every console ("not configured").
+# Logs follow the RUST_LOG environment variable (default "info,sqlx=warn"), not this file.
 
-# The address consoles reach this server at (handed out for LMP, FMP and the relay).
+# --- Required ---------------------------------------------------------------------------------------------------
+
+# The IPv4 address consoles reach this server at, handed out for LMP, FMP and the relay. Never guessed.
 external_address = "203.0.113.10"
-# The domain the players' patch points the game at (at most 25 characters): `mh3sp patch` lists its DNS records.
+# The domain the players' patch points the game at, at most 25 characters; `mh3sp patch` lists its DNS records. A new
+# domain means a new patch for every player.
 domain = "mh3.example.org"
-# The support codes' pepper, from the compose secret (never in this file).
+# The pepper of the support codes' HMAC: a file holding it (a Docker secret), or the value itself in a `secret` key
+# (never both). Never change or lose it: no console would be recognised. Back it up with the database.
 secret__file = "/run/secrets/mh3sp"
+
+# --- Files ------------------------------------------------------------------------------------------------------
+
+# MH3SP's event content (its event-quest-rotation-full branch), never in the repository nor the image. The compose
+# file mounts it here; the default is "content", in the working directory.
 content_dir = "/opt/mh3sp/content"
+# The database, one SQLite file.
+# database_url = "sqlite://data/mh3sp.db"
+# The deployment's CA and OPN's certificate, created at the first start. Back it up: a new CA means a new patch for
+# every player.
+# tls_dir = "data/tls"
 
-# Optional: natneg_strategy, relay_ports, health_address, the ports, tls_dir (default data/tls: the CA, created at the
-# first start; back it up with the database).
+# --- Ports ------------------------------------------------------------------------------------------------------
+# The server listens on every address, with host networking: open these in the firewall, unchanged.
 
-# Your texts (a sentence each by default; README, "Configuration"):
-# name = "My Monster Hunter Tri server"
-# announce = "<BODY><CENTER>Welcome to our server!<END>"
+# The Nintendo login and the patch's page (plain HTTP). The patch makes the game call port 80: another port needs a
+# proxy in front, forwarding the domain's port 80 here (README, "Port 80").
+# nas_port = 80
+# OPN (TLS), LMP and FMP. Consoles are handed the LMP and FMP ports the server listens on.
+# opn_port = 8200
+# lmp_port = 8201
+# fmp_port = 8202
+# UDP: the game's availability check and NAT negotiation. The game calls these ports: keep them.
+# qr_port = 27900
+# natneg_port = 27901
+# UDP: the relay, one port per relayed pair of consoles.
+# relay_ports = "40000-40999"
+# NAT negotiation: "hybrid" connects consoles directly, and relays those that can't; "p2p" or "relay": one way for
+# everyone.
+# natneg_strategy = "hybrid"
+
+# --- Operators --------------------------------------------------------------------------------------------------
+
+# Health, metrics and the operator's commands (`mh3sp stop`, `mh3sp announce`). No authentication yet: keep it on
+# 127.0.0.1, or behind a firewall.
+# health_address = "127.0.0.1"
+# health_port = 8280
+# The API (the admin CLI and the website): behind a reverse proxy with TLS to reach it from elsewhere.
+# api_address = "127.0.0.1"
+# api_port = 8281
+# The Capcom IDs allowed the admins' chat commands (/announce, /stop, /kick, /ban, /unban).
+# admins = ["AB12CD34"]
+
+# --- Your texts -------------------------------------------------------------------------------------------------
+
+# Your server's name, atop its refusal screens and its patch's page.
+# name = "Monster Hunter Tri"
+# After the terms, at every login: your welcome, then a short notice. In the game's markup: <BR> a new line,
+# <CENTER>, <LEFT>, <SIZE=n>, <C=n> a colour, <END> last.
+# announce = "<BODY><CENTER>Welcome, hunter!<END>"
+# no_charge = "<BODY><CENTER>Playing here is free.<END>"
+# The terms every console accepts (plain text). A new text shows them again to every console.
 # terms = "Play fair and be kind to other hunters."
-# guildmaster = "To all hunters:\nthe Arena is open!"
+# subterms = "Have fun!"
+# The Guildmaster's notice in the city (plain text, \n between lines).
+# guildmaster = "Happy hunting!"
+
+# --- Experiments ------------------------------------------------------------------------------------------------
+
+# The game's packet encryption.
+# encryption = false
+# The quest bots' port, on localhost (a server built with the `bot` feature, and mh3sp-brain). Unset: no bots.
+# bot_port = 8290

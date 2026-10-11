@@ -5,28 +5,8 @@
 //! consoles the LMP and FMP ports it listens on: a container must publish them unchanged (set the ports here, not in
 //! the port mapping). The logger reads `RUST_LOG` (default `info,sqlx=warn`), not this file.
 //!
-//! | Key | Default |
-//! |---|---|
-//! | `opn_port`, `lmp_port`, `fmp_port`, `health_port` | 8200, 8201, 8202, 8280 |
-//! | `health_address` | `127.0.0.1`: the health port's operator commands have no authentication yet |
-//! | `api_port`, `api_address` | 8281, `127.0.0.1`: the API (`api.rs`), behind a reverse proxy for the outside |
-//! | `nas_port` | 80: our Nintendo login (`nas.rs`), plain HTTP, the port the patched game calls |
-//! | `qr_port`, `natneg_port` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
-//! | `natneg_strategy` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
-//! | `relay_ports` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
-//! | `tls_dir` | `data/tls`: the deployment's CA and OPN's certificate, created at the first start (`tls.rs`) |
-//! | `database_url` | `sqlite://data/mh3sp.db` |
-//! | `external_address` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
-//! | `domain` | none: the players' patch points the game's hostnames under it (`patch.rs`, at most 25 characters) |
-//! | `secret`, or `secret__file` | none: the pepper of the support codes' HMAC |
-//! | `bot_port` | none: the quest bots' brain connects here, on localhost (`mh3sp-brain`); no setting, no bots |
-//! | `content_dir` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
-//! | `admins` | `[]`: Capcom IDs allowed the admins' chat commands (`game::commands`) |
-//! | `encryption` | `false`: `true` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
-//! | `name` | `Monster Hunter Tri`: the server's name, atop its refusal screens and its patch's page |
-//! | `announce`, `no_charge` | a sentence: the texts after the terms at each login, in the game's markup (`text.rs`) |
-//! | `terms`, `subterms` | a sentence: the terms a console accepts; a new text shows them again (`text.rs`) |
-//! | `guildmaster` | a sentence: the Guildmaster's notice in the city (plain text, `\n` between lines) |
+//! Every key, its default and what it does: `deploy/mh3sp.toml.example`, the operators' reference (a test holds it
+//! to `File`).
 //!
 //! Without `external_address` or `domain` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
@@ -299,6 +279,42 @@ mod tests {
         std::fs::write(&path, "\n").unwrap();
         assert!(secret(None, file()).is_err());
         assert!(secret(None, Some("/nonexistent".into())).is_err());
+    }
+
+    /// `deploy/mh3sp.toml.example` is the operators' reference: it names every key, and with each one uncommented
+    /// the server takes it. The keys are serde's own, listed in its refusal of an unknown one.
+    #[test]
+    fn the_example_holds_every_key() {
+        let example = include_str!("../../../deploy/mh3sp.toml.example");
+        let refusal = toml::from_str::<File>("unknown = 1").err().unwrap();
+        let keys: Vec<&str> = refusal.message().split('`').skip(3).step_by(2).collect();
+        assert!(keys.len() > 20, "{}", refusal.message());
+        let key_of = |line: &str| {
+            let (key, _) = line.trim_start_matches("# ").split_once(" = ")?;
+            key.bytes()
+                .all(|b| b.is_ascii_lowercase() || b == b'_')
+                .then_some(key.to_string())
+        };
+        let named: Vec<String> = example.lines().filter_map(key_of).collect();
+        // `secret` is named in prose: the example gives its file form, and both at once are refused.
+        for key in keys.into_iter().filter(|&k| k != "secret") {
+            assert!(named.iter().any(|n| n == key), "{key} not in the example");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret");
+        std::fs::write(&secret, "s").unwrap();
+        let uncommented: String = example
+            .lines()
+            .map(|l| match key_of(l) {
+                Some(_) => l.trim_start_matches("# "),
+                None => l,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .replace("\"/run/secrets/mh3sp\"", &format!("{secret:?}"));
+        let c = Config::parse(&uncommented).unwrap();
+        assert_eq!(c.domain.as_deref(), Some("mh3.example.org"));
     }
 
     #[test]

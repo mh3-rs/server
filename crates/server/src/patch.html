@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name}: playing online</title>
+<style>
+  body { max-width: 46rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; color: #222; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #ddd; background: #181818; } a { color: #8ab4f8; } }
+  pre { overflow-x: auto; padding: .5rem; background: rgba(127, 127, 127, .15); }
+  table { border-collapse: collapse; } td, th { padding: .25rem .5rem; border: 1px solid rgba(127, 127, 127, .4); vertical-align: top; text-align: left; }
+</style>
+
+<h1>{name}</h1>
+<p>How to play <i>Monster Hunter Tri</i> online on this server, <b>{domain}</b>.</p>
+
+<h2>What you need</h2>
+<ul>
+  <li><i>Monster Hunter Tri</i>: the European (RMHP08) or US (RMHE08) disc; the Japanese one isn't supported.</li>
+  <li>Either <b>Dolphin</b> (any recent version), or a <b>Wii</b> that runs homebrew (the Homebrew Channel) with
+    <a href="https://wiibrew.org/wiki/Riivolution">Riivolution</a> to patch a disc, or a USB loader for an image patched
+    once.</li>
+  <li>This server's patch, below. It points the game at this server and makes it trust this server's certificate:
+    nothing else to set, no DNS, no hosts file. It holds no game data.</li>
+</ul>
+
+<h2>Patching the game</h2>
+<p>Take the file for your disc and the way you play.</p>
+<ul>
+  <li><b>Dolphin</b>: the Riivolution file ({riivolution}), into <code>Load/Riivolution/riivolution</code> in Dolphin's
+    user folder. Right-click the game, <i>Start with Riivolution Patches</i>, check that the server's option is on,
+    <i>Start</i>. Without copying, <i>Open Riivolution XML</i> takes the file directly.</li>
+  <li><b>Wii, disc</b>: the same Riivolution file, into the <code>riivolution</code> folder at the root of the SD card.
+    Launch Riivolution from the Homebrew Channel, insert the disc, check the server's option, <i>Launch</i>.</li>
+  <li><b>Wii, USB loader</b>: patch your image once on a computer with <a href="https://wit.wiimm.de">Wiimms ISO
+    Tools</a> (<code>wit</code>; Linux, macOS, Windows) and the <code>wit</code> file for your disc ({wit}), then copy
+    the new image to the loader's drive. For a European disc:
+<pre>wit extract mh3.iso mh3-patched --psel data
+wit dolpatch mh3-patched/sys/main.dol xml={domain}-RMHP08.xml
+wit copy mh3-patched mh3-patched.wbfs</pre>
+    On a Mac with Apple Silicon, macOS stops <code>wit</code> at once ("killed"): run it as
+    <code>arch -x86_64 wit …</code> instead. (Checked with Dolphin, not yet on a Wii.)</li>
+  <li><b>Wii, USB loader, without a computer</b> (untested on a Wii): the Gecko file ({codes}), into the
+    <code>codes</code> folder at the root of the SD card; in USB Loader GX or WiiFlow, turn <i>Ocarina</i> (cheat codes)
+    on for the game. If the game doesn't reach the server this way, patch the image with <code>wit</code> instead.</li>
+</ul>
+<p>This patch reaches only this server. The Gecko file has no server in its name: keep one server's at a time in
+  <code>codes</code>. If the server's operator ever starts over with a new certificate, download the patch again.</p>
+
+<h2>Dolphin settings</h2>
+<ul>
+  <li><b>Run at normal speed, always.</b> Never fast-forward (Tab) online: the game drops itself after 90 seconds of
+    its own time without hearing from the server (error 11674), and fast-forward makes its time run ahead.</li>
+  <li>Leave <i>Verify certificates</i> on (Dolphin's network settings): the patch carries this server's own
+    certificate authority, which the game checks against, like a Wii.</li>
+  <li>Two Dolphins on one network should have different MAC addresses (<i>Config → Wii → Wireless MAC</i>).</li>
+</ul>
+
+<h2>Your support code is your account</h2>
+<p>The first time you connect, the server gives your save an <i>online support code</i>. It is how the server knows
+  your console: whoever has it plays as you, with your hunters, friends and messages. Never share it, nor your save
+  file. Lost (a deleted save), it can't be recovered: the server keeps only a fingerprint of it, never the code.</p>
+
+<h2>Playing with others</h2>
+<p>Hunts are console to console. The server first tries to connect you directly, and relays your traffic when your
+  router can't: you don't need to open ports at home. If joining a city fails for everyone at once, tell the server's
+  operator.</p>
+
+<h2>Errors</h2>
+<p>The game shows a number; the server's own refusals (an unpatched game, maintenance, a ban…) are a sentence
+  instead. "Probably" marks a cause inferred, not seen.</p>
+<table>
+  <tr><th>Code</th><th>What happened</th><th>What to try</th></tr>
+  <tr><td>20100</td><td>The Nintendo login failed before reaching the server</td><td>Check the patch (this server's, your disc's) and the Internet connection; the server may be down</td></tr>
+  <tr><td>23xxx, 2xxxx</td><td>The login answered with an error (23404: a web error)</td><td>Probably down or misconfigured: tell the operator</td></tr>
+  <tr><td>11601</td><td>The server's name couldn't be looked up</td><td>Check the Internet connection; if it lasts, the server's DNS records are wrong: tell the operator</td></tr>
+  <tr><td>11602–11611, 11618</td><td>The secure connection failed</td><td>Probably the patch missing, another server's, or an old one: download it again</td></tr>
+  <tr><td>11617</td><td>The server couldn't be reached</td><td>Probably an unpatched game, or the server is down</td></tr>
+  <tr><td>11612, 11613</td><td>The server closed or reset the connection</td><td>Retry; if it lasts, tell the operator</td></tr>
+  <tr><td>11614–11616</td><td>The connection dropped</td><td>Check the connection, retry</td></tr>
+  <tr><td>11620–11625</td><td>The link to the server was lost</td><td>Retry; if many players see it, the server is down or restarting</td></tr>
+  <tr><td>11674</td><td>No word from the host or the server in time</td><td>In Dolphin, never fast-forward; otherwise the hunt's host left or the server stopped: rejoin</td></tr>
+  <tr><td>11668, 11676, 11677, 11679</td><td>Another player's link was lost, or they left</td><td>Retry</td></tr>
+  <tr><td>11686</td><td>Joining another player: they never showed up</td><td>Retry</td></tr>
+  <tr><td>11687</td><td>Joining another player: the server's NAT negotiation didn't answer</td><td>UDP must not be blocked; the server may be down</td></tr>
+  <tr><td>11688</td><td>Joining another player: no direct path between you</td><td>The server relays such pairs; if it lasts, tell the operator</td></tr>
+</table>
+</html>
