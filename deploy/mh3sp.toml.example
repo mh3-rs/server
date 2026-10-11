@@ -26,7 +26,7 @@ content_dir = "/opt/mh3sp/content"
 # tls_dir = "data/tls"
 
 # --- Ports ------------------------------------------------------------------------------------------------------
-# The server listens on every address, with host networking: open these in the firewall, unchanged.
+# The server listens on every address: publish and open these unchanged (consoles are handed these numbers).
 
 # The Nintendo login and the patch's page (plain HTTP). The patch makes the game call port 80: another port needs a
 # proxy in front, forwarding the domain's port 80 here (README, "Port 80").
@@ -38,8 +38,9 @@ content_dir = "/opt/mh3sp/content"
 # UDP: the game's availability check and NAT negotiation. The game calls these ports: keep them.
 # qr_port = 27900
 # natneg_port = 27901
-# UDP: the relay, one port per relayed pair of consoles.
-# relay_ports = "40000-40999"
+# UDP: the relay, one port per relayed pair of consoles (a four-player quest relayed whole: six). Published with
+# Docker: the same range in the compose file.
+# relay_ports = "40000-40099"
 # NAT negotiation: "hybrid" connects consoles directly, and relays those that can't; "p2p" or "relay": one way for
 # everyone.
 # natneg_strategy = "hybrid"

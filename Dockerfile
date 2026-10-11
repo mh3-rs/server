@@ -27,8 +27,9 @@ RUN mkdir data && chown mh3sp data
 VOLUME /opt/mh3sp/data
 USER mh3sp
 # TCP: the Nintendo login (HTTP), OPN (TLS), LMP, FMP, health. UDP: the availability check, NAT negotiation, the
-# relay (RELAY_PORTS). NAT negotiation needs the consoles' real addresses: run with host networking (see README.md).
-EXPOSE 80 8200 8201 8202 8280 27900/udp 27901/udp 40000-40999/udp
+# relay (relay_ports). Publish them unchanged: NAT negotiation needs the consoles' real addresses, which rootful Docker
+# on Linux keeps (see README.md).
+EXPOSE 80 8200 8201 8202 8280 27900/udp 27901/udp 40000-40099/udp
 # Liveness only: a database problem shows on /health/ready, not here (see crates/server/src/health.rs).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD ["mh3sp", "healthcheck"]
 ENTRYPOINT ["mh3sp"]

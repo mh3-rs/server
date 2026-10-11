@@ -155,7 +155,7 @@ impl Config {
             qr: listen("qr_port", f.qr_port, 27900)?,
             natneg: listen("natneg_port", f.natneg_port, 27901)?,
             strategy: f.natneg_strategy.unwrap_or(Strategy::Hybrid),
-            relay_ports: ports(f.relay_ports.as_deref().unwrap_or("40000-40999"))?,
+            relay_ports: ports(f.relay_ports.as_deref().unwrap_or("40000-40099"))?,
             tls_dir: f.tls_dir.unwrap_or_else(|| "data/tls".into()),
             database_url: f
                 .database_url
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(c.nas, SocketAddr::from(([0, 0, 0, 0], 80)));
         assert_eq!(c.health, SocketAddr::from(([127, 0, 0, 1], 8280)));
         assert_eq!(c.strategy, Strategy::Hybrid);
-        assert_eq!(c.relay_ports, 40000..=40999);
+        assert_eq!(c.relay_ports, 40000..=40099);
         assert!(
             c.secret.is_none()
                 && c.external_address.is_none()

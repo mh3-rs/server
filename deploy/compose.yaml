@@ -4,12 +4,19 @@
 # the server creates its CA in data/tls at the first start).
 services:
   mh3sp:
-    # main's image, from the private Gitea registry until the release on Docker Hub (`docker login git.pband.ch`).
+    # main's image, from the private Gitea registry until the release (`docker login git.pband.ch`).
     image: git.pband.ch/experiment/mh3sp-rs:main
-    # NAT negotiation needs the consoles' real addresses: no published ports, no Docker Desktop, no rootless.
-    network_mode: host
     restart: unless-stopped
     secrets: [mh3sp]
+    # Each port published unchanged: the server hands consoles its own port numbers. Rootful Docker on Linux keeps the
+    # consoles' addresses, which NAT negotiation needs; Docker Desktop and rootless Docker don't (README.md).
+    ports:
+      # The Nintendo login and the player guide. With a reverse proxy on port 80, drop this line and route the domain
+      # to the container's port 80 instead (README.md, "Port 80").
+      - "80:80/tcp"
+      - "8200-8202:8200-8202/tcp"
+      - "27900-27901:27900-27901/udp"
+      - "40000-40099:40000-40099/udp" # relay_ports
     volumes:
       # The working directory's mh3sp.toml is the server's configuration (and `mh3sp healthcheck`'s).
       - ./mh3sp.toml:/opt/mh3sp/mh3sp.toml:ro

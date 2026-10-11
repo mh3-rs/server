@@ -40,10 +40,11 @@ An operator's guide. The server is one process for every role, configured by one
 
 ### What you need
 
-- **A Linux host with a public IPv4 address**, and Docker with **host networking**: NAT negotiation must see the
-  consoles' real addresses (it hands each to its peer, and matches them with their logins). Docker Desktop (macOS,
-  Windows) and rootless Docker can't do host networking; nor can a published port (`-p`): it hides the consoles'
-  addresses behind Docker's, and a thousand published UDP ports start a thousand proxies.
+- **A Linux host with a public IPv4 address**, and **rootful Docker**: NAT negotiation must see the consoles' real
+  addresses (it hands each to its peer, and matches them with their logins), and so do the per-address limits.
+  Rootful Docker on Linux keeps them through published ports (seen on the first deployment, 2026-10-11, over TCP;
+  NAT negotiation's UDP not yet with two consoles). Docker Desktop (macOS, Windows) and rootless Docker replace them
+  with their own: every console would look like one. Host networking (`network_mode: host`) also works.
 - **The event content**: a checkout of MH3SP's `event-quest-rotation-full` branch (its live server's quests, rotation
   and trading post), mounted read-only as `content_dir`. It is never in this repository nor in the image. At
   startup the server checks it and logs what is wrong (`content` lines): an `error` breaks a download, a `warn` is
@@ -130,7 +131,8 @@ symmetric NATs and sends their pairs straight to the relay, instead of after one
 
 ### Ports to open
 
-Open them in the firewall and forward them from the router, unchanged:
+Publish them (Docker), open them in the firewall and forward them from the router, all unchanged: consoles are handed
+these numbers. Docker's published ports go around `ufw`'s rules: the router is what closes the rest.
 
 | Port | Protocol | What |
 |---|---|---|
@@ -140,7 +142,7 @@ Open them in the firewall and forward them from the router, unchanged:
 | 8202 | TCP | FMP: world servers, gates, cities, quests |
 | 27900 | UDP | the game's availability check |
 | 27901 | UDP | NAT negotiation |
-| 40000–40999 | UDP | the relay (`relay_ports`) |
+| 40000–40099 | UDP | the relay (`relay_ports`) |
 | 8281 | TCP | the API: not to open as such, behind a reverse proxy with TLS |
 | 8280 | TCP | not to open: health, metrics and operator commands, on 127.0.0.1 (`health_address`; with `0.0.0.0` for a metrics scraper elsewhere, keep it behind a firewall: its commands have no authentication yet) |
 
@@ -155,7 +157,8 @@ aren't HTTP. The server doesn't need the client's address there.
 - **The patch from this version on**: the game sends its `Host` header twice, which every common proxy refuses (a
   400, the game's error 23400); the patch drops the second. Players with an older patch download it again.
 
-With Traefik (its docker labels; `web` and `websecure` your entrypoints):
+With Traefik (its docker labels; `web` and `websecure` your entrypoints; with the container on several networks, add
+`traefik.docker.network=<the one Traefik shares>`):
 
 ```yaml
 - traefik.http.services.mh3sp.loadbalancer.server.port=80   # nas_port

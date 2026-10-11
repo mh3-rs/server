@@ -23,7 +23,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::Shared;
 use crate::accounts::{hmac, random_id};
@@ -110,7 +110,9 @@ async fn patch_file(State(shared): State<Arc<Shared>>, Path(path): Path<String>)
 }
 
 async fn ac(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
+    // A refusal is the game's error 234xx: say why, never the form's values (the MAC, the serial).
     let Some(form) = wire::nas::decode(&body) else {
+        warn!("NAS: refused, the form doesn't decode");
         return StatusCode::BAD_REQUEST.into_response();
     };
     let field = |key: &str| {
@@ -131,6 +133,7 @@ async fn ac(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
             let Some(mac) =
                 field("macadr").filter(|m| m.len() == 12 && m.iter().all(u8::is_ascii_hexdigit))
             else {
+                warn!("NAS: refused, svcloc without a MAC address");
                 return StatusCode::BAD_REQUEST.into_response();
             };
             let serial = field("csnum").unwrap_or_default();
@@ -146,7 +149,12 @@ async fn ac(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
             }
             wire::nas::encode(&[("returncd", b"007"), ("servicetoken", token.as_bytes())])
         }
-        _ => return StatusCode::BAD_REQUEST.into_response(),
+        _ => {
+            // A client's bytes: escaped and cut, so a log line can't be forged or flooded.
+            let action = String::from_utf8_lossy(&action[..action.len().min(32)]);
+            warn!(action = %action.escape_debug(), "NAS: refused, an unknown action");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
     };
     ([(header::CONTENT_TYPE, "text/plain")], reply).into_response()
 }
