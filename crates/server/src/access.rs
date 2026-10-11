@@ -1,7 +1,7 @@
 //! Bans (`access_rules`, `../docs/schema.md` S5): an admin bans a player's console, all its hunters with it, and the
 //! Wii it last logged in from (`devices`, architecture decision 13), so a new save doesn't lift it. A ban is checked
 //! when the console logs in (the Wii at OPN, the console at `game::lmp`) and lifted by revoking it. The whitelist (rules of kind `allow`)
-//! is a question still (`roadmap/questions.md`).
+//! is a question still (`roadmap/00. global.md`, "Open questions").
 
 use anyhow::Result;
 use sqlx::SqlitePool;
