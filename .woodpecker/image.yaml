@@ -1,5 +1,6 @@
 # The server's image, to the Gitea registry (git.pband.ch/experiment/mh3sp-rs), on main once the checks pass: tagged
-# `main` and with the commit. Docker Hub and versioned tags come with the release pipeline.
+# `main`, the commit, and the server's version as X, X.Y and X.Y.Z (crates/server/Cargo.toml): main is the only branch,
+# so its last image is the version's. Docker Hub: roadmap/docker-hub-github.md.
 when:
   - event: push
     branch: main
@@ -14,7 +15,10 @@ steps:
   - name: tags
     image: alpine:3.22
     commands:
-      - printf '%s\n' main "$${CI_COMMIT_SHA:0:8}" > .tags
+      # The package's own `version = "X.Y.Z"` line (dependencies' versions are inside braces, never at a line's start).
+      - version=$$(sed -n 's/^version = "\([^"]*\)".*/\1/p' crates/server/Cargo.toml)
+      - test -n "$$version"
+      - printf '%s\n' main "$${CI_COMMIT_SHA:0:8}" "$$version" "$${version%.*}" "$${version%%.*}" > .tags
       - cat .tags
 
   # The only privileged plugin the server trusts (WOODPECKER_PLUGINS_PRIVILEGED): keep this exact version.
