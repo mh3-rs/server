@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE consoles SET last_seen_at = CURRENT_TIMESTAMP WHERE support_code_hmac = ?1\n           RETURNING id AS \"id!\", public_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "consoles",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "public_id",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "consoles",
+            "name": "public_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "33d3e10e824188697e77c933aaf20e7c6930964c64e30c265a0b34a72a6ffa28"
+}

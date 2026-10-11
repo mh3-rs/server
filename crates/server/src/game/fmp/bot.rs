@@ -29,7 +29,7 @@ pub(super) fn peer_message_from(shared: &Shared, me: &str, body: &[u8]) {
         return;
     };
     let bots: Vec<String> = {
-        let world = shared.world.lock().unwrap();
+        let world = shared.world();
         world
             .others(me)
             .into_iter()
@@ -86,7 +86,7 @@ pub(super) fn peer_message_from(shared: &Shared, me: &str, body: &[u8]) {
 pub fn bot_says(shared: &Shared, bot: &str, to: Option<&str>, message: &PatData) {
     let Ok(body) = peer_body(message) else { return };
     let Some(to) = to else {
-        let world = shared.world.lock().unwrap();
+        let world = shared.world();
         return bot_to_city(shared, &world, bot, &body);
     };
     let ntc = (|| {
@@ -160,13 +160,13 @@ pub(super) const BOT_NAME: &[u8] = b"[BOT]";
 /// Why a bot can't join a player's party.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BotRefusal {
-    /// No brain connected (`BOT_PORT`).
+    /// No brain connected (`bot_port`).
     NoBrain,
     /// The player isn't in a quest party.
     NoParty,
     /// The city or the party has no room.
     Full,
-    /// No port free for its socket (the relay's range), or no IPv4 `EXTERNAL_ADDRESS`.
+    /// No port free for its socket (the relay's range), or no IPv4 `external_address`.
     NoPeer,
 }
 
@@ -177,7 +177,7 @@ pub fn add_bot(shared: &std::sync::Arc<Shared>, player: &str) -> Result<String, 
         return Err(BotRefusal::NoBrain);
     }
     let bot = crate::accounts::bot_capcom_id();
-    let mut world = shared.world.lock().unwrap();
+    let mut world = shared.world();
     let circle = world.circle_of(player).ok_or(BotRefusal::NoParty)?;
     let city = circle.0;
     if world.can_join(city).is_err()
@@ -317,7 +317,7 @@ pub fn add_bot(shared: &std::sync::Arc<Shared>, player: &str) -> Result<String, 
 
 /// A bot leaves its party and city, as a player leaving the game would: `false` if there's no such bot.
 pub fn remove_bot(shared: &Shared, bot: &str) -> bool {
-    let mut world = shared.world.lock().unwrap();
+    let mut world = shared.world();
     if !world.placed_by(bot, BOT_CONN) {
         return false;
     }

@@ -20,22 +20,29 @@ fi
 # Event content for the tests: MH3SP's files at the commit the corpus was recorded with. Never in this repository:
 # CONTENT_DIR if set, else the MH3SP checkout next to it, else a clone in the target folder.
 MH3SP_COMMIT=f53b06c
-if [ -z "${CONTENT_DIR:-}" ] && [ ! -d ../reference/event ]; then
-  CONTENT_DIR="${CARGO_TARGET_DIR:-target}/mh3sp-$MH3SP_COMMIT"
-  if [ ! -d "$CONTENT_DIR/event" ]; then
-    git clone --quiet https://github.com/sepalani/MH3SP "$CONTENT_DIR"
-    git -C "$CONTENT_DIR" checkout --quiet "$MH3SP_COMMIT"
+if [ -z "${CONTENT_DIR:-}" ]; then
+  if [ -d ../reference/event ]; then
+    CONTENT_DIR=../reference
+  else
+    CONTENT_DIR="${CARGO_TARGET_DIR:-target}/mh3sp-$MH3SP_COMMIT"
+    if [ ! -d "$CONTENT_DIR/event" ]; then
+      git clone --quiet https://github.com/sepalani/MH3SP "$CONTENT_DIR"
+      git -C "$CONTENT_DIR" checkout --quiet "$MH3SP_COMMIT"
+    fi
   fi
-  # Absolute: cargo runs each test from its crate's folder.
-  CONTENT_DIR=$(cd "$CONTENT_DIR" && pwd)
-  export CONTENT_DIR
 fi
+# Absolute: cargo runs each test from its crate's folder. Exported always: the content tests skip without it.
+CONTENT_DIR=$(cd "$CONTENT_DIR" && pwd)
+export CONTENT_DIR
 
 rustup component add rustfmt clippy >/dev/null 2>&1
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 # The server as shipped (no features): what the `bot` feature gates must leave it clean.
 cargo clippy -p server --all-targets --locked -- -D warnings
+# Known vulnerabilities, licenses, sources (deny.toml).
+command -v cargo-deny >/dev/null || { echo 'cargo-deny missing: cargo install cargo-deny --locked' >&2; exit 1; }
+cargo deny check
 cargo test --workspace --locked
 # The features' own code (the server's unit tests with each; testkit's tests run with `bot` already).
 cargo test -p server --lib --features prometheus --locked

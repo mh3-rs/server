@@ -1,0 +1,57 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.public_id,\n                  (SELECT group_concat(capcom_id, ',' ORDER BY capcom_id) FROM hunters\n                   WHERE console_id = r.console_id) AS \"ids: String\",\n                  r.reason, r.created_at\n           FROM access_rules r JOIN rule_kinds k ON k.id = r.kind_id\n           WHERE k.name = 'ban' AND r.console_id IS NOT NULL AND r.revoked_at IS NULL\n             AND (r.expires_at IS NULL OR r.expires_at > CURRENT_TIMESTAMP)\n           ORDER BY r.id DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "public_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "access_rules",
+            "name": "public_id"
+          }
+        }
+      },
+      {
+        "name": "ids: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "name": "reason",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_rules",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "access_rules",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "86c9e75817f7a7997f8ce0981aa9b47f33890645a3768c008f7950afc047909a"
+}

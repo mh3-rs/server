@@ -4,8 +4,16 @@ target/
 .idea/
 data/
 .env
+/mh3sp.toml
 
 # Event content lives outside the code repository (CONTENT_DIR).
 /content/
 claude*.sh
 TODOs.md
+# An operator's files (deploy/compose.yaml)
+/deploy/mh3sp.toml
+/deploy/secret
+/deploy/data/
+/deploy/content/
+/deploy/certs/
+!/deploy/mh3sp.toml.example

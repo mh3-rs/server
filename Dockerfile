@@ -21,7 +21,7 @@ FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libssl3 \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --home /opt/mh3sp mh3sp
+ && useradd --system --uid 999 --home /opt/mh3sp mh3sp
 WORKDIR /opt/mh3sp
 COPY --from=build /src/target/release/mh3sp /usr/local/bin/mh3sp
 COPY certs/dev certs/dev

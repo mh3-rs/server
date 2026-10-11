@@ -2,14 +2,16 @@
 //! world server, then to play on it (gates, cities, quests).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use bytes::{Buf, BufMut, Bytes};
 use sqlx::SqlitePool;
-use tracing::{Span, info, trace, warn};
+use tracing::{Span, debug, error, info, trace, warn};
 use wire::packets::*;
 use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
 
+use super::commands;
 use super::players::Mailbox;
 use super::world::{CircleId, NewCircle, World};
 use super::{Fault, Handled, Session, alert, frame, reply, server_time, unexpected, world};
@@ -32,6 +34,54 @@ pub struct Fmp {
     /// The version constant the console reported at login (ConnectionData item 3: 4 on PAL, 3 on US), which starts
     /// the paths it can jump to (M5 D11).
     version: u32,
+    /// Rate limits (boxed: they would make this the one large handler).
+    limits: Box<Limits>,
+}
+
+/// Rate limits (provisional, the review's): what one console sends the others, chat, and quest joins (a password is
+/// checked with argon2). A flood would fill the others' mailboxes, which drops *them*.
+struct Limits {
+    relayed: Bucket,
+    chat: Bucket,
+    joins: Bucket,
+}
+
+/// The game's own traffic peaks at 9 relayed messages in a second per console (42 in ten), a chat line a second, a
+/// quest join a second (the corpus): the limits leave room.
+const RELAYED: (f64, f64) = (40.0, 20.0);
+const CHAT: (f64, f64) = (5.0, 1.0);
+const JOINS: (f64, f64) = (5.0, 1.0);
+
+/// A token bucket: `burst` at once, refilled at `per_second`.
+struct Bucket {
+    tokens: f64,
+    burst: f64,
+    per_second: f64,
+    last: std::time::Instant,
+}
+
+impl Bucket {
+    fn new((burst, per_second): (f64, f64)) -> Self {
+        Bucket {
+            tokens: burst,
+            burst,
+            per_second,
+            last: std::time::Instant::now(),
+        }
+    }
+
+    /// Whether one more is allowed now.
+    fn take(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let refill = now.duration_since(self.last).as_secs_f64() * self.per_second;
+        self.tokens = (self.tokens + refill).min(self.burst);
+        self.last = now;
+        if self.tokens < 1.0 {
+            return false;
+        }
+        self.tokens -= 1.0;
+        true
+    }
 }
 
 impl Fmp {
@@ -42,10 +92,15 @@ impl Fmp {
             downloads: HashMap::new(),
             search: Vec::new(),
             version: 0,
+            limits: Box::new(Limits {
+                relayed: Bucket::new(RELAYED),
+                chat: Bucket::new(CHAT),
+                joins: Bucket::new(JOINS),
+            }),
         }
     }
 
-    pub async fn handle(&mut self, shared: &Shared, req: &Frame) -> Handled {
+    pub async fn handle(&mut self, shared: &Arc<Shared>, req: &Frame) -> Handled {
         let (seq, p) = (req.seq, &req.payload);
         match (&self.login, req.id) {
             (None, AnsConnection::ID) => {
@@ -72,10 +127,14 @@ impl Fmp {
                     tracing::field::display(session.console.public_id),
                 );
                 span.record("capcom_id", capcom_id.as_str());
+                // Banned between two connections (on the server selection, or between LMP and FMP).
+                if crate::access::banned_since(shared, session.console.id).await {
+                    return Err(Fault::Client(anyhow!("banned console")));
+                }
                 shared.players.register(&capcom_id, self.mailbox.clone());
                 // Back from the server selection with a pick: the player enters that world server.
                 if let Some(server) = session.world_server {
-                    let mut world = shared.world.lock().unwrap();
+                    let mut world = shared.world();
                     world.enter(
                         &capcom_id,
                         self.mailbox.conn,
@@ -95,6 +154,27 @@ impl Fmp {
             }
             (None, id) => Err(unexpected(id)),
             (Some(_), _) => {
+                let bucket = match req.id {
+                    NtcLayerChat::ID | NtcCircleChat::ID => Some(&mut self.limits.chat),
+                    NtcLayerUserPosition::ID
+                    | NtcLayerBinary::ID
+                    | NtcLayerBinary2::ID
+                    | NtcCircleBinary::ID
+                    | NtcCircleBinary2::ID => Some(&mut self.limits.relayed),
+                    ReqCircleJoin::ID => Some(&mut self.limits.joins),
+                    _ => None,
+                };
+                if let Some(bucket) = bucket
+                    && shared.config.rate_limits
+                    && !bucket.take()
+                {
+                    crate::metrics::add(&shared.metrics.limited, 1);
+                    debug!(packet = %req.id, "over its rate, dropped");
+                    return match req.id {
+                        ReqCircleJoin::ID => alert(AnsCircleJoin::ID, seq, Text::TooFast),
+                        _ => Ok(vec![]),
+                    };
+                }
                 let handled = match self.social(shared, req).await {
                     Some(handled) => handled,
                     None => self.request(shared, req),
@@ -132,7 +212,7 @@ impl Fmp {
         Some(social(shared, session, req).await)
     }
 
-    fn request(&mut self, shared: &Shared, req: &Frame) -> Handled {
+    fn request(&mut self, shared: &Arc<Shared>, req: &Frame) -> Handled {
         let (seq, p) = (req.seq, &req.payload);
         let (session, _) = self.login.as_mut().expect("logged in");
         match req.id {
@@ -195,7 +275,7 @@ impl Fmp {
                 let r = ReqLayerUserSearchHead::decode(p)?;
                 let (server, gate, city) = world::parse_path(&r.layer)
                     .ok_or_else(|| Fault::Client(anyhow!("malformed layer path")))?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 self.search = world
                     .players_under(server, gate, city)
                     .into_iter()
@@ -230,7 +310,7 @@ impl Fmp {
                 // data requests.
                 let r = ReqUserSearchHead::decode(p)?;
                 let me = capcom_id(session);
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let contains = |haystack: &[u8], needle: &[u8]| {
                     haystack
                         .windows(needle.len())
@@ -280,7 +360,7 @@ impl Fmp {
                 // A player's card, if they're in the world.
                 let r = ReqUserSearchInfo::decode(p)?;
                 let id = String::from_utf8_lossy(&r.capcom_id).into_owned();
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let Some(place) = world.place(&id).cloned() else {
                     // MH3SP's way of showing an offline player: an alert carrying a card named OFFLINE.
                     let card = PatData::new()
@@ -367,7 +447,7 @@ impl Fmp {
             ReqLayerEnd::ID => {
                 // Back to the title, or to the server selection.
                 ReqLayerEnd::decode(p)?;
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 depart(
                     shared,
                     &mut world,
@@ -379,7 +459,7 @@ impl Fmp {
             }
             ReqLayerUserList::ID => {
                 ReqLayerUserList::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let users = world
                     .neighbours(capcom_id(session))
                     .into_iter()
@@ -419,7 +499,7 @@ impl Fmp {
                         match r.target {
                             ONE_PLAYER => {
                                 let to = String::from_utf8_lossy(&r.capcom_id).into_owned();
-                                let here = shared.world.lock().unwrap().others(me).contains(&to);
+                                let here = shared.world().others(me).contains(&to);
                                 if here {
                                     shared.players.send(&to, frame(seq, &ntc)?);
                                 }
@@ -455,7 +535,7 @@ impl Fmp {
             ReqLayerChildListData::ID => {
                 let r = ReqLayerChildListData::decode(p)?;
                 let (server, gate, _) = location(shared, session)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let children = match gate {
                     None => world::gates(&world, server, r.first, r.count),
                     Some(gate) => world::cities(&world, server, gate, r.first, r.count),
@@ -496,7 +576,7 @@ impl Fmp {
             ReqLayerSiblingListData::ID => {
                 let r = ReqLayerSiblingListData::decode(p)?;
                 let place = location(shared, session)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 // Each row with the path a pick jumps to (item 2, M5 D11).
                 let version = self.version;
                 let to = |path: [u8; 14], (row, settings): (PatData, OptionalFields)| {
@@ -555,6 +635,23 @@ impl Fmp {
                 ReqLayerDetailSearchFoot::decode(p)?;
                 reply(seq, &AnsLayerDetailSearchFoot {})
             }
+            // No known sender (review, 2026-10-11): what the client expects, nothing more.
+            ReqLayerInfoSet::ID => {
+                ReqLayerInfoSet::decode(p)?;
+                reply(seq, &AnsLayerInfoSet {})
+            }
+            ReqLayerUserInfoSet::ID => {
+                ReqLayerUserInfoSet::decode(p)?;
+                reply(seq, &AnsLayerUserInfoSet {})
+            }
+            ReqCircleSearchHead::ID => {
+                ReqCircleSearchHead::decode(p)?;
+                reply(seq, &AnsCircleSearchHead { unk: 0, total: 0 })
+            }
+            ReqCircleSearchFoot::ID => {
+                ReqCircleSearchFoot::decode(p)?;
+                reply(seq, &AnsCircleSearchFoot {})
+            }
             ReqLayerSiblingListFoot::ID => {
                 ReqLayerSiblingListFoot::decode(p)?;
                 reply(seq, &AnsLayerSiblingListFoot {})
@@ -567,7 +664,7 @@ impl Fmp {
                 // level keeps the placeholder.
                 let r = ReqLayerChildInfo::decode(p)?;
                 let (server, gate, city) = location(shared, session)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let record = match (r.layer, gate, city) {
                     (0, Some(g), Some(c)) => {
                         world::cities(&world, server, g, u32::from(c), 1).pop()
@@ -596,7 +693,7 @@ impl Fmp {
                 let r = ReqLayerDown::decode(p)?;
                 let me = capcom_id(session);
                 let (server, gate, city) = location(shared, session)?;
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 match (gate, city) {
                     (None, _) if (1..=world::GATES).contains(&r.layer) => {
                         enter_gate(shared, &mut world, me, r.layer, seq);
@@ -614,7 +711,7 @@ impl Fmp {
             }
             ReqLayerUp::ID => {
                 ReqLayerUp::decode(p)?;
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 depart(
                     shared,
                     &mut world,
@@ -630,7 +727,7 @@ impl Fmp {
                 let (server, gate, city) = world::jump_target(&r.path)
                     .ok_or_else(|| Fault::Client(anyhow!("no such layer to jump to")))?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 if world.place(me).map(|p| p.server) != Some(server) {
                     return Err(Fault::Client(anyhow!("a jump to another world server")));
                 }
@@ -648,8 +745,7 @@ impl Fmp {
                 let target = world::jump_target(&r.path)
                     .ok_or_else(|| Fault::Client(anyhow!("no such layer to jump to")))?;
                 if let (server, gate, Some(city)) = target
-                    && let Err(refusal) =
-                        shared.world.lock().unwrap().can_join((server, gate, city))
+                    && let Err(refusal) = shared.world().can_join((server, gate, city))
                 {
                     return alert(NtcLayerJumpReady::ID, seq, refusal.text());
                 }
@@ -666,7 +762,7 @@ impl Fmp {
                 let r = ReqLayerJumpGo::decode(p)?;
                 let target = world::jump_target(&r.path);
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let valid = shared
                     .jumps
                     .remove(&r.ticket)
@@ -686,7 +782,7 @@ impl Fmp {
                 // A console entering a city asks who hosts its P2P session; the others learn of the arrival.
                 let r = ReqLayerHost::decode(p)?;
                 let me = capcom_id(session);
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let host = world
                     .city_host(city)
@@ -716,7 +812,7 @@ impl Fmp {
                 let r = ReqLayerUserListHead::decode(p)?;
                 let (server, gate, city) = world::parse_path(&r.layer)
                     .ok_or_else(|| Fault::Client(anyhow!("malformed layer path")))?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 self.search = world
                     .players_at(server, gate, city)
                     .into_iter()
@@ -782,7 +878,7 @@ impl Fmp {
                 let r = NtcLayerBinary2::decode(p)?;
                 let me = capcom_id(session);
                 let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
-                if !shared.world.lock().unwrap().others(me).contains(&partner) {
+                if !shared.world().others(me).contains(&partner) {
                     return Ok(vec![]);
                 }
                 #[cfg(feature = "bot")]
@@ -813,7 +909,7 @@ impl Fmp {
                 }
                 let me = capcom_id(session);
                 let id = (server, gate, r.number);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 if let Err(refusal) = world.reserve_city(id, me) {
                     return alert(AnsLayerCreateHead::ID, seq, refusal.text());
                 }
@@ -827,7 +923,7 @@ impl Fmp {
                     gate.ok_or_else(|| Fault::Client(anyhow!("city created outside a gate")))?;
                 let me = capcom_id(session);
                 let id = (server, gate, r.number);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 if let Err(refusal) = world.create_city(id, me, r.extra) {
                     return alert(AnsLayerCreateSet::ID, seq, refusal.text());
                 }
@@ -841,7 +937,7 @@ impl Fmp {
                 if let Some(gate) = gate {
                     let me = capcom_id(session);
                     let id = (server, gate, r.number);
-                    let mut world = shared.world.lock().unwrap();
+                    let mut world = shared.world();
                     world.release_city(id, me);
                     gate_record(shared, &world, me, id)?;
                 }
@@ -851,7 +947,7 @@ impl Fmp {
                 // The city's taken seats (1–12) and arm wrestling places (13–14): holder, slot, taken. The
                 // console clears its 32 slots first. (MH3SP: 14 free placeholder entries named "Test".)
                 ReqLayerMediationList::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let seats = world
                     .city_of(capcom_id(session))
                     .and_then(|id| world.city(id))
@@ -879,7 +975,7 @@ impl Fmp {
                 // seat is refused (an alert: the console then doesn't sit). (MH3SP: always yes, nobody told.)
                 let r = ReqLayerMediationLock::decode(p)?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 if !world.take_seat(city, r.slot, me) {
                     return alert(AnsLayerMediationLock::ID, seq, Text::SeatTaken);
@@ -894,7 +990,7 @@ impl Fmp {
                 // Standing up: the seat is free again, the city sees it.
                 let r = ReqLayerMediationUnlock::decode(p)?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 if world.free_seat(city, r.slot, me) {
                     let ntc = frame(seq, &seat_free_notice(me, r.slot))?;
@@ -906,7 +1002,7 @@ impl Fmp {
             }
             ReqCircleListLayer::ID => {
                 ReqCircleListLayer::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
                 reply(
                     seq,
@@ -919,7 +1015,7 @@ impl Fmp {
             ReqCircleMatchOptionSet::ID => {
                 let r = ReqCircleMatchOptionSet::decode(p)?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 // A race, not a fault: the quest just broke, or departed without the player.
                 let Some(id) = world.circle_of(me) else {
                     return reply(seq, &AnsCircleMatchOptionSet {});
@@ -952,7 +1048,7 @@ impl Fmp {
             }
             ReqCircleInfo::ID => {
                 let r = ReqCircleInfo::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
                 let (info, extra) = world.circle_info((city, r.circle));
                 reply(
@@ -968,7 +1064,7 @@ impl Fmp {
                 // Relayed to the circle; MH3SP doesn't apply it to the circle (the list keeps its creation values).
                 let r = ReqCircleInfoSet::decode(p)?;
                 let me = capcom_id(session);
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let id = (city, r.circle);
                 // Only its leader sets a quest's details: a modified client.
@@ -1005,7 +1101,7 @@ impl Fmp {
             ReqCircleMatchStart::ID => {
                 ReqCircleMatchStart::decode(p)?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let id = world.circle_of(me).ok_or_else(not_in_circle)?;
                 // Only its leader departs a quest (the game offers no one else the choice): a modified client.
                 if world.circle(id).is_some_and(|c| c.leader != me) {
@@ -1073,7 +1169,7 @@ impl Fmp {
                 reader.pat_data()?;
                 let me = capcom_id(session);
                 let body = reader.rest();
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let others: Vec<String> = world
                     .circle((city, r.circle))
@@ -1098,7 +1194,7 @@ impl Fmp {
             ReqCircleLeave::ID => {
                 let r = ReqCircleLeave::decode(p)?;
                 let me = capcom_id(session);
-                let mut world = shared.world.lock().unwrap();
+                let mut world = shared.world();
                 let mut out = Vec::new();
                 quit_quest(shared, &mut world, me, me, seq, &mut out)?;
                 out.push(frame(seq, &AnsCircleLeave { circle: r.circle })?);
@@ -1107,7 +1203,7 @@ impl Fmp {
             ReqCircleUserList::ID => {
                 // The party: per member, ready or not, index, Capcom ID, name.
                 ReqCircleUserList::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let me = capcom_id(session);
                 // Out of a quest that just ended: nobody.
                 let users = world
@@ -1129,7 +1225,7 @@ impl Fmp {
             }
             ReqCircleHost::ID => {
                 let r = ReqCircleHost::decode(p)?;
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(capcom_id(session)).ok_or_else(not_in_city)?;
                 let (index, id, name) = world
                     .circle_members((city, r.circle))
@@ -1156,7 +1252,7 @@ impl Fmp {
                 let r = NtcCircleBinary2::decode(p)?;
                 let me = capcom_id(session);
                 let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let in_party = world
                     .circle((city, r.circle))
@@ -1180,6 +1276,9 @@ impl Fmp {
                 // (MH3SP's: pink on a world server, white in gates and cities).
                 let r = NtcLayerChat::decode(p)?;
                 let me = capcom_id(session);
+                if let Some(answer) = commands::run(shared, me, &session.name, &r.text) {
+                    return Ok(commands::answer(shared, me, &answer));
+                }
                 let (_, gate, _) = location(shared, session)?;
                 let colour = if gate.is_some() {
                     0xffff_ffff
@@ -1211,6 +1310,9 @@ impl Fmp {
                 // the sender filled in (MH3SP's).
                 let r = NtcCircleChat::decode(p)?;
                 let me = capcom_id(session);
+                if let Some(answer) = commands::run(shared, me, &session.name, &r.text) {
+                    return Ok(commands::answer(shared, me, &answer));
+                }
                 let info = set(
                     set(
                         r.info,
@@ -1220,7 +1322,7 @@ impl Fmp {
                     0x04,
                     Item::String(session.name.clone()),
                 );
-                let world = shared.world.lock().unwrap();
+                let world = shared.world();
                 let ntc = frame(seq, &NtcCircleChat { info, text: r.text })?;
                 for (_, member, _, _) in world
                     .circle_of(me)
@@ -1306,7 +1408,7 @@ impl Fmp {
 
     fn unregister(&self, shared: &Shared, session: &Session) {
         if let Some(capcom_id) = &session.capcom_id {
-            let mut world = shared.world.lock().unwrap();
+            let mut world = shared.world();
             depart(
                 shared,
                 &mut world,
@@ -1687,7 +1789,7 @@ fn search_ids(capcom_id: &str) -> (u32, u32) {
 /// rows: the hunter's stats block first, as MH3SP's `UserSearchInfo`); then weapon type and whether on a quest (0 in
 /// town, 1 on a quest), and HR.
 fn found_users(shared: &Shared, found: &[String], stats: bool) -> Vec<(PatData, OptionalFields)> {
-    let mut world = shared.world.lock().unwrap();
+    let mut world = shared.world();
     found
         .iter()
         .filter_map(|id| {
@@ -1745,7 +1847,7 @@ const ONE_PLAYER: u8 = 1;
 
 fn relay<P: Packet>(shared: &Shared, me: &str, packet: &P, seq: u16) -> Handled {
     let ntc = frame(seq, packet)?;
-    for other in shared.world.lock().unwrap().others(me) {
+    for other in shared.world().others(me) {
         shared.players.send(&other, ntc.clone());
     }
     Ok(vec![])
@@ -1795,9 +1897,10 @@ fn capcom_id(session: &Session) -> &str {
     session.capcom_id.as_deref().unwrap_or_default()
 }
 
-/// Where the player is: world server, gate, city.
+/// Where the player is: world server, gate, city. Once found, the place stays for the rest of the request (the `expect`s
+/// on it under the world lock): only this connection's own close removes it, and a newer login replaces it.
 fn location(shared: &Shared, session: &Session) -> Result<(u32, Option<u16>, Option<u16>), Fault> {
-    let mut world = shared.world.lock().unwrap();
+    let mut world = shared.world();
     let place = world
         .place(capcom_id(session))
         .ok_or_else(|| Fault::Client(anyhow!("not in a world server")))?;
@@ -1851,7 +1954,7 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                     .and_then(|(_, v)| *v)
                     .unwrap_or(0),
             };
-            let mut world = shared.world.lock().unwrap();
+            let mut world = shared.world();
             if world.circle_of(me).is_some() {
                 return Err(Fault::Client(anyhow!("a second quest while in one")));
             }
@@ -1866,14 +1969,9 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
         }
         ReqCircleJoin::ID => {
             let r = ReqCircleJoin::decode(p)?;
-            let city = shared
-                .world
-                .lock()
-                .unwrap()
-                .city_of(me)
-                .ok_or_else(not_in_city)?;
+            let city = shared.world().city_of(me).ok_or_else(not_in_city)?;
             let id = (city, r.circle);
-            let hash = shared.world.lock().unwrap().circle_password(id);
+            let hash = shared.world().circle_password(id);
             if let Some(hash) = hash {
                 let typed = match r.info.get(0x04) {
                     Some(Item::String(s)) => s.clone(),
@@ -1883,7 +1981,7 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                     return alert(AnsCircleJoin::ID, seq, Text::WrongPassword);
                 }
             }
-            let mut world = shared.world.lock().unwrap();
+            let mut world = shared.world();
             let index = match world.join_circle(me, id) {
                 Ok(index) => index,
                 Err(refusal) => return alert(AnsCircleJoin::ID, seq, refusal.text()),
@@ -2039,21 +2137,21 @@ async fn profile_set(shared: &Shared, session: &mut Session, req: &Frame) -> Han
     match session.profile.write(r.offset as usize, &r.data) {
         Ok(profile) => {
             let me = capcom_id(session);
-            if let Some(place) = shared.world.lock().unwrap().place(me) {
+            if let Some(place) = shared.world().place(me) {
                 place.profile = profile.clone();
             }
             let db = shared
                 .db
                 .pool()
-                .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
-            let server = |e: anyhow::Error| Fault::Server(e);
+                .ok_or_else(|| Fault::Database(anyhow!("database not opened")))?;
+            let database = |e: anyhow::Error| Fault::Database(e);
             let (id, _) = accounts::hunter(db, me)
                 .await
-                .map_err(server)?
+                .map_err(database)?
                 .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
             accounts::save_profile(db, id, &profile)
                 .await
-                .map_err(server)?;
+                .map_err(database)?;
             session.profile = profile;
         }
         Err(e) => warn!("profile write refused: {e:#}"),
@@ -2077,7 +2175,7 @@ async fn deliver_mail(
         return Ok(out);
     }
     let me = capcom_id(session);
-    let in_city = match shared.world.lock().unwrap().place(me) {
+    let in_city = match shared.world().place(me) {
         Some(place) if place.city.is_some() => {
             place.standing = true;
             true
@@ -2087,21 +2185,34 @@ async fn deliver_mail(
     if !in_city || !mailbox.take_mail() {
         return Ok(out);
     }
+    match waiting_mail(shared, me).await {
+        Ok(mail) => out.extend(mail),
+        // The position still goes to the others (architecture decision 9); the mail waits for the next one.
+        Err(Fault::Database(e)) => {
+            error!(error = %format!("{e:#}"), "database failed, mail not delivered");
+            shared.players.mail(me);
+        }
+        Err(fault) => return Err(fault),
+    }
+    Ok(out)
+}
+
+/// The messages waiting for `me`, now delivered.
+async fn waiting_mail(shared: &Shared, me: &str) -> Result<Vec<Frame>, Fault> {
     let db = shared
         .db
         .pool()
-        .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
+        .ok_or_else(|| Fault::Database(anyhow!("database not opened")))?;
     let (my_id, _) = accounts::hunter(db, me)
         .await
-        .map_err(Fault::Server)?
+        .map_err(Fault::Database)?
         .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
-    out.extend(inbox(db, me, my_id, 0).await?);
-    Ok(out)
+    inbox(db, me, my_id, 0).await
 }
 
 /// The messages waiting for `me` (`id` in the database), as notices, now delivered.
 async fn inbox(db: &SqlitePool, me: &str, id: i64, seq: u16) -> Result<Vec<Frame>, Fault> {
-    let messages = accounts::inbox(db, id).await.map_err(Fault::Server)?;
+    let messages = accounts::inbox(db, id).await.map_err(Fault::Database)?;
     let mut out = Vec::new();
     for (from, name, text, friend_request) in messages {
         let capcom_id = Bytes::copy_from_slice(me.as_bytes());
@@ -2140,30 +2251,34 @@ async fn post(
     friend_request: bool,
     seq: u16,
 ) -> Result<(), Fault> {
-    let server = |e: anyhow::Error| Fault::Server(e);
-    if to_id == from || accounts::blocks(db, to_id, from).await.map_err(server)? {
+    let database = |e: anyhow::Error| Fault::Database(e);
+    if to_id == from || accounts::blocks(db, to_id, from).await.map_err(database)? {
         return Ok(());
     }
     if !accounts::store_message(db, from, to_id, text, friend_request)
         .await
-        .map_err(server)?
+        .map_err(database)?
     {
         warn!("recipient's inbox full, message dropped");
         return Ok(());
     }
-    let standing = shared
-        .world
-        .lock()
-        .unwrap()
-        .place(to)
-        .is_some_and(|p| p.standing);
-    match standing {
-        true => {
-            for notice in inbox(db, to, to_id, seq).await? {
+    let standing = shared.world().place(to).is_some_and(|p| p.standing);
+    if !standing {
+        shared.players.mail(to);
+        return Ok(());
+    }
+    match inbox(db, to, to_id, seq).await {
+        Ok(notices) => {
+            for notice in notices {
                 shared.players.send(to, notice);
             }
         }
-        false => shared.players.mail(to),
+        // Stored all the same: the sender isn't told otherwise, the recipient gets it at a later position.
+        Err(Fault::Database(e)) => {
+            error!(error = %format!("{e:#}"), "database failed, mail not delivered");
+            shared.players.mail(to);
+        }
+        Err(fault) => return Err(fault),
     }
     Ok(())
 }
@@ -2205,12 +2320,12 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
     let db = shared
         .db
         .pool()
-        .ok_or_else(|| Fault::Server(anyhow!("database not opened")))?;
-    let server = |e: anyhow::Error| Fault::Server(e);
+        .ok_or_else(|| Fault::Database(anyhow!("database not opened")))?;
+    let database = |e: anyhow::Error| Fault::Database(e);
     let me = capcom_id(session);
     let (my_id, _) = accounts::hunter(db, me)
         .await
-        .map_err(server)?
+        .map_err(database)?
         .ok_or_else(|| Fault::Server(anyhow!("logged-in hunter not in the database")))?;
     // Who a request names: `None` for an unknown Capcom ID.
     let named = |capcom_id: &Bytes| String::from_utf8_lossy(capcom_id).into_owned();
@@ -2219,7 +2334,7 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             // A message for the recipient's inbox: stored, delivered at their next position in a city.
             let r = ReqTell::decode(p)?;
             let to = named(&r.capcom_id);
-            if let Some((to_id, _)) = accounts::hunter(db, &to).await.map_err(server)? {
+            if let Some((to_id, _)) = accounts::hunter(db, &to).await.map_err(database)? {
                 post(shared, db, my_id, (to_id, &to), &r.text, false, seq).await?;
             }
             reply(seq, &AnsTell {})
@@ -2227,7 +2342,7 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
         ReqFriendList::ID => {
             // Asked when entering a world server.
             let r = ReqFriendList::decode(p)?;
-            let list = accounts::friends(db, my_id).await.map_err(server)?;
+            let list = accounts::friends(db, my_id).await.map_err(database)?;
             reply(
                 seq,
                 &AnsFriendList {
@@ -2241,13 +2356,13 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             // become friends at once.
             let r = ReqFriendAdd::decode(p)?;
             let to = named(&r.capcom_id);
-            let Some((to_id, to_name)) = accounts::hunter(db, &to).await.map_err(server)? else {
+            let Some((to_id, to_name)) = accounts::hunter(db, &to).await.map_err(database)? else {
                 return alert(AnsFriendAdd::ID, seq, Text::UnknownCapcomId);
             };
             let mut out = vec![frame(seq, &AnsFriendAdd {})?];
             if accounts::answer_friend_request(db, to_id, my_id, true)
                 .await
-                .map_err(server)?
+                .map_err(database)?
             {
                 befriend(
                     shared,
@@ -2266,14 +2381,14 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             let r = ReqFriendAccept::decode(p)?;
             let from = named(&r.capcom_id);
             let mut out = vec![frame(seq, &AnsFriendAccept {})?];
-            let Some((from_id, from_name)) = accounts::hunter(db, &from).await.map_err(server)?
+            let Some((from_id, from_name)) = accounts::hunter(db, &from).await.map_err(database)?
             else {
                 return Ok(out);
             };
             let accept = r.accepted == 1;
             if accounts::answer_friend_request(db, from_id, my_id, accept)
                 .await
-                .map_err(server)?
+                .map_err(database)?
                 && accept
             {
                 befriend(
@@ -2290,15 +2405,15 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             let r = ReqFriendDelete::decode(p)?;
             if let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
                 .await
-                .map_err(server)?
+                .map_err(database)?
             {
-                accounts::unfriend(db, my_id, id).await.map_err(server)?;
+                accounts::unfriend(db, my_id, id).await.map_err(database)?;
             }
             reply(seq, &AnsFriendDelete {})
         }
         ReqBlackList::ID => {
             let r = ReqBlackList::decode(p)?;
-            let list = accounts::blacklist(db, my_id).await.map_err(server)?;
+            let list = accounts::blacklist(db, my_id).await.map_err(database)?;
             reply(
                 seq,
                 &AnsBlackList {
@@ -2311,12 +2426,12 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             let r = ReqBlackAdd::decode(p)?;
             let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
                 .await
-                .map_err(server)?
+                .map_err(database)?
             else {
                 return alert(AnsBlackAdd::ID, seq, Text::UnknownCapcomId);
             };
             if id != my_id {
-                accounts::block(db, my_id, id).await.map_err(server)?;
+                accounts::block(db, my_id, id).await.map_err(database)?;
             }
             reply(seq, &AnsBlackAdd {})
         }
@@ -2324,12 +2439,32 @@ async fn social(shared: &Shared, session: &Session, req: &Frame) -> Handled {
             let r = ReqBlackDelete::decode(p)?;
             if let Some((id, _)) = accounts::hunter(db, &named(&r.capcom_id))
                 .await
-                .map_err(server)?
+                .map_err(database)?
             {
-                accounts::unblock(db, my_id, id).await.map_err(server)?;
+                accounts::unblock(db, my_id, id).await.map_err(database)?;
             }
             reply(seq, &AnsBlackDelete {})
         }
         id => Err(unexpected(id)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bucket_allows_its_burst_then_its_rate() {
+        let mut bucket = Bucket::new((3.0, 1.0));
+        assert!((0..3).all(|_| bucket.take()));
+        assert!(!bucket.take());
+        // A second later, one more.
+        bucket.last -= std::time::Duration::from_secs(1);
+        assert!(bucket.take());
+        assert!(!bucket.take());
+        // Never more than the burst, however long it waited.
+        bucket.last -= std::time::Duration::from_secs(60);
+        assert!((0..3).all(|_| bucket.take()));
+        assert!(!bucket.take());
     }
 }

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n             SELECT 1 FROM access_rules JOIN rule_kinds ON rule_kinds.id = access_rules.kind_id\n             WHERE rule_kinds.name = 'ban' AND console_id = ?1 AND revoked_at IS NULL\n               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)\n           ) AS \"banned!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "banned!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "91e832cba1e6c9be6885d5b03cd41e41e897265a44bef66e5d523fb96bba5a68"
+}

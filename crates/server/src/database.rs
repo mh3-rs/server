@@ -85,7 +85,7 @@ impl Database {
 }
 
 /// Opens (creating it if needed) the database at `url` (e.g. `sqlite://data/mh3sp.db`) and runs the migrations.
-async fn open(url: &str) -> Result<SqlitePool> {
+pub async fn open(url: &str) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(url)
         .with_context(|| format!("database URL {url}"))?
         .create_if_missing(true)
@@ -103,4 +103,47 @@ async fn open(url: &str) -> Result<SqlitePool> {
         .await
         .context("run migrations")?;
     Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The constraints the code doesn't check itself: system messages (no sender) are allowed, never as friend
+    /// requests; a Japanese console's region is accepted.
+    #[tokio::test]
+    async fn the_schema_holds_what_it_promises() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("test.db").display());
+        let db = open(&url).await.unwrap();
+        let run = |sql: &'static str| sqlx::query(sql).execute(&db);
+        run(
+            "INSERT INTO consoles (id, public_id, support_code_hmac, region)
+             VALUES (1, zeroblob(16), zeroblob(32), 'RMHJ08')",
+        )
+        .await
+        .unwrap();
+        run(
+            "INSERT INTO hunters (id, public_id, console_id, slot, capcom_id, name)
+             VALUES (1, zeroblob(16), 1, 1, 'AAAAAA', x'')",
+        )
+        .await
+        .unwrap();
+        run("INSERT INTO messages (from_hunter, to_hunter, text, friend_request) VALUES (NULL, 1, x'', 0)")
+            .await
+            .unwrap();
+        // Not delivered yet (its feature isn't built), and not in the way of the inbox.
+        assert!(crate::accounts::inbox(&db, 1).await.unwrap().is_empty());
+        assert!(
+            run("INSERT INTO messages (from_hunter, to_hunter, text, friend_request) VALUES (NULL, 1, x'', 1)")
+                .await
+                .is_err()
+        );
+        assert!(
+            run("INSERT INTO consoles (public_id, support_code_hmac, region)
+                 VALUES (randomblob(16), randomblob(32), 'XXXX08')")
+            .await
+            .is_err()
+        );
+    }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO users (public_id, email, role_id) SELECT ?1, ?2, id FROM roles WHERE name = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "bb71427004e256e6e4c2c1c48009f8e3740d829da481c65c0c58c0465fac1cfc"
+}

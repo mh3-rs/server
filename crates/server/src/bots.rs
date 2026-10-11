@@ -1,5 +1,5 @@
 //! The quest bots' tunnel, the server's side (`roadmap/experiment-bots.md`, `architecture.md` decision 11): the server
-//! is the bots' body, the brain (`mh3sp-brain`) connects to `BOT_PORT` on localhost and decides what they do. One
+//! is the bots' body, the brain (`mh3sp-brain`) connects to `bot_port` on localhost and decides what they do. One
 //! connection carries every bot; a newer brain replaces the older one.
 
 use std::sync::{Arc, Mutex};

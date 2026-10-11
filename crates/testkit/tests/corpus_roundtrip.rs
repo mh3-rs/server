@@ -199,6 +199,15 @@ fn typed_packets_reencode() {
             "NtcLayerJumpReady",
             "ReqLayerJumpGo",
             "NtcLayerJumpGo",
+            // No known sender (review, 2026-10-11): answered in case.
+            "ReqLayerInfoSet",
+            "AnsLayerInfoSet",
+            "ReqLayerUserInfoSet",
+            "AnsLayerUserInfoSet",
+            "ReqCircleSearchHead",
+            "AnsCircleSearchHead",
+            "ReqCircleSearchFoot",
+            "AnsCircleSearchFoot",
         ];
         let missing: Vec<_> = TYPED
             .iter()

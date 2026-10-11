@@ -12,12 +12,14 @@
 //! - **The database** is the only state outside the process; handlers `.await` it without holding any lock.
 //!   Slow work (argon2) runs on `spawn_blocking`.
 
+mod access;
 mod accounts;
+mod api;
 #[cfg(feature = "bot")]
 mod bots;
 pub mod config;
 mod content;
-mod database;
+pub mod database;
 mod game;
 pub mod health;
 mod keys;
@@ -30,6 +32,7 @@ mod relay;
 mod stop;
 mod text;
 mod tls;
+pub mod users;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -75,7 +78,7 @@ struct Shared {
     ///
     /// ponytail: one lock for the whole world. Held for microseconds (a lookup, frames dropped into mailboxes;
     /// never across an `.await` or a socket write): ~500 players relaying ~4 messages a second is ~0.4 % of a
-    /// core. If the relay-latency test (p99 < 2 ms) or production shows contention, split per world server first
+    /// core. If the relay-latency test (p99 < 10 ms) or production shows contention, split per world server first
     /// (nothing crosses that boundary but population counts); finer locks (gate, city, quest) would need lock
     /// ordering for every move between levels.
     world: std::sync::Mutex<game::world::World>,
@@ -91,9 +94,23 @@ struct Shared {
     stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
     shutdown: CancellationToken,
+    /// The TCP connections open (`net.rs`), for their limits.
+    connections: net::Connections,
+    /// Who may reach LMP's first visit and create consoles.
+    admission: game::Admission,
 }
 
 impl Shared {
+    /// The world, locked. A panic while it was held (a bug) may have left it half-changed: the server stops then (the
+    /// container restarts it), rather than serve from it, or answer `/health/live` while FMP is dead. A panic
+    /// anywhere else ends only its connection.
+    fn world(&self) -> std::sync::MutexGuard<'_, game::world::World> {
+        self.world.lock().unwrap_or_else(|_| {
+            error!("the world lock is poisoned by a panic: stopping");
+            std::process::abort()
+        })
+    }
+
     /// The server's clock (the system's, shifted by `clock_offset`).
     fn now(&self) -> SystemTime {
         let offset = Duration::from_secs(self.config.clock_offset.unsigned_abs());
@@ -119,6 +136,8 @@ pub struct Running {
     pub lmp: Option<SocketAddr>,
     pub fmp: Option<SocketAddr>,
     pub health: SocketAddr,
+    /// Off in maintenance mode.
+    pub api: Option<SocketAddr>,
     /// UDP; off in maintenance mode.
     pub qr: Option<SocketAddr>,
     pub natneg: Option<SocketAddr>,
@@ -151,7 +170,7 @@ impl Running {
 /// server is unhealthy until it does); a listener that can't bind fails the start.
 pub async fn start(config: &Config) -> Result<Running> {
     if config.maintenance.is_none() && config.secret.is_none() {
-        bail!("SECRET or SECRET__FILE must be set (the support codes' pepper)");
+        bail!("secret or secret__file must be set (the support codes' pepper)");
     }
     let shutdown = CancellationToken::new();
     let roles: &[(Role, SocketAddr)] = match config.maintenance {
@@ -210,7 +229,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         (None, _) => {
             if config.strategy != Strategy::P2p {
                 error!(
-                    "the relay needs EXTERNAL_ADDRESS as an IPv4 address: consoles connect directly"
+                    "the relay needs external_address as an IPv4 address: consoles connect directly"
                 );
             }
             None
@@ -238,10 +257,12 @@ pub async fn start(config: &Config) -> Result<Running> {
         #[cfg(feature = "bot")]
         peers: Default::default(),
         shutdown: shutdown.clone(),
+        connections: net::Connections::new(config.loopback_exempt),
+        admission: game::Admission::new(config.loopback_exempt),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!(
-            "not configured: EXTERNAL_ADDRESS and NATNEG_HOSTNAME must be set; every console is refused"
+            "not configured: external_address and natneg_hostname must be set; every console is refused"
         );
     }
 
@@ -278,6 +299,7 @@ pub async fn start(config: &Config) -> Result<Running> {
             strategy: config.strategy,
             relays: shared.relays.clone(),
             metrics: shared.metrics.clone(),
+            loopback_exempt: config.loopback_exempt,
         };
         tasks.spawn(natneg::serve(
             socket,
@@ -292,7 +314,7 @@ pub async fn start(config: &Config) -> Result<Running> {
     let bots = {
         if config.bot_port.is_some() {
             tracing::warn!(
-                "BOT_PORT is set, but this server is built without the quest bots (the `bot` feature): ignored"
+                "bot_port is set, but this server is built without the quest bots (the `bot` feature): ignored"
             );
         }
         None
@@ -318,12 +340,27 @@ pub async fn start(config: &Config) -> Result<Running> {
     let health = listener.local_addr()?;
     tasks.spawn(health::serve(listener, shared.clone(), shutdown.clone()));
 
+    // The API needs the database: off in maintenance mode.
+    let api = match &config.maintenance {
+        None => {
+            let listener = TcpListener::bind(config.api)
+                .await
+                .with_context(|| format!("bind the API on {}", config.api))?;
+            net::announce("api", &listener)?;
+            let address = listener.local_addr()?;
+            tasks.spawn(api::serve(listener, shared.clone(), shutdown.clone()));
+            Some(address)
+        }
+        Some(_) => None,
+    };
+
     info!("server started");
     Ok(Running {
         opn,
         lmp,
         fmp,
         health,
+        api,
         qr,
         natneg,
         bots,

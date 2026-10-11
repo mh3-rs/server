@@ -47,10 +47,7 @@ pub fn list(shared: &Shared, first: u32, count: u32) -> Result<Vec<PatData>, Fau
                 .with(0x02, Item::String(address.clone()))
                 .with(0x03, Item::Word(shared.fmp_port))
                 .with(0x07, Item::LongLong(kind))
-                .with(
-                    0x08,
-                    Item::Long(shared.world.lock().unwrap().server_population(index)),
-                )
+                .with(0x08, Item::Long(shared.world().server_population(index)))
                 .with(0x09, Item::Long(SERVER_CAPACITY))
                 .with(0x0a, Item::String(Bytes::from_static(name.as_bytes())))
                 // Unknown; MH3SP's values.
@@ -82,7 +79,7 @@ fn external_address(shared: &Shared) -> Result<Bytes, Fault> {
         .config
         .external_address
         .as_ref()
-        .ok_or_else(|| Fault::Server(anyhow!("EXTERNAL_ADDRESS unset")))?;
+        .ok_or_else(|| Fault::Server(anyhow!("external_address unset")))?;
     Ok(Bytes::copy_from_slice(address.as_bytes()))
 }
 
@@ -1053,6 +1050,46 @@ mod tests {
         assert!(world.create_circle("AAAAAA", new()).is_none());
         world.leave_circle("AAAAAA");
         assert!(world.create_circle("AAAAAA", new()).is_some());
+    }
+
+    /// Every list shows the players in the order they reached the place, the earliest first, not by name nor by
+    /// slot; one who leaves and comes back is last.
+    #[test]
+    fn lists_show_players_in_arrival_order() {
+        let ids = |list: Vec<(&str, &Place)>| -> Vec<String> {
+            list.into_iter().map(|(id, _)| id.to_owned()).collect()
+        };
+        let mut world = world_with(&["CCCCCC", "AAAAAA", "BBBBBB"]);
+        assert_eq!(
+            ids(world.neighbours("AAAAAA")),
+            ["CCCCCC", "AAAAAA", "BBBBBB"]
+        );
+        // C goes into a city, B follows, then A; C comes back to the gate.
+        let city = (1, 1, 3);
+        world.reserve_city(city, "CCCCCC").unwrap();
+        world
+            .create_city(city, "CCCCCC", OptionalFields::default())
+            .unwrap();
+        world.release_city(city, "CCCCCC");
+        world.join_city(city, "BBBBBB").unwrap();
+        world.join_city(city, "AAAAAA").unwrap();
+        assert_eq!(world.city_players(city), ["CCCCCC", "BBBBBB", "AAAAAA"]);
+        assert_eq!(
+            ids(world.players_at(1, Some(1), Some(3))),
+            ["CCCCCC", "BBBBBB", "AAAAAA"]
+        );
+        world.leave_city("CCCCCC");
+        assert_eq!(world.city_players(city), ["BBBBBB", "AAAAAA"]);
+        world.leave_city("BBBBBB");
+        world.join_city(city, "BBBBBB").unwrap();
+        assert_eq!(world.city_players(city), ["AAAAAA", "BBBBBB"]);
+        // The gate's search covers its cities, each player by its last arrival: A in the city, C back at the gate,
+        // B back in the city.
+        assert_eq!(
+            ids(world.players_under(1, Some(1), None)),
+            ["AAAAAA", "CCCCCC", "BBBBBB"]
+        );
+        assert_eq!(ids(world.everyone()), ["AAAAAA", "CCCCCC", "BBBBBB"]);
     }
 
     #[test]

@@ -76,10 +76,12 @@ pub struct Opn {
     subterms: Option<Terms>,
     /// The console's encryption key, given at `ReqCommonKey` (encryption on): it goes on to its LMP connection.
     pub key: Option<crate::keys::Key>,
+    /// Where the console connects from: told to LMP when it passed (`Admission`).
+    ip: std::net::IpAddr,
 }
 
 impl Opn {
-    pub fn start() -> (Self, Handled) {
+    pub fn start(ip: std::net::IpAddr) -> (Self, Handled) {
         let opn = Opn {
             stage: Stage::GameId,
             region: None,
@@ -89,6 +91,7 @@ impl Opn {
             terms: None,
             subterms: None,
             key: None,
+            ip,
         };
         (opn, memory_check(GAME_ID.0, GAME_ID.1).map(|f| vec![f]))
     }
@@ -269,8 +272,9 @@ impl Opn {
                 ReqLmpConnect::decode(p)?;
                 let Some(address) = &shared.config.external_address else {
                     // Refused at `AnsConnection` when unset.
-                    return Err(Fault::Server(anyhow::anyhow!("EXTERNAL_ADDRESS unset")));
+                    return Err(Fault::Server(anyhow::anyhow!("external_address unset")));
                 };
+                shared.admission.passed(self.ip);
                 reply(
                     seq,
                     &AnsLmpConnect {
@@ -330,7 +334,7 @@ impl Opn {
             let db = shared
                 .db
                 .pool()
-                .ok_or_else(|| Fault::Server(anyhow::anyhow!("database not opened")))?;
+                .ok_or_else(|| Fault::Database(anyhow::anyhow!("database not opened")))?;
             *slot = Some(terms(db, kind, self.language).await?);
         }
         Ok(slot.as_ref().expect("just loaded"))

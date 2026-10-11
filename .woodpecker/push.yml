@@ -15,4 +15,6 @@ steps:
       # The quest bots' tunnel is a private repository, named over SSH in Cargo.toml: fetched over HTTPS with the
       # token here.
       - git config --global url."https://$${GITEA_USER}:$${GITEA_TOKEN}@git.pband.ch/".insteadOf "ssh://git@git.pband.ch/"
+      # The dependency audit's tool, pinned (scripts run `cargo deny check`).
+      - curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-$$(uname -m)-unknown-linux-musl.tar.gz | tar xz --strip-components=1 -C /usr/local/cargo/bin --wildcards '*/cargo-deny'
       - scripts/ci-tests.sh

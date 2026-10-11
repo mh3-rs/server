@@ -13,8 +13,8 @@ import sys
 from pathlib import Path
 
 root = Path(__file__).resolve().parent.parent
-mh3sp = Path(sys.argv[1]) if len(sys.argv) > 1 else root.parent / "mh3sp"
-mhtrida = Path(sys.argv[2]) if len(sys.argv) > 2 else mh3sp / "lab" / "mhtrida"
+mh3sp = Path(sys.argv[1]) if len(sys.argv) > 1 else root.parent / "reference"
+mhtrida = Path(sys.argv[2]) if len(sys.argv) > 2 else root.parent / "lab" / "mhtrida"
 
 constants = (mh3sp / "mh" / "constants.py").read_text()
 patid4 = constants[constants.index("class PatID4"):constants.index("class PatServerType")]

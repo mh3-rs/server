@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT users.public_id, roles.name AS role FROM tokens\n           JOIN users ON users.id = tokens.user_id\n           JOIN roles ON roles.id = users.role_id\n           JOIN usages ON usages.id = tokens.usage_id\n           WHERE tokens.hash = ?1 AND tokens.revoked_at IS NULL\n             AND (usages.lifetime_seconds IS NULL\n                  OR unixepoch(tokens.created_at) + usages.lifetime_seconds > unixepoch())",
+  "describe": {
+    "columns": [
+      {
+        "name": "public_id",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "public_id"
+          }
+        }
+      },
+      {
+        "name": "role",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "roles",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6c0138235c261c20db7148aba07a7ed58e6109eeb8ad80496ecb1919666f9df1"
+}

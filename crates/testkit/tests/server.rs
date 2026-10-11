@@ -32,6 +32,7 @@ fn config() -> (Config, tempfile::TempDir) {
         lmp: any,
         fmp: any,
         health: any,
+        api: any,
         qr: any,
         natneg: any,
         strategy: server::config::Strategy::P2p,
@@ -48,8 +49,12 @@ fn config() -> (Config, tempfile::TempDir) {
             .map(PathBuf::from)
             .unwrap_or_else(|| repo().join("../reference")),
         encryption: false,
+        admins: Vec::new(),
         bot_port: None,
         clock_offset: 0,
+        // Replays send faster than any console: `a_chat_flood_is_cut_to_its_rate` turns them on.
+        rate_limits: false,
+        loopback_exempt: true,
         maintenance: None,
     };
     (config, dir)
@@ -663,6 +668,679 @@ async fn consoles_keep_their_hunters() {
     running.stop().await;
 }
 
+/// Tier 3, the unknown requests (review, 2026-10-11): one the game knows but the server doesn't serve is refused with
+/// a message and the player stays; the few typed for a client without a known sender get their answer; one the
+/// console never sends still drops the connection.
+#[tokio::test]
+async fn unknown_requests_are_refused_not_dropped() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = enter_world(&running).await;
+    let raw = |id: u32, payload: &'static [u8]| Frame {
+        seq: 10,
+        id: wire::PacketId(id),
+        payload: Bytes::from_static(payload),
+    };
+    // ReqCircleKick: refused, the request's own answer id carries the alert.
+    console.send(raw(0x6535_0100, b"")).await.unwrap();
+    let text = expect_alert(&mut console, wire::PacketId(0x6535_0200)).await;
+    assert!(text.contains("Not available on this server"), "{text}");
+    send(
+        &mut console,
+        11,
+        ReqCircleSearchHead {
+            rest: Default::default(),
+        },
+    )
+    .await;
+    let found = expect::<AnsCircleSearchHead>(&mut console).await;
+    assert_eq!(found.total, 0);
+    send(&mut console, 12, ReqServerTime { country: 0 }).await;
+    expect::<AnsServerTime>(&mut console).await;
+    // ReqTicket2: the server's to send.
+    console.send(raw(0x6031_0100, b"")).await.unwrap();
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
+/// Tier 3, rate limits (the review, 2026-10-11): a console flooding chat reaches the others with its burst only, and
+/// nobody is dropped for it.
+#[tokio::test]
+async fn a_chat_flood_is_cut_to_its_rate() {
+    let (mut config, _db) = config();
+    config.rate_limits = true;
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = (enter_world(&running).await, enter_world(&running).await);
+    meet(&mut a, &mut b, 1, 1).await;
+    for c in [&mut a, &mut b] {
+        drain(c, Duration::from_millis(100)).await;
+    }
+    for seq in 0..100 {
+        let line = NtcLayerChat {
+            channel: 1,
+            info: PatData::new(),
+            text: Bytes::from_static(b"spam"),
+        };
+        send(&mut a, 100 + seq, line).await;
+    }
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    let lines = seen.iter().filter(|&&id| id == NtcLayerChat::ID).count();
+    // The burst of 5, and what a slow machine refills meanwhile (1 a second): far from 100.
+    assert!((5..=10).contains(&lines), "{lines} lines");
+    // Both still here.
+    for c in [&mut a, &mut b] {
+        send(c, 300, ReqServerTime { country: 0 }).await;
+        expect::<AnsServerTime>(c).await;
+    }
+    running.stop().await;
+}
+
+/// Chat commands (`game::commands`): `/tell` reaches its target alone; an admin command from a player answers
+/// "Unknown command" to them alone; an admin's `/kick` drops its target.
+#[tokio::test]
+async fn chat_commands() {
+    let (mut config, _db) = config();
+    // The admin's Capcom ID exists once its console has played: a first server makes it, a second one names it.
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let codes = [
+        first_visit(lmp, None).await.0,
+        first_visit(lmp, None).await.0,
+        first_visit(lmp, None).await.0,
+    ];
+    let mut ids = Vec::new();
+    for code in &codes {
+        login(lmp, code, 1).await;
+        ids.push(first_visit(lmp, Some(code)).await.2[0].0.clone());
+    }
+    running.stop().await;
+    config.admins = vec![ids[0].clone()];
+    let running = server::start(&config).await.unwrap();
+    let mut consoles = Vec::new();
+    for code in &codes {
+        let mut c = play(&running, code).await;
+        let info = PatData::new();
+        send(&mut c, 10, ReqLayerDown { layer: 1, info }).await;
+        consoles.push(c);
+    }
+    let [mut admin, mut b, mut c] = consoles.try_into().ok().unwrap();
+    for console in [&mut admin, &mut b, &mut c] {
+        drain(console, Duration::from_millis(100)).await;
+    }
+    let line = |text: String| NtcLayerChat {
+        channel: 1,
+        info: PatData::new(),
+        text: text.into(),
+    };
+    async fn texts(console: &mut Console) -> Vec<String> {
+        let mut texts = Vec::new();
+        while let Received::Frame(f) = console.recv(Duration::from_millis(200)).await.unwrap() {
+            if f.id == NtcLayerChat::ID {
+                let chat = NtcLayerChat::decode(&f.payload).unwrap();
+                texts.push(String::from_utf8(chat.text.to_vec()).unwrap());
+            }
+        }
+        texts
+    }
+
+    // Plain chat reaches both others: they share the place.
+    send(&mut admin, 20, line("hello".into())).await;
+    assert_eq!(texts(&mut b).await, ["hello"]);
+    assert_eq!(texts(&mut c).await, ["hello"]);
+
+    send(&mut admin, 21, line(format!("/tell {} psst", ids[1]))).await;
+    assert_eq!(texts(&mut b).await, ["psst"]);
+    assert!(texts(&mut c).await.is_empty(), "a tell heard by a third");
+    assert_eq!(texts(&mut admin).await, ["To Aiko: sent."]);
+    // b blocks the admin: their tells are "sent", never delivered (a block isn't revealed).
+    let db = server::database::open(&config.database_url).await.unwrap();
+    sqlx::query(
+        "INSERT INTO blacklist (blocker, blocked) SELECT b.id, a.id FROM hunters b, hunters a
+         WHERE b.capcom_id = ?1 AND a.capcom_id = ?2",
+    )
+    .bind(&ids[1])
+    .bind(&ids[0])
+    .execute(&db)
+    .await
+    .unwrap();
+    send(&mut admin, 28, line(format!("/tell {} again", ids[1]))).await;
+    assert_eq!(texts(&mut admin).await, ["To Aiko: sent."]);
+    assert!(texts(&mut b).await.is_empty(), "a tell through a block");
+
+    // Not an admin: refused as unknown, to the sender alone; nobody kicked.
+    for command in [
+        format!("/kick {}", ids[2]),
+        format!("/ban {} x", ids[2]),
+        format!("/unban {}", ids[2]),
+        "/announce hi".to_owned(),
+        "/stop 1h".to_owned(),
+    ] {
+        send(&mut b, 22, line(command.clone())).await;
+        assert_eq!(texts(&mut b).await, ["Unknown command."], "{command}");
+    }
+    assert!(texts(&mut c).await.is_empty());
+    send(&mut b, 23, line("/tell nobody hi".into())).await;
+    assert_eq!(texts(&mut b).await, ["No player nobody online."]);
+    send(&mut b, 24, line("/tell Aiko hi".into())).await;
+    assert_eq!(
+        texts(&mut b).await,
+        ["Several players named Aiko:", "use a Capcom ID."]
+    );
+
+    send(&mut admin, 25, line(format!("/kick {}", ids[2]))).await;
+    assert!(matches!(
+        c.recv(Duration::from_secs(2)).await.unwrap(),
+        Received::Closed
+    ));
+    assert_eq!(texts(&mut admin).await, [format!("{} kicked.", ids[2])]);
+    // A ban from the chat answers once done (the database's own task); c, offline, by Capcom ID.
+    send(&mut admin, 26, line(format!("/ban {} spam", ids[2]))).await;
+    assert_eq!(texts(&mut admin).await, [format!("{} banned.", ids[2])]);
+    send(&mut admin, 27, line(format!("/unban {}", ids[2]))).await;
+    assert_eq!(texts(&mut admin).await, [format!("{} unbanned.", ids[2])]);
+    // Still here: the admin and b, told c left (the admin's notice went with its answer).
+    let notices = drain(&mut b, Duration::from_millis(200)).await;
+    assert!(notices.contains(&NtcLayerOut::ID));
+    for console in [&mut admin, &mut b] {
+        send(console, 30, ReqServerTime { country: 0 }).await;
+        expect::<AnsServerTime>(console).await;
+    }
+    running.stop().await;
+}
+
+/// An API request: status code and body. `auth` is a whole header line (`Authorization: …` or `Cookie: …`).
+async fn api(addr: SocketAddr, method: &str, path: &str, auth: &str, body: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: test\r\n{auth}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(request.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    let status = out.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let body = out.split_once("\r\n\r\n").map_or("", |(_, b)| b).to_owned();
+    (status, body)
+}
+
+/// The API (`api.rs`): tokens from `users.rs`, as a Bearer header or the cookie; admin routes refuse players;
+/// a kick through it drops the player.
+#[tokio::test]
+async fn the_api_serves_admins_only() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let addr = running.api.unwrap();
+    let db = server::database::open(&config.database_url).await.unwrap();
+    use server::users::{Role, add, issue, revoke};
+    add(&db, "admin@example.org", Role::Admin).await.unwrap();
+    add(&db, "player@example.org", Role::Player).await.unwrap();
+    let admin = format!(
+        "Authorization: Bearer {}",
+        issue(&db, "admin@example.org", "cli").await.unwrap()
+    );
+    let player = issue(&db, "player@example.org", "session").await.unwrap();
+    let player = format!("Cookie: theme=dark; mh3sp_token={player}");
+
+    let (status, body) = api(addr, "GET", "/api/me", &admin, "").await;
+    assert_eq!(status, 200);
+    let me: shared::Me = serde_json::from_str(&body).unwrap();
+    assert_eq!(me.role, "admin");
+    let (status, body) = api(addr, "GET", "/api/me", &player, "").await;
+    assert_eq!(
+        (
+            status,
+            serde_json::from_str::<shared::Me>(&body).unwrap().role
+        ),
+        (200, "player".into())
+    );
+    assert_eq!(api(addr, "GET", "/api/me", "X-None: 1", "").await.0, 401);
+    assert_eq!(
+        api(
+            addr,
+            "GET",
+            "/api/me",
+            "Authorization: Bearer mh3sp_0.0",
+            ""
+        )
+        .await
+        .0,
+        401
+    );
+    assert_eq!(api(addr, "GET", "/api/players", &player, "").await.0, 403);
+    assert_eq!(api(addr, "GET", "/api/bans", &player, "").await.0, 403);
+    let announce = r#"{"text":"hello"}"#;
+    // Every admin route refuses a player (a body valid for each: unknown fields are ignored).
+    let any = r#"{"text":"x","delay":"1h","player":"X","reason":"r","bot":"X"}"#;
+    for route in [
+        "announce",
+        "stop",
+        "kick",
+        "tell",
+        "ban",
+        "unban",
+        "bot/add",
+        "bot/remove",
+    ] {
+        let path = format!("/api/{route}");
+        assert_eq!(
+            api(addr, "POST", &path, &player, any).await.0,
+            403,
+            "{route}"
+        );
+    }
+    assert_eq!(
+        api(addr, "POST", "/api/announce", &player, announce)
+            .await
+            .0,
+        403
+    );
+
+    let mut console = enter_world(&running).await;
+    let (status, body) = api(addr, "GET", "/api/players", &admin, "").await;
+    assert_eq!(status, 200);
+    let online: Vec<shared::Player> = serde_json::from_str(&body).unwrap();
+    assert_eq!(online.len(), 1);
+    assert_eq!(
+        (online[0].name.as_str(), online[0].server.as_str()),
+        ("Aiko", "Valor1")
+    );
+
+    let (status, body) = api(addr, "POST", "/api/announce", &admin, announce).await;
+    assert_eq!(
+        (status, body.contains("Sent to 1 players.")),
+        (200, true),
+        "{body}"
+    );
+    expect::<NtcLayerChat>(&mut console).await;
+    // A long paste would fill every mailbox (a frame per 30 characters): refused.
+    let long = format!(r#"{{"text":"{}"}}"#, "word ".repeat(61));
+    assert_eq!(
+        api(addr, "POST", "/api/announce", &admin, &long).await.0,
+        400
+    );
+    // The quest bots (this server has them, no brain connected).
+    let bot = format!(r#"{{"player":"{}"}}"#, online[0].capcom_id);
+    let (status, body) = api(addr, "POST", "/api/bot/add", &admin, &bot).await;
+    assert_eq!((status, body.contains("NoBrain")), (409, true), "{body}");
+    let gone = r#"{"bot":"NOBOT1"}"#;
+    assert_eq!(
+        api(addr, "POST", "/api/bot/remove", &admin, gone).await.0,
+        404
+    );
+    let tell = format!(r#"{{"player":"{}","text":"psst"}}"#, online[0].capcom_id);
+    assert_eq!(api(addr, "POST", "/api/tell", &admin, &tell).await.0, 200);
+    assert_eq!(
+        &expect::<NtcLayerChat>(&mut console).await.text[..],
+        b"psst"
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/kick", &admin, r#"{"player":"NOBODY"}"#)
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/stop", &admin, r#"{"delay":"soon"}"#)
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/stop", &admin, r#"{"delay":"cancel"}"#)
+            .await
+            .0,
+        409
+    );
+    let kick = format!(r#"{{"player":"{}"}}"#, online[0].capcom_id);
+    assert_eq!(api(addr, "POST", "/api/kick", &admin, &kick).await.0, 200);
+    assert!(matches!(
+        console.recv(Duration::from_secs(2)).await.unwrap(),
+        Received::Closed
+    ));
+
+    // Sign-in by password: a session token, ended by signing out; five failures for an email, and it waits.
+    server::users::set_password(&db, "player@example.org", "long enough pass")
+        .await
+        .unwrap();
+    let sign_in =
+        |password: &str| format!(r#"{{"email":"Player@example.org","password":"{password}"}}"#);
+    let (status, body) = api(
+        addr,
+        "POST",
+        "/api/session",
+        "X-None: 1",
+        &sign_in("long enough pass"),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let session: shared::Session = serde_json::from_str(&body).unwrap();
+    let bearer = format!("Authorization: Bearer {}", session.token);
+    assert_eq!(api(addr, "GET", "/api/me", &bearer, "").await.0, 200);
+    assert_eq!(api(addr, "POST", "/api/logout", &bearer, "").await.0, 200);
+    assert_eq!(
+        api(addr, "GET", "/api/me", &bearer, "").await.0,
+        401,
+        "signed out"
+    );
+    for _ in 0..5 {
+        assert_eq!(
+            api(addr, "POST", "/api/session", "X-None: 1", &sign_in("wrong"))
+                .await
+                .0,
+            401
+        );
+    }
+    let right = sign_in("long enough pass");
+    assert_eq!(
+        api(addr, "POST", "/api/session", "X-None: 1", &right)
+            .await
+            .0,
+        429,
+        "after five failures"
+    );
+    // In parallel, the count still holds: at most five checked, the rest refused at once.
+    let mut parallel = Vec::new();
+    for _ in 0..20 {
+        let body = r#"{"email":"admin@example.org","password":"guess"}"#;
+        parallel.push(tokio::spawn(async move {
+            api(addr, "POST", "/api/session", "X-None: 1", body).await.0
+        }));
+    }
+    let mut statuses = Vec::new();
+    for p in parallel {
+        statuses.push(p.await.unwrap());
+    }
+    assert_eq!(
+        statuses.iter().filter(|&&s| s == 401).count(),
+        5,
+        "{statuses:?}"
+    );
+    let long = format!(
+        r#"{{"email":"{}@example.org","password":"x"}}"#,
+        "a".repeat(300)
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/session", "X-None: 1", &long)
+            .await
+            .0,
+        400
+    );
+
+    let key = admin
+        .trim_start_matches("Authorization: Bearer ")
+        .split_once('.')
+        .unwrap()
+        .0;
+    assert!(revoke(&db, key, "test").await.unwrap());
+    assert_eq!(
+        api(addr, "GET", "/api/me", &admin, "").await.0,
+        401,
+        "revoked"
+    );
+    running.stop().await;
+}
+
+/// A ban (`access.rs`): through the API, the player kicked and their console refused at login with a message (an
+/// alert, not a drop); lifted, it logs in again. Unknown players and an empty reason are refused.
+#[tokio::test]
+async fn a_banned_console_is_refused_until_unbanned() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (addr, lmp) = (running.api.unwrap(), running.lmp.unwrap());
+    let db = server::database::open(&config.database_url).await.unwrap();
+    server::users::add(&db, "admin@example.org", server::users::Role::Admin)
+        .await
+        .unwrap();
+    let token = server::users::issue(&db, "admin@example.org", "cli")
+        .await
+        .unwrap();
+    let admin = format!("Authorization: Bearer {token}");
+    let (code, _, _) = first_visit(lmp, None).await;
+    let mut console = play(&running, &code).await;
+    let capcom_id = first_visit(lmp, Some(&code)).await.2[0].0.clone();
+
+    let ban =
+        |player: &str, reason: &str| format!(r#"{{"player":"{player}","reason":"{reason}"}}"#);
+    assert_eq!(
+        api(addr, "POST", "/api/ban", &admin, &ban(&capcom_id, " "))
+            .await
+            .0,
+        400
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/ban", &admin, &ban("NOBODY", "x"))
+            .await
+            .0,
+        404
+    );
+    // The same console again, between LMP and FMP: its ticket waits, it isn't online to be kicked.
+    let ticket = login(lmp, &code, 1).await;
+    let (status, body) = api(
+        addr,
+        "POST",
+        "/api/ban",
+        &admin,
+        &ban(&capcom_id, "cheating"),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let by: Option<i64> = sqlx::query_scalar("SELECT created_by FROM access_rules")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(by.is_some(), "the ban's author");
+    let (status, body) = api(addr, "GET", "/api/bans", &admin, "").await;
+    let bans: Vec<shared::BanInfo> = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(
+        (
+            bans.len(),
+            bans[0].capcom_ids.clone(),
+            bans[0].reason.as_str()
+        ),
+        (1, vec![capcom_id.clone()], "cheating")
+    );
+    assert!(matches!(
+        console.recv(Duration::from_secs(2)).await.unwrap(),
+        Received::Closed
+    ));
+    let mut hop = Console::connect(running.fmp.unwrap(), false).await.unwrap();
+    expect::<ReqConnection>(&mut hop).await;
+    let data = connection_data(None, Some(&ticket));
+    send(&mut hop, 0, AnsConnection { data }).await;
+    assert!(
+        matches!(
+            hop.recv(Duration::from_secs(2)).await.unwrap(),
+            Received::Closed
+        ),
+        "a ticket from before the ban"
+    );
+    match login_info(lmp, Some(&code)).await {
+        Some(Received::Frame(f)) => assert_eq!(f.id.0, AnsLoginInfo::ID.0 | 0x01, "an alert"),
+        other => panic!("expected an alert, got {other:?}"),
+    }
+
+    let unban = format!(r#"{{"player":"{}"}}"#, capcom_id.to_lowercase());
+    assert_eq!(api(addr, "POST", "/api/unban", &admin, &unban).await.0, 200);
+    assert_eq!(
+        api(addr, "GET", "/api/bans", &admin, "").await.1,
+        "[]",
+        "lifted"
+    );
+    assert_eq!(
+        api(addr, "POST", "/api/unban", &admin, &unban).await.0,
+        404,
+        "twice"
+    );
+    match login_info(lmp, Some(&code)).await {
+        Some(Received::Frame(f)) => assert_eq!(f.id, AnsLoginInfo::ID),
+        other => panic!("expected a login, got {other:?}"),
+    }
+    running.stop().await;
+}
+
+/// The relayed traffic's limit (`game::fmp`, burst 40, 20 a second): a flood of positions is cut near the burst, and
+/// traffic at the game's own peak rate afterwards all goes through.
+#[tokio::test]
+async fn relayed_traffic_is_cut_to_its_rate() {
+    let (mut config, _db) = config();
+    config.rate_limits = true;
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = (enter_world(&running).await, enter_world(&running).await);
+    meet(&mut a, &mut b, 1, 1).await;
+    for c in [&mut a, &mut b] {
+        drain(c, Duration::from_millis(100)).await;
+    }
+    let position = || NtcLayerUserPosition {
+        data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
+    };
+    let positions = |ids: Vec<wire::PacketId>| {
+        ids.iter()
+            .filter(|&&id| id == NtcLayerUserPosition::ID)
+            .count()
+    };
+    for seq in 0..200 {
+        send(&mut a, 100 + seq, position()).await;
+    }
+    let flood = positions(drain(&mut b, Duration::from_millis(300)).await);
+    // The burst, and what a slow machine refills meanwhile: far from 200.
+    assert!((40..=55).contains(&flood), "{flood} positions");
+    // Refilled after two seconds: the game's peak (9 in a second) passes whole.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    for seq in 0..9 {
+        send(&mut a, 400 + seq, position()).await;
+    }
+    assert_eq!(
+        positions(drain(&mut b, Duration::from_millis(300)).await),
+        9
+    );
+    running.stop().await;
+}
+
+/// LMP's first visit up to `ReqLoginInfo`: the answer, or `None` when the server closed the connection.
+async fn login_info(lmp: SocketAddr, support_code: Option<&str>) -> Option<Received> {
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    let data = connection_data(support_code, None);
+    send(&mut console, 0, AnsConnection { data }).await;
+    if let Received::Closed = console.recv(Duration::from_secs(5)).await.unwrap() {
+        return None;
+    }
+    let info = ReqLoginInfo {
+        data: PatData::new(),
+    };
+    send(&mut console, 1, info).await;
+    match console.recv(Duration::from_secs(5)).await.unwrap() {
+        Received::Closed => None,
+        other => Some(other),
+    }
+}
+
+/// Tier 3, the per-address limits' wiring (the review, 2026-10-11), with loopback's exemption off: LMP's first
+/// visit only after OPN; five new consoles an address, a made-up support code counting as one; 16 connections.
+#[tokio::test]
+async fn the_per_address_limits_hold() {
+    let (mut config, _db) = config();
+    config.loopback_exempt = false;
+    let running = server::start(&config).await.unwrap();
+    let (opn, lmp) = (running.opn, running.lmp.unwrap());
+    assert!(login_info(lmp, None).await.is_none(), "LMP before OPN");
+    let (mut console, status) = opn_connect(opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    assert_eq!(status, 5);
+    send(&mut console, 1, ReqLmpConnect {}).await;
+    expect::<AnsLmpConnect>(&mut console).await;
+    drop(console);
+
+    let mut codes = Vec::new();
+    for _ in 0..5 {
+        codes.push(first_visit(lmp, None).await.0);
+    }
+    assert!(login_info(lmp, None).await.is_none(), "a sixth console");
+    assert!(
+        login_info(lmp, Some("ZZZZZZZZZZZ")).await.is_none(),
+        "a made-up code"
+    );
+    // A known console still comes in.
+    assert_eq!(first_visit(lmp, Some(&codes[0])).await.0, codes[0]);
+
+    let mut open = Vec::new();
+    for _ in 0..16 {
+        let mut c = Console::connect(lmp, false).await.unwrap();
+        expect::<ReqConnection>(&mut c).await;
+        open.push(c);
+    }
+    let mut seventeenth = Console::connect(lmp, false).await.unwrap();
+    assert!(matches!(
+        seventeenth.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
+/// Tier 3, decision 9 at LMP: a database failure at login is refused with a message, and the console asking again
+/// keeps its own support code (it isn't handed a new one).
+#[tokio::test]
+async fn a_database_failure_at_login_keeps_the_code() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    let (code, _, _) = first_visit(lmp, None).await;
+    let db = sqlx::SqlitePool::connect(&config.database_url)
+        .await
+        .unwrap();
+    let sql = |sql: &'static str| sqlx::query(sql).execute(&db);
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    let data = connection_data(Some(&code), None);
+    send(&mut console, 0, AnsConnection { data }).await;
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
+    sql("ALTER TABLE consoles RENAME TO hidden").await.unwrap();
+    let info = || ReqLoginInfo {
+        data: PatData::new(),
+    };
+    send(&mut console, 1, info()).await;
+    let text = expect_alert(&mut console, AnsLoginInfo::ID).await;
+    assert!(text.contains("Not available right now"), "{text}");
+    sql("ALTER TABLE hidden RENAME TO consoles").await.unwrap();
+    send(&mut console, 2, info()).await;
+    let again = expect::<AnsLoginInfo>(&mut console).await;
+    assert_eq!(string(again.data.get(0x07)), code);
+    running.stop().await;
+}
+
+/// Tier 3, rate limits: quest joins beyond their burst are refused with "Too fast", each one checked before.
+#[tokio::test]
+async fn quest_joins_are_rate_limited() {
+    let (mut config, _db) = config();
+    config.rate_limits = true;
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = (enter_world(&running).await, enter_world(&running).await);
+    for step in 1..=2 {
+        meet(&mut a, &mut b, 1, step).await;
+    }
+    drain(&mut a, Duration::from_millis(100)).await;
+    let mut texts = Vec::new();
+    for seq in 0..6 {
+        let join = ReqCircleJoin {
+            circle: 99,
+            info: PatData::new(),
+        };
+        send(&mut a, 100 + seq, join).await;
+        texts.push(expect_alert(&mut a, AnsCircleJoin::ID).await);
+    }
+    assert!(
+        texts[..5].iter().all(|t| !t.contains("Too fast")),
+        "{texts:?}"
+    );
+    assert!(texts[5].contains("Too fast"), "{texts:?}");
+    running.stop().await;
+}
+
 /// A malformed packet drops the connection.
 #[tokio::test]
 async fn malformed_packets_drop_the_connection() {
@@ -681,49 +1359,6 @@ async fn malformed_packets_drop_the_connection() {
         Received::Closed
     ));
     running.stop().await;
-}
-
-/// Not a gate yet: prints how each FMP connection of the corpus replays, while M2 is built.
-#[tokio::test]
-#[ignore]
-async fn fmp_progress() {
-    for scenario in scenarios() {
-        for r in replay(&scenario)
-            .await
-            .iter()
-            .filter(|r| r.name.ends_with("-fmp"))
-        {
-            let detail = r.mismatches.first().map_or(String::new(), |m| match &m.got {
-                replay::Got::Frame(f) => {
-                    let expected = hex::decode(&m.expected.payload).unwrap();
-                    let at = expected.iter().zip(f.payload.iter()).position(|(a, b)| a != b).unwrap_or(expected.len().min(f.payload.len()));
-                    let around = |b: &[u8]| hex::encode(&b[at.saturating_sub(8).min(b.len())..(at + 16).min(b.len())]);
-                    format!(
-                        "{} (got {}): first difference at {at} of {}/{}: expected …{}… got …{}…",
-                        m.expected.name, f.id, expected.len(), f.payload.len(), around(&expected), around(&f.payload)
-                    )
-                }
-                other => format!("{} {other:?}", m.expected.name),
-            });
-            if std::env::var_os("FULL").is_some()
-                && let Some(m) = r.mismatches.first()
-                && let replay::Got::Frame(f) = &m.got
-            {
-                println!(
-                    "EXPECTED {}\nGOT      {}",
-                    m.expected.payload,
-                    hex::encode(&f.payload)
-                );
-            }
-            println!(
-                "{} {}: {}/{} {detail}",
-                scenario.file_name().unwrap().to_string_lossy(),
-                r.name,
-                r.matched,
-                r.expected
-            );
-        }
-    }
 }
 
 /// A new console's whole way in: login, server selection (Valor1), then the world server connection.
@@ -1288,6 +1923,62 @@ async fn messages_wait_for_their_recipient() {
     running.stop().await;
 }
 
+/// Tier 3, architecture decision 9: the database failing mid-game refuses the request with a message and keeps the
+/// player; what doesn't need the database goes on.
+#[tokio::test]
+async fn a_database_failure_keeps_the_player() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (code, me) = new_hunter(running.lmp.unwrap()).await;
+    let mut console = play(&running, &code).await;
+    // A table gone under the server, as a corrupted file would have it; back afterwards.
+    let db = sqlx::SqlitePool::connect(&config.database_url)
+        .await
+        .unwrap();
+    let sql = |sql: &'static str| sqlx::query(sql).execute(&db);
+    sql("ALTER TABLE blacklist RENAME TO hidden").await.unwrap();
+    let list = ReqBlackList {
+        first: 1,
+        count: 10,
+        fields: vec![],
+    };
+    send(&mut console, 10, list).await;
+    let text = expect_alert(&mut console, AnsBlackList::ID).await;
+    assert!(text.contains("Not available right now"), "{text}");
+    send(&mut console, 11, ReqServerTime { country: 0 }).await;
+    expect::<AnsServerTime>(&mut console).await;
+    sql("ALTER TABLE hidden RENAME TO blacklist").await.unwrap();
+
+    // Mail that can't be read at a position in a city waits for the next one.
+    let (other_code, _) = new_hunter(running.lmp.unwrap()).await;
+    let mut other = play(&running, &other_code).await;
+    for step in 1..=3 {
+        meet(&mut console, &mut other, 1, step).await;
+    }
+    let tell = ReqTell {
+        capcom_id: me.into(),
+        info: PatData::new(),
+        text: Bytes::from_static(b"hello"),
+    };
+    send(&mut other, 30, tell).await;
+    // Stored before the table goes.
+    assert!(
+        drain(&mut other, Duration::from_millis(200))
+            .await
+            .contains(&AnsTell::ID)
+    );
+    let position = || NtcLayerUserPosition {
+        data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
+    };
+    sql("ALTER TABLE messages RENAME TO hidden").await.unwrap();
+    send(&mut console, 31, position()).await;
+    assert_eq!(mail(&mut console).await, []);
+    sql("ALTER TABLE hidden RENAME TO messages").await.unwrap();
+    send(&mut console, 32, position()).await;
+    assert_eq!(mail(&mut console).await, [NtcTell::ID]);
+    running.stop().await;
+}
+
 /// Tier 3: a profile notice for one player (`target` 1, naming them) reaches only them; one for everyone (2), all.
 #[tokio::test]
 async fn profile_notices_reach_their_target() {
@@ -1716,18 +2407,15 @@ async fn content_downloads() {
     running.stop().await;
 }
 
-/// Tier 3: positions relayed through one city of 4 players reach the others in under 2 ms (99th percentile, on one
+/// Tier 3: positions relayed through one city of 4 players reach the others in under 10 ms (99th percentile, on one
 /// host). MH3SP took ~50–80 ms; the console sends positions every 500 ms, so the relay must add next to nothing.
 #[tokio::test]
 async fn relay_latency() {
     use std::time::Instant;
     const ROUNDS: u32 = 50;
-    // 2 ms on a developer's machine; 10 ms in CI, on a shared runner and a debug build where a busy neighbour alone
-    // crossed 2 ms (pipeline 6). Still far under MH3SP's 50–80 ms: a real regression shows either way.
-    let p99_limit = match std::env::var_os("CI") {
-        Some(_) => Duration::from_millis(10),
-        None => Duration::from_millis(2),
-    };
+    // One rule everywhere (review, 2026-10-11): a shared CI runner and a debug build once crossed 2 ms (pipeline 6);
+    // 10 ms is still far under MH3SP's 50–80 ms, so a real regression shows.
+    let p99_limit = Duration::from_millis(10);
 
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();

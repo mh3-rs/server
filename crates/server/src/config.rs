@@ -1,34 +1,39 @@
-//! Server configuration, from environment variables; a `.env` file is loaded first when present (dev). The server
-//! listens on `0.0.0.0`, and hands consoles the LMP and FMP ports it listens on: a container must publish them
-//! unchanged (set the ports here, not in the port mapping).
+//! Server configuration, from a TOML file: `mh3sp.toml` in the working directory, or the file `MH3SP_CONFIG` names.
+//! Every key is optional; a missing `mh3sp.toml` means every default (a missing `MH3SP_CONFIG` file is an error), and
+//! an unknown key is an error (a typo would otherwise be a silent default). A secret's key also takes a `__file`
+//! form, naming a file that holds it (Docker secrets): `secret__file`, never both. The server listens on `0.0.0.0`, and hands
+//! consoles the LMP and FMP ports it listens on: a container must publish them unchanged (set the ports here, not in
+//! the port mapping). The logger reads `RUST_LOG` (default `info,sqlx=warn`), not this file.
 //!
-//! | Variable | Default |
+//! | Key | Default |
 //! |---|---|
-//! | `OPN_PORT`, `LMP_PORT`, `FMP_PORT`, `HEALTH_PORT` | 8200, 8201, 8202, 8280 |
-//! | `QR_PORT`, `NATNEG_PORT` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
-//! | `NATNEG_STRATEGY` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
-//! | `RELAY_PORTS` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
-//! | `TLS_CERT`, `TLS_KEY` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
-//! | `DATABASE_URL` | `sqlite://data/mh3sp.db` (the name sqlx uses) |
-//! | `RUST_LOG` | `info,sqlx=warn` (read by the logger, not here) |
-//! | `EXTERNAL_ADDRESS` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
-//! | `NATNEG_HOSTNAME` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
-//! | `SECRET`, or `SECRET__FILE` naming a file that holds it | none: the pepper of the support codes' HMAC |
-//! | `BOT_PORT` | none: the quest bots' brain connects here, on localhost (`mh3sp-brain`); no setting, no bots |
-//! | `CONTENT_DIR` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
-//! | `ENCRYPTION` | `off`: `on` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
+//! | `opn_port`, `lmp_port`, `fmp_port`, `health_port` | 8200, 8201, 8202, 8280 |
+//! | `health_address` | `127.0.0.1`: the health port's operator commands have no authentication yet |
+//! | `api_port`, `api_address` | 8281, `127.0.0.1`: the API (`api.rs`), behind a reverse proxy for the outside |
+//! | `qr_port`, `natneg_port` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
+//! | `natneg_strategy` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
+//! | `relay_ports` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
+//! | `tls_cert`, `tls_key` | `certs/dev/server.crt`, `certs/dev/server.key` (signed by the CA the patched game trusts) |
+//! | `database_url` | `sqlite://data/mh3sp.db` |
+//! | `external_address` | none: the address consoles reach this server at, handed out for LMP and FMP (never guessed) |
+//! | `natneg_hostname` | none: the only NAT negotiation hostname accepted in a disc's memory (our patch's) |
+//! | `secret`, or `secret__file` | none: the pepper of the support codes' HMAC |
+//! | `bot_port` | none: the quest bots' brain connects here, on localhost (`mh3sp-brain`); no setting, no bots |
+//! | `content_dir` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
+//! | `admins` | `[]`: Capcom IDs allowed the admins' chat commands (`game::commands`) |
+//! | `encryption` | `false`: `true` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
 //!
-//! Without `EXTERNAL_ADDRESS` or `NATNEG_HOSTNAME` the server runs but refuses every console ("not configured").
+//! Without `external_address` or `natneg_hostname` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
 //! consoles have registered: none of them would be recognised.
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use tracing::warn;
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -37,6 +42,8 @@ pub struct Config {
     pub lmp: SocketAddr,
     pub fmp: SocketAddr,
     pub health: SocketAddr,
+    /// The API (`api.rs`).
+    pub api: SocketAddr,
     /// UDP.
     pub qr: SocketAddr,
     pub natneg: SocketAddr,
@@ -53,9 +60,18 @@ pub struct Config {
     pub bot_port: Option<u16>,
     /// Give consoles an encryption key at login (`../docs/history/packet encryption.md`).
     pub encryption: bool,
+    /// Capcom IDs allowed the admins' chat commands (`game::commands`). ponytail: until the website's users and
+    /// roles (`../docs/schema.md`, S2).
+    pub admins: Vec<String>,
     /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
     /// at their date, since content depends on it.
     pub clock_offset: i64,
+    /// Rate limits per console (`game::fmp`; not an environment variable, on in production): off in tests that send
+    /// faster than any console (replays, the relay latency test).
+    pub rate_limits: bool,
+    /// Loopback (this machine: the lab, the tests) is exempt from the per-address limits (not an environment
+    /// variable, on in production): off in the test of those limits' wiring.
+    pub loopback_exempt: bool,
     /// Maintenance mode (`mh3sp maintenance "<message>"`, not an environment variable): OPN only, every console
     /// refused with this message, no database.
     pub maintenance: Option<String>,
@@ -71,81 +87,109 @@ impl fmt::Debug for Secret {
     }
 }
 
+/// The file as written: every key optional.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct File {
+    opn_port: Option<u16>,
+    lmp_port: Option<u16>,
+    fmp_port: Option<u16>,
+    health_port: Option<u16>,
+    health_address: Option<IpAddr>,
+    api_port: Option<u16>,
+    api_address: Option<IpAddr>,
+    qr_port: Option<u16>,
+    natneg_port: Option<u16>,
+    natneg_strategy: Option<Strategy>,
+    relay_ports: Option<String>,
+    tls_cert: Option<PathBuf>,
+    tls_key: Option<PathBuf>,
+    database_url: Option<String>,
+    external_address: Option<String>,
+    natneg_hostname: Option<String>,
+    secret: Option<String>,
+    #[serde(rename = "secret__file")]
+    secret_file: Option<PathBuf>,
+    content_dir: Option<PathBuf>,
+    bot_port: Option<u16>,
+    encryption: bool,
+    admins: Vec<String>,
+}
+
 impl Config {
-    pub fn from_env() -> Result<Self> {
-        let get =
-            |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_owned());
-        let optional = |key: &str| std::env::var(key).ok().filter(|v| !v.is_empty());
+    /// `MH3SP_CONFIG`, or `mh3sp.toml` if there is one.
+    pub fn load() -> Result<Self> {
+        let (path, required) = match std::env::var_os("MH3SP_CONFIG") {
+            Some(path) => (PathBuf::from(path), true),
+            None => (PathBuf::from("mh3sp.toml"), false),
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Err(e) if !required && e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            read => read.with_context(|| format!("read {}", path.display()))?,
+        };
+        Self::parse(&text).with_context(|| format!("{}", path.display()))
+    }
+
+    fn parse(text: &str) -> Result<Self> {
+        // The message and its line, never the line itself: it may hold the secret.
+        let f: File = toml::from_str(text).map_err(|e| {
+            let line = e
+                .span()
+                .map_or(0, |s| text[..s.start].matches('\n').count() + 1);
+            anyhow::anyhow!("line {line}: {}", e.message())
+        })?;
+        let empty = |v: Option<String>| v.filter(|v| !v.is_empty());
         Ok(Self {
-            opn: listen("OPN_PORT", 8200)?,
-            lmp: listen("LMP_PORT", 8201)?,
-            fmp: listen("FMP_PORT", 8202)?,
-            health: health()?,
-            qr: listen("QR_PORT", 27900)?,
-            natneg: listen("NATNEG_PORT", 27901)?,
-            strategy: strategy(optional("NATNEG_STRATEGY"))?,
-            relay_ports: ports(&get("RELAY_PORTS", "40000-40999"))?,
-            tls_cert: get("TLS_CERT", "certs/dev/server.crt").into(),
-            tls_key: get("TLS_KEY", "certs/dev/server.key").into(),
-            database_url: get("DATABASE_URL", "sqlite://data/mh3sp.db"),
-            external_address: optional("EXTERNAL_ADDRESS"),
-            natneg_hostname: optional("NATNEG_HOSTNAME"),
-            secret: secret(optional("SECRET"), optional("SECRET__FILE"))?,
-            content_dir: get("CONTENT_DIR", "content").into(),
-            bot_port: optional("BOT_PORT")
-                .map(|p| {
-                    p.parse::<u16>()
-                        .with_context(|| format!("BOT_PORT: {p:?} is not a port"))
-                })
-                .transpose()?,
-            encryption: on_off("ENCRYPTION", optional("ENCRYPTION"))?,
+            opn: listen("opn_port", f.opn_port, 8200)?,
+            lmp: listen("lmp_port", f.lmp_port, 8201)?,
+            fmp: listen("fmp_port", f.fmp_port, 8202)?,
+            health: SocketAddr::new(
+                f.health_address.unwrap_or(IpAddr::from([127, 0, 0, 1])),
+                listen("health_port", f.health_port, 8280)?.port(),
+            ),
+            api: SocketAddr::new(
+                f.api_address.unwrap_or(IpAddr::from([127, 0, 0, 1])),
+                listen("api_port", f.api_port, 8281)?.port(),
+            ),
+            qr: listen("qr_port", f.qr_port, 27900)?,
+            natneg: listen("natneg_port", f.natneg_port, 27901)?,
+            strategy: f.natneg_strategy.unwrap_or(Strategy::Hybrid),
+            relay_ports: ports(f.relay_ports.as_deref().unwrap_or("40000-40999"))?,
+            tls_cert: f.tls_cert.unwrap_or_else(|| "certs/dev/server.crt".into()),
+            tls_key: f.tls_key.unwrap_or_else(|| "certs/dev/server.key".into()),
+            database_url: f
+                .database_url
+                .unwrap_or_else(|| "sqlite://data/mh3sp.db".into()),
+            external_address: empty(f.external_address),
+            natneg_hostname: empty(f.natneg_hostname),
+            secret: secret(empty(f.secret), f.secret_file)?,
+            content_dir: f.content_dir.unwrap_or_else(|| "content".into()),
+            bot_port: f.bot_port,
+            encryption: f.encryption,
+            admins: f.admins,
             clock_offset: 0,
+            rate_limits: true,
+            loopback_exempt: true,
             maintenance: None,
         })
     }
 }
 
-/// Where the health endpoint listens (`mh3sp healthcheck` asks it, reading no other setting).
-pub fn health() -> Result<SocketAddr> {
-    listen("HEALTH_PORT", 8280)
-}
-
-fn listen(key: &str, default: u16) -> Result<SocketAddr> {
-    let port = match std::env::var(key).ok().filter(|v| !v.is_empty()) {
-        None => default,
-        Some(v) => v
-            .parse::<u16>()
-            .ok()
-            .filter(|&p| p != 0)
-            .with_context(|| format!("{key}: {v:?} is not a port (1–65535)"))?,
-    };
-    Ok(SocketAddr::from(([0, 0, 0, 0], port)))
+fn listen(key: &str, port: Option<u16>, default: u16) -> Result<SocketAddr> {
+    match port.unwrap_or(default) {
+        0 => bail!("{key}: 0 is not a port (1–65535)"),
+        port => Ok(SocketAddr::from(([0, 0, 0, 0], port))),
+    }
 }
 
 /// How consoles reach each other (M4 D2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Strategy {
     /// Directly, through the relay for the consoles that can't.
     Hybrid,
     P2p,
     Relay,
-}
-
-fn strategy(value: Option<String>) -> Result<Strategy> {
-    Ok(match value.as_deref() {
-        None | Some("hybrid") => Strategy::Hybrid,
-        Some("p2p") => Strategy::P2p,
-        Some("relay") => Strategy::Relay,
-        Some(other) => bail!("NATNEG_STRATEGY: {other:?} is not hybrid, p2p or relay"),
-    })
-}
-
-fn on_off(key: &str, value: Option<String>) -> Result<bool> {
-    Ok(match value.as_deref() {
-        None | Some("off") => false,
-        Some("on") => true,
-        Some(other) => bail!("{key}: {other:?} is not on or off"),
-    })
 }
 
 /// `first-last`.
@@ -155,24 +199,26 @@ fn ports(value: &str) -> Result<RangeInclusive<u16>> {
         .and_then(|(a, b)| Some((a.trim().parse::<u16>().ok()?, b.trim().parse::<u16>().ok()?)))
         .filter(|&(a, b)| a > 0 && a <= b);
     let (first, last) =
-        parsed.with_context(|| format!("RELAY_PORTS: {value:?} is not first-last"))?;
+        parsed.with_context(|| format!("relay_ports: {value:?} is not first-last"))?;
     Ok(first..=last)
 }
 
-/// `SECRET__FILE` wins over `SECRET` (Docker secrets are files); the file's trailing newline isn't part of it.
-fn secret(value: Option<String>, file: Option<String>) -> Result<Option<Secret>> {
+/// `secret`, or `secret__file`, never both (an error, like an unknown key: which one counts would be a guess); the
+/// file's trailing newline isn't part of it.
+fn secret(value: Option<String>, file: Option<PathBuf>) -> Result<Option<Secret>> {
     let Some(path) = file else {
         return Ok(value.map(|v| Secret(v.into_bytes())));
     };
     if value.is_some() {
-        warn!("SECRET and SECRET__FILE both set: SECRET is ignored");
+        bail!("secret and secret__file both set: keep one");
     }
-    let mut bytes = std::fs::read(&path).with_context(|| format!("SECRET__FILE: read {path}"))?;
+    let mut bytes =
+        std::fs::read(&path).with_context(|| format!("secret__file: read {}", path.display()))?;
     while bytes.last().is_some_and(|b| matches!(b, b'\n' | b'\r')) {
         bytes.pop();
     }
     if bytes.is_empty() {
-        bail!("SECRET__FILE: {path} is empty");
+        bail!("secret__file: {} is empty", path.display());
     }
     Ok(Some(Secret(bytes)))
 }
@@ -182,22 +228,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_file_wins_without_its_newline() {
+    fn a_secret_file_without_its_newline() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secret");
         std::fs::write(&path, "from-file\n").unwrap();
-        let file = Some(path.display().to_string());
+        let file = || Some(path.clone());
+        assert_eq!(secret(None, file()).unwrap().unwrap().0, b"from-file");
+        assert!(secret(Some("inline".into()), file()).is_err(), "both");
         assert_eq!(
-            secret(Some("from-env".into()), file).unwrap().unwrap().0,
-            b"from-file"
-        );
-        assert_eq!(
-            secret(Some("from-env".into()), None).unwrap().unwrap().0,
-            b"from-env"
+            secret(Some("inline".into()), None).unwrap().unwrap().0,
+            b"inline"
         );
         assert!(secret(None, None).unwrap().is_none());
         std::fs::write(&path, "\n").unwrap();
-        assert!(secret(None, Some(path.display().to_string())).is_err());
+        assert!(secret(None, file()).is_err());
         assert!(secret(None, Some("/nonexistent".into())).is_err());
+    }
+
+    #[test]
+    fn an_empty_file_is_every_default() {
+        let c = Config::parse("").unwrap();
+        assert_eq!(c.opn.port(), 8200);
+        assert_eq!(c.health, SocketAddr::from(([127, 0, 0, 1], 8280)));
+        assert_eq!(c.strategy, Strategy::Hybrid);
+        assert_eq!(c.relay_ports, 40000..=40999);
+        assert!(c.secret.is_none() && c.external_address.is_none() && !c.encryption);
+    }
+
+    #[test]
+    fn a_file_sets_and_checks_its_keys() {
+        let c = Config::parse(
+            r#"
+            external_address = "203.0.113.10"
+            natneg_hostname = ""
+            secret = "s"
+            natneg_strategy = "relay"
+            relay_ports = "41000-41010"
+            health_address = "0.0.0.0"
+            lmp_port = 9201
+            encryption = true
+            admins = ["ABC123"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(c.external_address.as_deref(), Some("203.0.113.10"));
+        assert!(c.natneg_hostname.is_none(), "empty is unset");
+        assert_eq!(c.secret.unwrap().0, b"s");
+        assert_eq!(c.strategy, Strategy::Relay);
+        assert_eq!(c.relay_ports, 41000..=41010);
+        assert_eq!(c.health, SocketAddr::from(([0, 0, 0, 0], 8280)));
+        assert_eq!(c.lmp.port(), 9201);
+        assert!(c.encryption);
+        assert_eq!(c.admins, ["ABC123"]);
+        for wrong in [
+            "external_adress = \"typo\"",
+            "natneg_strategy = \"mesh\"",
+            "relay_ports = \"2-1\"",
+            "opn_port = 0",
+            "opn_port = 70000",
+            "health_address = \"localhost\"",
+            "encryption = \"on\"",
+        ] {
+            assert!(Config::parse(wrong).is_err(), "{wrong} accepted");
+        }
+        let error = Config::parse("encryption = false\nsecret = hunter2").unwrap_err();
+        assert!(!format!("{error:#}").contains("hunter2"), "{error:#}");
+        assert!(format!("{error:#}").starts_with("line 2:"), "{error:#}");
+        let error = Config::parse("encryption = false\ntypo = 1").unwrap_err();
+        assert!(format!("{error:#}").starts_with("line 2:"), "{error:#}");
     }
 }

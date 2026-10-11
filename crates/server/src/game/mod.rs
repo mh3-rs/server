@@ -1,6 +1,7 @@
 //! Game logic: what the server answers. No sockets: handlers get a frame and return the frames to send back;
 //! `net` does the I/O.
 
+pub mod commands;
 pub mod fmp;
 pub mod lmp;
 pub mod opn;
@@ -15,8 +16,9 @@ use anyhow::anyhow;
 use bytes::BufMut;
 use bytes::Bytes;
 use sqlx::SqlitePool;
+use tracing::{error, warn};
 use wire::packets::{AnsServerTime, NtcCircleChat, NtcLayerChat, Packet, ReqConnection};
-use wire::{DecodeError, EncodeError, Frame, Item, PacketId, PatData, PatWrite};
+use wire::{DecodeError, EncodeError, Frame, Item, Kind, PacketId, PatData, PatWrite};
 
 use crate::Shared;
 use crate::accounts::Console;
@@ -55,10 +57,13 @@ impl Handler {
     pub fn start(role: Role, mailbox: Mailbox) -> (Self, Handled) {
         match role {
             Role::Opn => {
-                let (opn, frames) = Opn::start();
+                let (opn, frames) = Opn::start(mailbox.ip);
                 (Handler::Opn(opn), frames)
             }
-            Role::Lmp => (Handler::Lmp(Lmp::new()), req_connection().map(|f| vec![f])),
+            Role::Lmp => (
+                Handler::Lmp(Lmp::new(mailbox.ip)),
+                req_connection().map(|f| vec![f]),
+            ),
             Role::Fmp => (
                 Handler::Fmp(Fmp::new(mailbox)),
                 req_connection().map(|f| vec![f]),
@@ -74,11 +79,29 @@ impl Handler {
         }
     }
 
-    pub async fn handle(&mut self, shared: &Shared, req: &Frame) -> Handled {
-        match self {
+    /// A database failure never drops the player (architecture decision 9): a request is refused with a message,
+    /// anything else goes unanswered; everything that lives in memory goes on.
+    pub async fn handle(&mut self, shared: &std::sync::Arc<Shared>, req: &Frame) -> Handled {
+        let handled = match self {
             Handler::Opn(opn) => opn.handle(shared, req).await,
             Handler::Lmp(lmp) => lmp.handle(shared, req).await,
             Handler::Fmp(fmp) => fmp.handle(shared, req).await,
+        };
+        match handled {
+            Err(Fault::Client(_)) if unsupported(req.id) => {
+                warn!(request = %req.id, "request not supported, refused");
+                alert(answer(req.id), req.seq, crate::text::Text::NotSupported)
+            }
+            Err(Fault::Database(e)) => {
+                error!(error = %format!("{e:#}"), request = %req.id, "database failed, request refused");
+                match req.id.kind() {
+                    Some(Kind::Req) => {
+                        alert(answer(req.id), req.seq, crate::text::Text::Unavailable)
+                    }
+                    _ => Ok(Vec::new()),
+                }
+            }
+            other => other,
         }
     }
 
@@ -131,6 +154,9 @@ pub enum Fault {
     Client(anyhow::Error),
     /// The server is at fault (logged at `error`).
     Server(anyhow::Error),
+    /// The database failed (architecture decision 9): logged at `error`, the request refused with a message, the
+    /// player kept (`Handler::handle`).
+    Database(anyhow::Error),
 }
 
 impl From<DecodeError> for Fault {
@@ -147,7 +173,7 @@ impl From<EncodeError> for Fault {
 
 impl From<sqlx::Error> for Fault {
     fn from(e: sqlx::Error) -> Self {
-        Fault::Server(e.into())
+        Fault::Database(e.into())
     }
 }
 
@@ -169,7 +195,7 @@ pub fn frame<P: Packet>(seq: u16, packet: &P) -> Result<Frame, Fault> {
 /// party member (`uniqueIdToMember` drops the rest): sent as from themselves, named "[MH3SP]". How many players.
 pub fn announce(shared: &crate::Shared, text: &str) -> usize {
     let town = announcement(text, None);
-    let world = shared.world.lock().unwrap();
+    let world = shared.world();
     shared
         .players
         .broadcast(|capcom_id| match world.on_quest(capcom_id) {
@@ -180,6 +206,17 @@ pub fn announce(shared: &crate::Shared, text: &str) -> usize {
 
 /// An announcement's frames: town chat, or party chat as from `party` (a member's Capcom ID).
 pub fn announcement(text: &str, party: Option<&str>) -> Vec<Frame> {
+    chat(
+        text,
+        party.unwrap_or("000000"),
+        &Bytes::from_static(b"[MH3SP]"),
+        party.is_some(),
+    )
+}
+
+/// Chat lines of 30 characters as from `sender` (a Capcom ID: in a party, a member's) under `name`: town chat, or
+/// party chat.
+pub fn chat(text: &str, sender: &str, name: &Bytes, party: bool) -> Vec<Frame> {
     const WIDTH: usize = 30;
     let mut lines: Vec<String> = Vec::new();
     for word in text.split_whitespace() {
@@ -196,19 +233,21 @@ pub fn announcement(text: &str, party: Option<&str>) -> Vec<Frame> {
             }
         }
     }
-    let sender = party.unwrap_or("000000").as_bytes();
     let info = PatData::new()
         .with(0x01, Item::Long(0x00ff_fff0))
         .with(0x02, Item::Long(0))
-        .with(0x03, Item::String(Bytes::copy_from_slice(sender)))
-        .with(0x04, Item::String(Bytes::from_static(b"[MH3SP]")));
+        .with(
+            0x03,
+            Item::String(Bytes::copy_from_slice(sender.as_bytes())),
+        )
+        .with(0x04, Item::String(name.clone()));
     lines
         .into_iter()
         .filter_map(|line| {
             let (info, text) = (info.clone(), line.into());
             match party {
-                Some(_) => frame(0, &NtcCircleChat { info, text }),
-                None => frame(
+                true => frame(0, &NtcCircleChat { info, text }),
+                false => frame(
                     0,
                     &NtcLayerChat {
                         channel: 1,
@@ -254,6 +293,32 @@ pub fn alert(answer: PacketId, seq: u16, message: crate::text::Text) -> Handled 
     }])
 }
 
+/// A request's answer id (kind byte `0x02`).
+fn answer(request: PacketId) -> PacketId {
+    PacketId(request.0 & !0xff00 | 0x0200)
+}
+
+/// Requests in the game's table a console never sends: the server sends them (`ReqTicket2`, `ReqWarning`), or only a
+/// Japanese disc would (the four `Vulgarity…JAP`, absent from the PAL and US tables; such a disc is refused at OPN).
+const NEVER_SENT: [u32; 6] = [
+    0x6031_0100,
+    0x6040_0100,
+    0x6250_0100,
+    0x6251_0100,
+    0x6252_0100,
+    0x6253_0100,
+];
+
+/// A request the game knows that the server has no type for (review, 2026-10-11, `docs/unk.md`): refused with a
+/// message, which cancels only that request on the console, rather than a dropped connection (M5 D15's rule). The
+/// alert, not status `0xFF`: the console drops itself on that one.
+fn unsupported(id: PacketId) -> bool {
+    id.kind() == Some(Kind::Req)
+        && id.entry().is_some()
+        && !NEVER_SENT.contains(&id.0)
+        && !wire::packets::TYPED.iter().any(|&(typed, _)| typed == id)
+}
+
 pub fn unexpected(id: PacketId) -> Fault {
     Fault::Client(anyhow!("unexpected packet {id}"))
 }
@@ -261,6 +326,62 @@ pub fn unexpected(id: PacketId) -> Fault {
 /// The connection's opening (OPN's after its disc checks).
 fn req_connection() -> Result<Frame, Fault> {
     frame(0, &ReqConnection { unk: 0 })
+}
+
+/// Who may reach LMP's first visit (the review, 2026-10-11): OPN runs the disc, patch and access checks, so a first
+/// visit (a support code checked, or a console created) comes from an address that passed them lately; and an address
+/// creates a few consoles an hour at most. Loopback is this machine (the lab, the tests): neither applies.
+pub struct Admission {
+    passed: moka::sync::Cache<std::net::IpAddr, ()>,
+    created: moka::sync::Cache<std::net::IpAddr, u32>,
+    /// `Config::loopback_exempt`.
+    loopback_exempt: bool,
+}
+
+/// How long after OPN an address may come to LMP: seconds in practice.
+const PASSED_FOR: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// New consoles per address (provisional, the review's limits): a household's few, not a loop. The hour restarts
+/// with each creation.
+const CREATED_PER_HOUR: u32 = 5;
+
+impl Admission {
+    pub fn new(loopback_exempt: bool) -> Self {
+        Admission {
+            passed: moka::sync::Cache::builder()
+                .time_to_live(PASSED_FOR)
+                .build(),
+            created: moka::sync::Cache::builder()
+                .time_to_live(std::time::Duration::from_secs(60 * 60))
+                .build(),
+            loopback_exempt,
+        }
+    }
+
+    fn exempt(&self, ip: std::net::IpAddr) -> bool {
+        self.loopback_exempt && ip.is_loopback()
+    }
+
+    /// The address passed OPN's checks.
+    pub fn passed(&self, ip: std::net::IpAddr) {
+        self.passed.insert(ip, ());
+    }
+
+    pub fn may_log_in(&self, ip: std::net::IpAddr) -> bool {
+        self.exempt(ip) || self.passed.contains_key(&ip)
+    }
+
+    /// Whether the address may create one more console, counted if so.
+    pub fn may_create(&self, ip: std::net::IpAddr) -> bool {
+        if self.exempt(ip) {
+            return true;
+        }
+        let created = self.created.get(&ip).unwrap_or(0);
+        if created >= CREATED_PER_HOUR {
+            return false;
+        }
+        self.created.insert(ip, created + 1);
+        true
+    }
 }
 
 /// Whether a console may play here. Everyone until the website's access modes (M8).
@@ -271,6 +392,36 @@ pub async fn allowed(_db: &SqlitePool, _support_code: Option<&[u8]>) -> sqlx::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 33 untyped requests of the review (`docs/unk.md`): 6 never sent, 4 typed since, 23 refused with the alert.
+    #[test]
+    fn unknown_requests_are_refused() {
+        let refused: Vec<_> = PacketId::all().filter(|&id| unsupported(id)).collect();
+        assert_eq!(refused.len(), 23, "{refused:?}");
+        assert!(refused.contains(&PacketId(0x6535_0100)));
+        assert!(!unsupported(PacketId(0x6031_0100)));
+        assert!(!unsupported(wire::packets::ReqShut::ID));
+        assert!(!unsupported(PacketId(0x6014_0100)));
+    }
+
+    #[test]
+    fn a_first_visit_needs_opn_and_creations_are_capped() {
+        let admission = Admission::new(true);
+        let (ip, local) = (
+            std::net::IpAddr::from([10, 0, 0, 1]),
+            std::net::IpAddr::from([127, 0, 0, 1]),
+        );
+        assert!(!admission.may_log_in(ip));
+        admission.passed(ip);
+        assert!(admission.may_log_in(ip));
+        assert!((0..CREATED_PER_HOUR).all(|_| admission.may_create(ip)));
+        assert!(!admission.may_create(ip));
+        assert!(!admission.may_create(ip));
+        // Another address has its own count; loopback is the lab's.
+        assert!(admission.may_create(std::net::IpAddr::from([10, 0, 0, 2])));
+        assert!(admission.may_log_in(local));
+        assert!((0..=CREATED_PER_HOUR).all(|_| admission.may_create(local)));
+    }
 
     #[test]
     fn announcements_fit_the_chat() {

@@ -1,0 +1,13 @@
+# mh3sp's configuration (README.md, "Configuration"): copy to mh3sp.toml. Every key not set here has its default.
+
+# The address consoles reach this server at (handed out for LMP, FMP and the relay).
+external_address = "203.0.113.10"
+# The NAT negotiation hostname the players' patch writes into the game (MH3SP's patch: this one).
+natneg_hostname = "natneg1.gs.nintendowifi.net"
+# The support codes' pepper, from the compose secret (never in this file).
+secret__file = "/run/secrets/mh3sp"
+content_dir = "/opt/mh3sp/content"
+
+# Optional: natneg_strategy, relay_ports, health_address, the ports. With your own certificate mounted:
+# tls_cert = "/opt/mh3sp/certs/own/server.crt"
+# tls_key = "/opt/mh3sp/certs/own/server.key"

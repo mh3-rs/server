@@ -21,10 +21,9 @@ bot = ["dep:tunnel"]
 anyhow = "1.0.104"
 argon2 = "0.6.0"
 # The quest bots' tunnel, shared with mh3sp-brain: branch main, pinned to this commit (both sides must agree).
-tunnel = { git = "ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git", rev = "1fed8b523166e104ef7bb7d4c338ec0e0c0bc6f8", optional = true }
+tunnel = { git = "ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git", rev = "d54e731d7b0559db82af45600ea8ada9da300289", optional = true }
 bytes = "1.12.1"
 dashmap = "6.2.1"
-dotenvy = "0.15.7"
 futures-util = "0.3.34"
 hex = "0.4.3"
 moka = { version = "0.12.16", features = ["sync"] }
@@ -39,6 +38,11 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.27.0", features = ["v7"] }
 wire = { path = "../wire" }
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
+shared = { version = "0.0.0", path = "../../../shared" }
 
 [dev-dependencies]
+# Paused time in tests.
+tokio = { version = "1.53.2", features = ["test-util"] }
 tempfile = "3.27.0"

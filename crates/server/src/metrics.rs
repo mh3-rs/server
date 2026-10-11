@@ -25,6 +25,9 @@ pub struct Metrics {
     pub reports_failure: AtomicU64,
     pub relay_pairs_open: AtomicU64,
     pub relay_bytes: AtomicU64,
+    /// Connections, logins, messages and negotiations refused by a limit (`net.rs`, `game::Admission`, `game::fmp`,
+    /// `natneg.rs`): limits too tight for real players show here first.
+    pub limited: AtomicU64,
 }
 
 impl Metrics {
@@ -57,6 +60,8 @@ pub struct Snapshot {
     pub natneg: Natneg,
     pub relay: Relay,
     pub requests: Requests,
+    /// Refused by a limit, since the start.
+    pub limited: u64,
 }
 
 #[derive(Serialize)]
@@ -84,7 +89,7 @@ pub struct Requests {
 pub fn snapshot(shared: &Shared) -> Snapshot {
     let m = &shared.metrics;
     let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
-    let (by_server, cities, quests) = shared.world.lock().unwrap().census();
+    let (by_server, cities, quests) = shared.world().census();
     let world_servers = SERVERS
         .iter()
         .enumerate()
@@ -114,6 +119,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
                 .map(|(bound, n)| (bound_label(*bound), get(n)))
                 .collect(),
         },
+        limited: get(&m.limited),
     }
 }
 
@@ -186,6 +192,12 @@ pub fn prometheus(s: &Snapshot) -> String {
         &one(s.relay.pairs_open as f64),
     );
     metric(
+        "limited_total",
+        "counter",
+        "Connections, logins, messages and negotiations refused by a limit.",
+        &one(s.limited as f64),
+    );
+    metric(
         "relay_bytes_total",
         "counter",
         "Bytes relayed.",
@@ -251,6 +263,7 @@ mod tests {
                 seconds: 0.002,
                 buckets: vec![("0.001".into(), 0), ("+Inf".into(), 1)],
             },
+            limited: 4,
         };
         let text = prometheus(&s);
         for line in [
@@ -260,6 +273,7 @@ mod tests {
             "mh3sp_natneg_pairs_total{link=\"relay\"} 1",
             "mh3sp_request_seconds_bucket{le=\"+Inf\"} 1",
             "mh3sp_request_seconds_count 1",
+            "mh3sp_limited_total 4",
         ] {
             assert!(text.lines().any(|l| l == line), "{line} missing:\n{text}");
         }

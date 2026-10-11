@@ -255,6 +255,30 @@ pub fn load(path: &Path) -> Result<Quest> {
     Ok(quest)
 }
 
+impl Quest {
+    /// What is wrong with the quest but still served as MH3SP serves it (`content::check`).
+    pub fn warnings(&self) -> Vec<String> {
+        let name = &self.quest_info.name;
+        let mut warnings = Vec::new();
+        if let (Some(file), None) = (
+            &self.quest_info.smallmonster_data_file,
+            &self.small_monster_file,
+        ) {
+            warnings.push(format!("{name}: {file} doesn't exist: no small monsters"));
+        }
+        for (set, (.., pouch)) in self.arena_equipment.iter().flatten().enumerate() {
+            if pouch.len() > 8 {
+                warnings.push(format!(
+                    "{name}: arena set {}'s pouch has {} items (8 slots): the rest overflows the binary",
+                    set + 1,
+                    pouch.len()
+                ));
+            }
+        }
+        warnings
+    }
+}
+
 /// The binary of a quest.
 pub fn binary(quest: &Quest) -> Result<Vec<u8>> {
     let q = &quest.quest_info;
@@ -544,44 +568,42 @@ fn arena(d: &mut Vec<u8>, sets: &[ArenaSet]) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Every quest byte-identical to an MH3SP checkout's own generator (`tools/reference-content.py`): runs with
-    /// `REFERENCE_DIR` (its output) and `CONTENT_DIR` (the checkout) set, else skipped.
+    /// Every quest of `CONTENT_DIR` byte-identical to MH3SP's own generator: `reference.sha256` maps each quest
+    /// JSON's SHA-256 to the binary's (`tools/reference-hashes.sh`; MH3SP `dev` at f53b06c and the live branch at
+    /// 7e21e0a). A quest it doesn't know fails: add its line. Skipped without `CONTENT_DIR`.
     #[test]
     fn quests_match_the_reference_generator() {
-        let (Some(reference), Some(content)) = (
-            std::env::var_os("REFERENCE_DIR"),
-            std::env::var_os("CONTENT_DIR"),
-        ) else {
+        let Some(content) = std::env::var_os("CONTENT_DIR") else {
             return;
         };
+        let known: std::collections::HashMap<&str, &str> = include_str!("reference.sha256")
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .collect();
+        let sha256 = |bytes: &[u8]| hex::encode(openssl::sha::sha256(bytes));
         let mut checked = 0;
         let mut wrong = Vec::new();
-        for entry in std::fs::read_dir(&reference).unwrap() {
+        for entry in std::fs::read_dir(Path::new(&content).join("event")).unwrap() {
             let path = entry.unwrap().path();
-            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let expected = std::fs::read(&path).unwrap();
-            let quest = Path::new(&content)
-                .join("event")
-                .join(format!("{name}.json"));
-            let got = match load(&quest).and_then(|q| binary(&q)) {
-                Ok(got) => got,
-                Err(e) => {
-                    wrong.push(format!("{name}: {e:#}"));
-                    continue;
-                }
-            };
-            if got != expected {
-                let at = got.iter().zip(&expected).position(|(a, b)| a != b);
-                let at = at.unwrap_or(got.len().min(expected.len()));
-                wrong.push(format!(
-                    "{name}: {} bytes (expected {}), first difference at {at:#x}",
-                    got.len(),
-                    expected.len()
-                ));
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.ends_with(".json")
+                || ["quest_rotation.json", "trading_post.json"].contains(&name.as_str())
+            {
+                continue;
             }
             checked += 1;
+            let Some(expected) = known.get(sha256(&std::fs::read(&path).unwrap()).as_str()) else {
+                wrong.push(format!("{name}: not in reference.sha256"));
+                continue;
+            };
+            match load(&path).and_then(|q| binary(&q)) {
+                Ok(got) if sha256(&got) == *expected => {}
+                Ok(_) => wrong.push(format!("{name}: differs from MH3SP's")),
+                Err(e) => wrong.push(format!("{name}: {e:#}")),
+            }
         }
         wrong.sort();
+        assert!(checked > 0, "no quest in {}", Path::new(&content).display());
         assert!(
             wrong.is_empty(),
             "{} of {checked}:\n{}",

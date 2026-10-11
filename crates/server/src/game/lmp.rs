@@ -13,7 +13,7 @@ use tracing::{Span, info};
 use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
-use super::{Fault, Handled, Session, reply, server_time, unexpected, world};
+use super::{Fault, Handled, Session, alert, reply, server_time, unexpected, world};
 use crate::Shared;
 use crate::accounts::{self, SUPPORT_CODE_LEN, random_id};
 
@@ -40,16 +40,19 @@ pub struct Lmp {
     session: Option<Session>,
     /// The last ticket issued: the session is handed off under it when the console leaves.
     ticket: Option<String>,
+    /// Where the console connects from (`Admission`).
+    ip: std::net::IpAddr,
 }
 
 impl Lmp {
-    pub fn new() -> Self {
+    pub fn new(ip: std::net::IpAddr) -> Self {
         Lmp {
             stage: Stage::Connection,
             support_code: None,
             region: None,
             session: None,
             ticket: None,
+            ip,
         }
     }
 
@@ -69,11 +72,18 @@ impl Lmp {
                             "console",
                             tracing::field::display(session.console.public_id),
                         );
+                        if crate::access::banned_since(shared, session.console.id).await {
+                            return Err(Fault::Client(anyhow!("banned console")));
+                        }
                         self.session = Some(session);
                         self.stage = Stage::SecondVisit;
                         SECOND_VISIT
                     }
                     _ => {
+                        if !shared.admission.may_log_in(self.ip) {
+                            crate::metrics::add(&shared.metrics.limited, 1);
+                            return Err(Fault::Client(anyhow!("first visit without OPN")));
+                        }
                         self.support_code = match data.get(0x01) {
                             Some(Item::String(code)) if code.len() == SUPPORT_CODE_LEN => {
                                 Some(String::from_utf8_lossy(code).into_owned())
@@ -100,22 +110,47 @@ impl Lmp {
                     .as_ref()
                     .ok_or_else(|| server("no secret"))?;
                 let region = self.region.expect("set with the first visit");
-                let (console, code) = match self.support_code.take() {
-                    Some(code) => (
+                // Kept until the login succeeds: after a database failure the console may ask again (decision 9), and
+                // must not be handed a new code in place of its own.
+                let known = match &self.support_code {
+                    Some(code) => accounts::known_console(db, secret, code)
+                        .await
+                        .map_err(Fault::Database)?,
+                    None => None,
+                };
+                // A code the server doesn't know registers a console: a new one, as far as the cap goes.
+                if known.is_none() && !shared.admission.may_create(self.ip) {
+                    crate::metrics::add(&shared.metrics.limited, 1);
+                    return Err(Fault::Client(anyhow!(
+                        "too many new consoles from this address"
+                    )));
+                }
+                let (console, code) = match (known, self.support_code.clone()) {
+                    (Some(console), Some(code)) => (console, code),
+                    (None, Some(code)) => (
                         accounts::console(db, secret, &code, region)
                             .await
-                            .map_err(Fault::Server)?,
+                            .map_err(Fault::Database)?,
                         code,
                     ),
-                    None => {
+                    (_, None) => {
                         let (console, code) = accounts::new_console(db, secret, region)
                             .await
-                            .map_err(Fault::Server)?;
+                            .map_err(Fault::Database)?;
                         info!(console = %console.public_id, region, "support code issued");
+                        // Asked again (a later failure), it is this console's.
+                        self.support_code = Some(code.clone());
                         (console, code)
                     }
                 };
                 Span::current().record("console", tracing::field::display(console.public_id));
+                if crate::access::banned(db, console.id)
+                    .await
+                    .map_err(Fault::Database)?
+                {
+                    info!("banned console refused");
+                    return alert(AnsLoginInfo::ID, seq, crate::text::Text::Banned);
+                }
                 info!(region, "logged in");
                 self.session = Some(Session::new(console));
                 reply(
@@ -154,7 +189,7 @@ impl Lmp {
                 let console = self.session(req)?.console;
                 let used = accounts::slots(db(shared)?, &console)
                     .await
-                    .map_err(Fault::Server)?;
+                    .map_err(Fault::Database)?;
                 let last = r.first.saturating_add(r.count).min(SLOTS + 1);
                 let users = (r.first.max(1)..last)
                     .map(|slot| {
@@ -196,7 +231,7 @@ impl Lmp {
                 let (capcom_id, created, name) =
                     accounts::use_slot(db(shared)?, &console, r.slot, name)
                         .await
-                        .map_err(Fault::Server)?;
+                        .map_err(Fault::Database)?;
                 Span::current().record("capcom_id", capcom_id.as_str());
                 info!(
                     slot = r.slot,
@@ -294,7 +329,7 @@ fn db(shared: &Shared) -> Result<&sqlx::SqlitePool, Fault> {
     shared
         .db
         .pool()
-        .ok_or_else(|| server("database not opened"))
+        .ok_or_else(|| Fault::Database(anyhow!("database not opened")))
 }
 
 fn server(message: &'static str) -> Fault {

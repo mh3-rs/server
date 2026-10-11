@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE access_rules SET revoked_at = CURRENT_TIMESTAMP, revocation_reason = ?2\n         WHERE revoked_at IS NULL\n           AND kind_id = (SELECT id FROM rule_kinds WHERE name = 'ban')\n           AND console_id = (SELECT console_id FROM hunters WHERE capcom_id = ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "154c15b7b57beb9ee1bf3e11e66c37648eb8c021d7f359de760d72a4162fb803"
+}

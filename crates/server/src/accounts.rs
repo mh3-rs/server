@@ -75,6 +75,24 @@ impl Console {
     }
 }
 
+/// The console with this support code, if the server knows it (its last visit noted).
+pub async fn known_console(
+    db: &SqlitePool,
+    secret: &Secret,
+    code: &str,
+) -> Result<Option<Console>> {
+    let hmac = hmac(secret, code);
+    let row = sqlx::query!(
+        r#"UPDATE consoles SET last_seen_at = CURRENT_TIMESTAMP WHERE support_code_hmac = ?1
+           RETURNING id AS "id!", public_id"#,
+        hmac
+    )
+    .fetch_optional(db)
+    .await?;
+    row.map(|row| Console::from_row(row.id, &row.public_id))
+        .transpose()
+}
+
 /// The console with this support code; a code the server doesn't know (a console from before a database reset)
 /// registers a new one.
 pub async fn console(
@@ -277,11 +295,14 @@ pub async fn store_message(
 
 /// The messages waiting for a hunter (sender's Capcom ID and name, text, with a friend request), oldest first,
 /// now delivered: plain ones deleted, requests kept as the proof an answer needs.
+/// Messages without a sender (from the server or the website) wait for their feature (system messages, a could do)
+/// to be delivered: never in the way of the others.
 pub async fn inbox(db: &SqlitePool, hunter: i64) -> Result<Vec<(String, Vec<u8>, Vec<u8>, bool)>> {
     let mut tx = db.begin().await?;
     let mut waiting = sqlx::query!(
         r#"UPDATE messages SET sent = 1
            WHERE to_hunter = ?1 AND sent = 0 AND created_at > datetime('now', '-30 days')
+                 AND from_hunter IS NOT NULL
            RETURNING id, (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS "capcom_id!: String",
                      (SELECT name FROM hunters WHERE id = from_hunter) AS "name!: Vec<u8>", text,
                      friend_request"#,
@@ -464,6 +485,20 @@ pub async fn unblock(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<()> 
 pub async fn blocks(db: &SqlitePool, blocker: i64, blocked: i64) -> Result<bool> {
     Ok(sqlx::query_scalar!(
         r#"SELECT 1 AS "x!: i64" FROM blacklist WHERE blocker = ?1 AND blocked = ?2"#,
+        blocker,
+        blocked
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some())
+}
+
+/// Whether the hunter `blocker` (a Capcom ID) has `blocked` on their black list.
+pub async fn blocks_capcom_id(db: &SqlitePool, blocker: &str, blocked: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar!(
+        r#"SELECT 1 AS "x!: i64" FROM blacklist b
+           JOIN hunters a ON a.id = b.blocker JOIN hunters c ON c.id = b.blocked
+           WHERE a.capcom_id = ?1 AND c.capcom_id = ?2"#,
         blocker,
         blocked
     )

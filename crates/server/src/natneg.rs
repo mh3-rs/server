@@ -7,7 +7,7 @@
 //! answered. The negotiations are this task's alone: no lock.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,10 @@ use crate::relay::Relays;
 /// A negotiation nobody has spoken in for this long is forgotten (the game gives up waiting for `CONNECT` after
 /// 60 s).
 const FORGET_AFTER: Duration = Duration::from_secs(60);
+/// Negotiations one IP address may have open (provisional, the review's limits): a console negotiates with each
+/// party member (3 pairs at most) and several consoles may share an address; a console making up cookies stops here
+/// instead of filling the table.
+const MAX_PER_ADDRESS: usize = 32;
 /// `CONNECT`'s "got your data" byte, as GameSpy's servers send it.
 const GOT_YOUR_DATA: u8 = 0x42;
 
@@ -51,9 +55,11 @@ pub async fn serve_qr(socket: UdpSocket, shutdown: CancellationToken) {
 /// How pairs are connected.
 pub struct Connector {
     pub strategy: Strategy,
-    /// `None` without an IPv4 `EXTERNAL_ADDRESS`: direct only.
+    /// `None` without an IPv4 `external_address`: direct only.
     pub relays: Option<Arc<Relays>>,
     pub metrics: Arc<Metrics>,
+    /// `Config::loopback_exempt`.
+    pub loopback_exempt: bool,
 }
 
 pub async fn serve(
@@ -63,6 +69,8 @@ pub async fn serve(
     shutdown: CancellationToken,
 ) {
     let mut negotiations: HashMap<u32, Negotiation> = HashMap::new();
+    // The table is pruned at most once a second, not scanned on every datagram.
+    let mut pruned = Instant::now();
     let mut buf = [0; 1500];
     loop {
         let (n, from) = tokio::select! {
@@ -90,7 +98,10 @@ pub async fn serve(
             continue;
         }
         let now = Instant::now();
-        negotiations.retain(|_, n| now - n.last < FORGET_AFTER);
+        if now - pruned >= Duration::from_secs(1) {
+            negotiations.retain(|_, n| now - n.last < FORGET_AFTER);
+            pruned = now;
+        }
         for (datagram, to) in handle(
             &connector,
             &shared.players,
@@ -122,6 +133,22 @@ struct Negotiation {
     told: Option<[SocketAddrV4; 2]>,
     relayed: bool,
     last: Instant,
+}
+
+/// How many negotiations an address takes part in that are still under way (both consoles not told yet): a finished
+/// one lingers 60 s but no longer counts.
+fn opened_by(negotiations: &HashMap<u32, Negotiation>, ip: Ipv4Addr) -> usize {
+    negotiations
+        .values()
+        .filter(|n| n.told.is_none())
+        .filter(|n| {
+            n.clients
+                .iter()
+                .flat_map(|c| c.0)
+                .flatten()
+                .any(|a| *a.ip() == ip)
+        })
+        .count()
 }
 
 /// Where a console's `INIT`s came from, by port type: 0 its game socket (where its peer pings it); 1 its NatNeg
@@ -175,6 +202,14 @@ fn handle(
             ) else {
                 return vec![];
             };
+            if !negotiations.contains_key(&cookie)
+                && !(connector.loopback_exempt && from.ip().is_loopback())
+                && opened_by(negotiations, *from.ip()) >= MAX_PER_ADDRESS
+            {
+                add(&connector.metrics.limited, 1);
+                debug!("too many NatNeg negotiations from one address, INIT ignored");
+                return vec![];
+            }
             let n = negotiations.entry(cookie).or_insert_with(|| Negotiation {
                 clients: Default::default(),
                 told: None,
@@ -321,6 +356,55 @@ mod tests {
     use super::*;
     use crate::game::players::Mailbox;
 
+    /// One address making up cookies fills its own share of the table, not everyone's.
+    #[test]
+    fn an_address_opens_a_bounded_number_of_negotiations() {
+        let connector = Connector {
+            strategy: Strategy::P2p,
+            relays: None,
+            metrics: Default::default(),
+            loopback_exempt: true,
+        };
+        let players = Players::default();
+        let mut negotiations = HashMap::new();
+        let mut init = |cookie: u32, ip: Ipv4Addr, client_index: u8, kind: u8| {
+            let record = Record {
+                cookie,
+                body: Body::Init {
+                    port: Port { kind, client_index },
+                    use_game_port: 1,
+                    local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                    game: bytes::Bytes::from_static(b"mh3uswii"),
+                },
+            };
+            let from = SocketAddrV4::new(ip, 1000 + u16::from(client_index));
+            let out = handle(
+                &connector,
+                &players,
+                |_| None,
+                &mut negotiations,
+                record,
+                from,
+                Instant::now(),
+            );
+            !out.is_empty()
+        };
+        let (hostile, other) = (Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2));
+        for cookie in 0..MAX_PER_ADDRESS as u32 {
+            assert!(init(cookie, hostile, 0, 0));
+        }
+        assert!(!init(1000, hostile, 0, 0));
+        // A cookie it already has still answers (an INIT resent); another address isn't concerned.
+        assert!(init(0, hostile, 0, 0));
+        assert!(init(1001, other, 0, 0));
+        // A negotiation done (both consoles told, here two behind the one address) no longer counts.
+        for (index, kind) in [(0, 1), (0, 2), (1, 0), (1, 1), (1, 2)] {
+            assert!(init(0, hostile, index, kind));
+        }
+        assert!(init(1000, hostile, 0, 0));
+        assert!(!init(1002, hostile, 0, 0));
+    }
+
     /// `hybrid` decides per pair: with three consoles on three addresses and only the second flagged `Relay`, the
     /// pairs with it go through the relay, the other one stays direct.
     #[tokio::test]
@@ -344,6 +428,7 @@ mod tests {
                 shutdown.clone(),
             )),
             metrics: Default::default(),
+            loopback_exempt: true,
         };
         // Console i: game socket i:1000, NatNeg socket i:2000.
         let game = |i: usize| SocketAddrV4::new(ips[i], 1000);

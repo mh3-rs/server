@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO tokens (key, hash, user_id, usage_id)\n         SELECT ?1, ?2, users.id, usages.id FROM users, usages WHERE users.email = ?3 AND usages.name = ?4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "fe8388401608e035383c9df23607d5485d4b20b2b3642c7e41e88175d234e2d4"
+}

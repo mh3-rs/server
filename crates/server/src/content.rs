@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use anyhow::{Context as _, Result, bail};
 use bytes::{Buf, BufMut};
 use serde_json::Value;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::text::{Language, Text, text};
 
@@ -96,16 +96,59 @@ pub fn binary(kind: u8, ctx: &Context) -> Result<Option<Binary>> {
 
 /// Reads every content file once and logs what is wrong (not fatal: a download needing a broken file fails).
 pub fn check(dir: &Path) {
-    let result = (|| -> Result<()> {
-        for file in rotation(dir)?.iter().flatten() {
-            quest::binary(&quest::load(&dir.join(file))?)?;
-        }
-        trading_post_days(dir)?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        error!(error = %format!("{e:#}"), dir = %dir.display(), "content");
+    let (errors, warnings) = problems(dir);
+    for e in errors {
+        error!(problem = %e, dir = %dir.display(), "content");
     }
+    for w in warnings {
+        warn!(problem = %w, dir = %dir.display(), "content");
+    }
+}
+
+/// What is wrong with the content: errors (a download fails, or consoles disagree) and warnings (served as MH3SP
+/// serves it, but worse).
+fn problems(dir: &Path) -> (Vec<String>, Vec<String>) {
+    let (mut errors, mut warnings) = (Vec::new(), Vec::new());
+    if let Err(e) = trading_post_days(dir) {
+        errors.push(format!("{e:#}"));
+    }
+    let days = match rotation(dir) {
+        Ok(days) => days,
+        Err(e) => {
+            errors.push(format!("{e:#}"));
+            return (errors, warnings);
+        }
+    };
+    for (day, files) in days.iter().enumerate() {
+        // The game tells quests apart by id: two on the same day would be one to the consoles.
+        let mut ids: Vec<(u16, &str)> = Vec::new();
+        for file in files {
+            let quest = match quest::load(&dir.join(file)) {
+                Ok(quest) => quest,
+                Err(e) => {
+                    errors.push(format!("{e:#}"));
+                    continue;
+                }
+            };
+            if let Err(e) = quest::binary(&quest) {
+                errors.push(format!("{file}: {e:#}"));
+            }
+            warnings.extend(quest.warnings());
+            let id = quest.quest_info.quest_id;
+            if let Some((_, other)) = ids.iter().find(|(seen, _)| *seen == id) {
+                errors.push(format!(
+                    "rotation day {}: {other} and {file} share quest id {id:#x}",
+                    day + 1
+                ));
+            }
+            ids.push((id, file));
+        }
+    }
+    warnings.sort();
+    warnings.dedup();
+    errors.sort();
+    errors.dedup();
+    (errors, warnings)
 }
 
 fn secs(t: SystemTime) -> u64 {
@@ -271,6 +314,39 @@ fn server_types(started: SystemTime, language: Language) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The check at load, on a copy of `CONTENT_DIR`'s first rotation quest (skipped without it): a quest twice in
+    /// a day, a missing file, a missing small monster file.
+    #[test]
+    fn the_check_finds_what_is_wrong() {
+        let Some(content) = std::env::var_os("CONTENT_DIR") else {
+            return;
+        };
+        let content = Path::new(&content);
+        let first = rotation(content).unwrap()[0][0].clone();
+        let dir = tempfile::tempdir().unwrap();
+        let event = dir.path().join("event");
+        std::fs::create_dir(&event).unwrap();
+        std::fs::copy(
+            content.join("event/trading_post.json"),
+            event.join("trading_post.json"),
+        )
+        .unwrap();
+        let mut quest = read_json(&content.join(&first)).unwrap();
+        quest["quest_info"]["smallmonster_data_file"] = "missing.dat".into();
+        std::fs::write(event.join("a.json"), quest.to_string()).unwrap();
+        let rotation = r#"[["event/a.json", "event/a.json"], ["event/gone.json"]]"#;
+        std::fs::write(event.join("quest_rotation.json"), rotation).unwrap();
+
+        let (errors, warnings) = problems(dir.path());
+        assert_eq!(errors.len(), 2, "{errors:#?}");
+        assert!(errors.iter().any(|e| e.contains("share quest id")));
+        assert!(errors.iter().any(|e| e.contains("gone.json")));
+        assert_eq!(warnings.len(), 1, "{warnings:#?}");
+        assert!(warnings[0].contains("missing.dat doesn't exist"));
+        // The content itself loads.
+        assert!(problems(content).0.is_empty());
+    }
 
     #[test]
     fn server_types_have_the_recorded_size() {

@@ -2,6 +2,7 @@
 //! the rest handed to the role's [`Handler`]. Each connection is one task that reads and writes, so frames are
 //! always written whole and in order.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -19,7 +20,7 @@ use tokio::time::{Instant, interval_at};
 use tokio_openssl::SslStream;
 use tokio_util::codec::Framed;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{Instrument, debug, error, info, warn};
 use wire::packets::{AnsLineCheck, AnsShut, Packet, ReqLineCheck, ReqShut};
 use wire::{Frame, FrameCodec, crypt};
 
@@ -37,12 +38,81 @@ const PAUSE: Duration = Duration::from_millis(250);
 /// A line check is sent this often; one left unanswered until the next drops the connection. (The console gives
 /// up after 90 s without one.)
 const LINE_CHECK_EVERY: Duration = Duration::from_secs(30);
+/// How long a write may wait for a console that stopped reading before the connection is dropped: as long as an
+/// unanswered line check (provisional, the review's limits). Without it the console's task froze on a full socket and
+/// stayed as a ghost.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 
 /// Internal connection number: the only way logs identify a connection (no IP addresses).
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
+
+/// Connections open at once, in total and from one IP address (provisional, the review's limits): a client opening
+/// sockets in a loop (each TLS handshake costs an RSA operation) is refused at accept. A console holds one or two at
+/// a time; several consoles may share an address.
+const MAX_CONNECTIONS: usize = 2000;
+const MAX_PER_ADDRESS: usize = 16;
+
+/// The connections open: in total, and per IP address.
+pub struct Connections {
+    open: std::sync::Mutex<(usize, HashMap<IpAddr, usize>)>,
+    /// `Config::loopback_exempt`.
+    loopback_exempt: bool,
+}
+
+impl Connections {
+    pub fn new(loopback_exempt: bool) -> Self {
+        Connections {
+            open: Default::default(),
+            loopback_exempt,
+        }
+    }
+
+    /// Counts a new connection from `ip`, unless a limit is reached (then `false`); `close` uncounts it.
+    fn open(&self, ip: IpAddr) -> bool {
+        let mut open = self.open.lock().unwrap();
+        let (total, by_address) = &mut *open;
+        let from_ip = by_address.entry(ip).or_default();
+        // Loopback is this machine: the lab and the tests, every console on one address.
+        let per_address =
+            !(self.loopback_exempt && ip.is_loopback()) && *from_ip >= MAX_PER_ADDRESS;
+        if *total >= MAX_CONNECTIONS || per_address {
+            if *from_ip == 0 {
+                by_address.remove(&ip);
+            }
+            return false;
+        }
+        *total += 1;
+        *from_ip += 1;
+        true
+    }
+
+    fn close(&self, ip: IpAddr) {
+        let mut open = self.open.lock().unwrap();
+        let (total, by_address) = &mut *open;
+        *total -= 1;
+        if let Some(n) = by_address.get_mut(&ip) {
+            *n -= 1;
+            if *n == 0 {
+                by_address.remove(&ip);
+            }
+        }
+    }
+}
+
+/// A connection counted in `Shared::connections`, until dropped.
+struct Counted {
+    shared: Arc<Shared>,
+    ip: IpAddr,
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.shared.connections.close(self.ip);
+    }
+}
 
 /// Accepts connections until `shutdown`.
 pub async fn serve(
@@ -65,6 +135,15 @@ pub async fn serve(
                 }
             },
         };
+        if !shared.connections.open(peer.ip()) {
+            crate::metrics::add(&shared.metrics.limited, 1);
+            debug!(%role, "too many connections, refused");
+            continue;
+        }
+        let counted = Counted {
+            shared: shared.clone(),
+            ip: peer.ip(),
+        };
         let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
         let span = tracing::info_span!(
             "conn",
@@ -78,10 +157,12 @@ pub async fn serve(
         let shutdown = shutdown.clone();
         tokio::spawn(
             async move {
+                let _counted = counted;
                 match connection(tcp, peer.ip(), conn, role, tls, &shared, shutdown).await {
                     Ok(()) => debug!("disconnected"),
                     Err(Fault::Client(e)) => warn!(error = %format!("{e:#}"), "connection dropped"),
-                    Err(Fault::Server(e)) => {
+                    // `Handler::handle` answers database failures: one landing here is a bug, logged as the server's.
+                    Err(Fault::Server(e) | Fault::Database(e)) => {
                         error!(error = %format!("{e:#}"), "connection dropped")
                     }
                 }
@@ -97,7 +178,7 @@ async fn connection(
     conn: u64,
     role: Role,
     tls: Option<SslContext>,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     shutdown: CancellationToken,
 ) -> Result<(), Fault> {
     let server = |e: anyhow::Error| Fault::Server(e);
@@ -144,7 +225,6 @@ async fn connection(
     result
 }
 
-/// Requests in, answers and mail out, until the connection ends.
 /// A connection's encryption: on for LMP and FMP with encryption on, with the console's key once its first frame
 /// told which (`keys.rs`).
 struct Crypt {
@@ -153,6 +233,9 @@ struct Crypt {
     key: Option<Key>,
 }
 
+/// Requests in, answers and mail out, until the connection ends.
+// Every argument is the connection's own state, borrowed from `serve`: a struct bundling them would serve this one
+// call.
 #[allow(clippy::too_many_arguments)]
 async fn serve_frames(
     framed: &mut Framed<Box<dyn Io>, FrameCodec>,
@@ -161,7 +244,7 @@ async fn serve_frames(
     first: Handled,
     mail: &mut mpsc::Receiver<Frame>,
     kicked: &CancellationToken,
-    shared: &Shared,
+    shared: &Arc<Shared>,
     shutdown: &CancellationToken,
 ) -> Result<(), Fault> {
     // Encrypted, the opening uses the console's likely key (`keys.rs`): with none waiting at its IP, it can't be one
@@ -220,8 +303,8 @@ async fn serve_frames(
                     }
                     _ => {}
                 }
+                // Ids and sizes only, at every level: payloads carry support codes and tickets (never logged).
                 debug!(packet = %req.id, seq = req.seq, len = req.payload.len(), "recv");
-                trace!(payload = %hex::encode(&req.payload), "recv payload");
                 match req.id {
                     AnsLineCheck::ID => {
                         AnsLineCheck::decode(&req.payload)?;
@@ -259,15 +342,29 @@ fn shut(req: &Frame) -> Handled {
     reply(req.seq, &AnsShut { kind })
 }
 
-/// Sends frames in order, encrypted with `key` if any: `false` when the connection is gone.
+/// Sends frames in order, encrypted with `key` if any: `false` when the connection is gone, or the console stopped
+/// reading for `WRITE_TIMEOUT`.
 async fn send(
+    framed: &mut Framed<Box<dyn Io>, FrameCodec>,
+    key: Option<&[u8; crypt::KEY_LEN]>,
+    frames: Vec<Frame>,
+) -> Result<bool, Fault> {
+    match tokio::time::timeout(WRITE_TIMEOUT, write(framed, key, frames)).await {
+        Ok(sent) => sent,
+        Err(_) => {
+            info!("console not reading, disconnecting");
+            Ok(false)
+        }
+    }
+}
+
+async fn write(
     framed: &mut Framed<Box<dyn Io>, FrameCodec>,
     key: Option<&[u8; crypt::KEY_LEN]>,
     frames: Vec<Frame>,
 ) -> Result<bool, Fault> {
     for mut frame in frames {
         debug!(packet = %frame.id, seq = frame.seq, len = frame.payload.len(), "send");
-        trace!(payload = %hex::encode(&frame.payload), "send payload");
         if let Some(key) = key {
             frame.payload =
                 crypt::encrypt(key, &frame.payload).map_err(|e| Fault::Server(e.into()))?;
@@ -290,4 +387,51 @@ async fn send(
 pub fn announce(role: impl fmt::Display, listener: &TcpListener) -> anyhow::Result<()> {
     info!(%role, addr = %listener.local_addr()?, "listening");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connections_are_limited_per_address() {
+        let connections = Connections::new(true);
+        let (a, b) = (IpAddr::from([10, 0, 0, 1]), IpAddr::from([10, 0, 0, 2]));
+        for _ in 0..MAX_PER_ADDRESS {
+            assert!(connections.open(a));
+        }
+        assert!(!connections.open(a));
+        assert!(connections.open(b));
+        connections.close(a);
+        assert!(connections.open(a));
+        for _ in 0..MAX_PER_ADDRESS {
+            connections.close(a);
+        }
+        connections.close(b);
+        assert_eq!(connections.open.lock().unwrap().0, 0);
+        assert!(connections.open.lock().unwrap().1.is_empty());
+        let local = IpAddr::from([127, 0, 0, 1]);
+        assert!((0..=MAX_PER_ADDRESS).all(|_| connections.open(local)));
+    }
+
+    /// A console that stops reading: the write gives up after `WRITE_TIMEOUT` instead of waiting forever.
+    #[tokio::test(start_paused = true)]
+    async fn a_console_not_reading_is_dropped() {
+        // A 64-byte pipe whose other end never reads.
+        let (ours, _theirs) = tokio::io::duplex(64);
+        let mut framed = Framed::new(Box::new(ours) as Box<dyn Io>, FrameCodec);
+        let big = Frame {
+            seq: 0,
+            id: AnsLineCheck::ID,
+            payload: bytes::Bytes::from(vec![0; 1024]),
+        };
+        let start = Instant::now();
+        assert!(!send(&mut framed, None, vec![big]).await.unwrap());
+        assert_eq!(start.elapsed(), WRITE_TIMEOUT);
+        // A small one fits and goes.
+        let (ours, _theirs) = tokio::io::duplex(64);
+        let mut framed = Framed::new(Box::new(ours) as Box<dyn Io>, FrameCodec);
+        let small = frame(0, &ReqLineCheck {}).unwrap();
+        assert!(send(&mut framed, None, vec![small]).await.unwrap());
+    }
 }

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 AS \"x!: i64\" FROM blacklist b\n           JOIN hunters a ON a.id = b.blocker JOIN hunters c ON c.id = b.blocked\n           WHERE a.capcom_id = ?1 AND c.capcom_id = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "x!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "57826b8fe68dfa2a79bcc804779e8f5847edd1506a8814a49b563c7cfcc36b90"
+}

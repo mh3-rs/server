@@ -187,6 +187,7 @@ macro_rules! packets {
             const ID: PacketId = PacketId($id);
 
             fn decode(payload: &[u8]) -> Result<Self, DecodeError> {
+                // A packet with no field never reads from `r`.
                 #[allow(unused_mut)]
                 let mut r = Reader::new(payload);
                 let p = Self { $($field: Field::read(&mut r)?),* };
@@ -194,6 +195,7 @@ macro_rules! packets {
                 Ok(p)
             }
 
+            // A packet with no field never writes to `out`.
             #[allow(unused_variables)]
             fn encode(&self, out: &mut impl PatWrite) -> Result<(), EncodeError> {
                 $(self.$field.write(out)?;)*
@@ -354,6 +356,19 @@ packets! {
     AnsLayerDetailSearchData = 0x64910200 { unk: u32, count: u32 }
     ReqLayerDetailSearchFoot = 0x64920100 { rest: Rest }
     AnsLayerDetailSearchFoot = 0x64920200 {}
+    // Requests whose sender has no known caller in the decomp (review, 2026-10-11, `docs/unk.md`): answered as the
+    // client expects, so a console that sends one isn't refused. The requests aren't read.
+    /// A city's settings, from its host (`NetworkLayerPat::handleLayerInfoSet`): acknowledged, not stored.
+    ReqLayerInfoSet = 0x64200100 { rest: Rest }
+    AnsLayerInfoSet = 0x64200200 {}
+    /// The player's own layer data (`handleUserInfo`): acknowledged, not stored.
+    ReqLayerUserInfoSet = 0x64600100 { rest: Rest }
+    AnsLayerUserInfoSet = 0x64600200 {}
+    /// Quest search (the decomp calls it `sendReqCircleListHead`): none found, the client skips the data request.
+    ReqCircleSearchHead = 0x65280100 { rest: Rest }
+    AnsCircleSearchHead = 0x65280200 { unk: u32, total: u32 }
+    ReqCircleSearchFoot = 0x652A0100 {}
+    AnsCircleSearchFoot = 0x652A0200 {}
     AnsLayerSiblingListFoot = 0x64290200 {}
     /// `rest`: a list of (field, byte) pairs, meaning unknown.
     ReqLayerChildInfo = 0x64230100 { layer: u16, fields: Vec<u8>, rest: Rest }

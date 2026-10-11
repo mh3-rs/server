@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "UPDATE messages SET sent = 1\n           WHERE to_hunter = ?1 AND sent = 0 AND created_at > datetime('now', '-30 days')\n           RETURNING id, (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS \"capcom_id!: String\",\n                     (SELECT name FROM hunters WHERE id = from_hunter) AS \"name!: Vec<u8>\", text,\n                     friend_request",
+  "query": "UPDATE messages SET sent = 1\n           WHERE to_hunter = ?1 AND sent = 0 AND created_at > datetime('now', '-30 days')\n                 AND from_hunter IS NOT NULL\n           RETURNING id, (SELECT capcom_id FROM hunters WHERE id = from_hunter) AS \"capcom_id!: String\",\n                     (SELECT name FROM hunters WHERE id = from_hunter) AS \"name!: Vec<u8>\", text,\n                     friend_request",
   "describe": {
     "columns": [
       {
@@ -70,5 +70,5 @@
       false
     ]
   },
-  "hash": "ba0fc4b202bb3bde9bb74ab10c03196d8f6adffdf6b9e0e159ad2ef7898cc72b"
+  "hash": "2829fed61762283a1d2d98798abb36bb2530b27393213b5a52d9f387cdc9003d"
 }

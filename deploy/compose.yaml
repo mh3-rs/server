@@ -1,0 +1,28 @@
+# mh3sp for an operator (README.md, "Running it"): the server, its data, the content, the secret, the certificate.
+# Next to this file: mh3sp.toml (from mh3sp.toml.example), secret (openssl rand -hex 32), content/ (MH3SP's
+# event-quest-rotation-full checkout), data/ (owned by uid 999, the image's user: `mkdir data && sudo chown 999 data`).
+services:
+  mh3sp:
+    # No published image yet: built from the repository. The quest bots' tunnel is a private repository fetched
+    # even without them: the build needs a Gitea token (GITEA_AUTH=user:token in the environment).
+    build:
+      context: ..
+      secrets: [gitea]
+    image: mh3sp
+    # NAT negotiation needs the consoles' real addresses: no published ports, no Docker Desktop, no rootless.
+    network_mode: host
+    restart: unless-stopped
+    secrets: [mh3sp]
+    volumes:
+      # The working directory's mh3sp.toml is the server's configuration (and `mh3sp healthcheck`'s).
+      - ./mh3sp.toml:/opt/mh3sp/mh3sp.toml:ro
+      - ./data:/opt/mh3sp/data
+      - ./content:/opt/mh3sp/content:ro
+      # Your own certificate, once a patch trusts its CA (README, "TLS"); the image's certs/dev until then.
+      # - ./certs:/opt/mh3sp/certs/own:ro
+
+secrets:
+  mh3sp:
+    file: ./secret
+  gitea:
+    environment: GITEA_AUTH

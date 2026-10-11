@@ -102,6 +102,13 @@ impl Players {
         }
     }
 
+    /// Drops a logged-in player's connection (`/kick`).
+    pub fn kick(&self, capcom_id: &str) {
+        if let Some(mailbox) = self.0.get(capcom_id) {
+            mailbox.kick();
+        }
+    }
+
     /// Tells a logged-in player messages wait for them.
     pub fn mail(&self, capcom_id: &str) {
         if let Some(mailbox) = self.0.get(capcom_id) {
