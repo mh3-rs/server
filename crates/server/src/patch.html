@@ -50,8 +50,9 @@ wit copy mh3-patched mh3-patched.wbfs</pre>
 <ul>
   <li><b>Run at normal speed, always.</b> Never fast-forward (Tab) online: the game drops itself after 90 seconds of
     its own time without hearing from the server (error 11674), and fast-forward makes its time run ahead.</li>
-  <li>Leave <i>Verify certificates</i> on (Dolphin's network settings): the patch carries this server's own
-    certificate authority, which the game checks against, like a Wii.</li>
+  <li>Nothing to set for the certificate: Dolphin checks it like a Wii, and the patch carries this server's own
+    authority. (The switch, <i>Verify certificates</i>, is in <i>View → Network</i>, shown with <i>Config →
+    Interface → Show Debugging UI</i>: leave it on.)</li>
   <li>Two Dolphins on one network should have different MAC addresses (<i>Config → Wii → Wireless MAC</i>).</li>
 </ul>
 
