@@ -71,6 +71,11 @@ impl Handler {
         }
     }
 
+    /// Whether the console has had all it will get (a refusal's text): its connection only waits for it to leave.
+    pub fn finished(&self) -> bool {
+        matches!(self, Handler::Opn(opn) if opn.finished())
+    }
+
     /// The encryption key OPN gave the console, if any.
     pub fn given_key(&self) -> Option<crate::keys::Key> {
         match self {

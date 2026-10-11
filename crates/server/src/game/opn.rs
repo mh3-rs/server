@@ -1,8 +1,12 @@
 //! OPN (TLS, port 8200): the first server a console meets. It checks the disc (game id, then the NAT negotiation
-//! hostname our patch writes), shows the terms and the announce, then hands out LMP's address.
+//! hostname our patch writes), then the token of our Nintendo login (`nas.rs`): issued by it, and its Wii not
+//! banned. It shows the terms and the announce, then hands out LMP's address.
 //!
-//! A refused console gets `NtcLogin` status 2, asks `ReqMaintenance` and shows the text it gets back: the game's
-//! own refusal path (decision D4), for every reason.
+//! A refused console gets `NtcLogin` status 1, sends its token anyway, asks `ReqMaintenance` and shows the text it
+//! gets back: the game's own refusal path (decision D4), for every reason (`PatInterface.cpp:1250-1275`). The token's
+//! reasons come after the first `NtcLogin`: the token is answered with a second one, status 1, which the game takes
+//! as it does the first (`recvNtcLogin` has no guard), then asks `ReqMaintenance`. The game shows no text for a
+//! refused token answer (the console run of 2026-10-11).
 
 use bytes::Bytes;
 use tracing::{info, warn};
@@ -18,9 +22,11 @@ const GAME_ID: (u32, u32) = (0x8000_0000, 6);
 /// The NAT negotiation hostnames: two NUL-terminated strings (`natneg1…`, `natneg2…`) in 56 bytes.
 const NATNEG_HOSTNAMES_SIZE: u32 = 56;
 
-/// `NtcLogin` statuses on OPN.
+/// `NtcLogin` statuses on OPN: the game's login state (`patState_8254`). 1 is a refusal that ends the login after
+/// its text (`isOpeningMaintenanceTerms`); 2 goes on to the terms after it, which a refused console never gets
+/// (found in the console run of 2026-10-11: every refusal sent 2 until then, and none ever showed on a console).
 const LOGIN_OK: u8 = 5;
-const LOGIN_REFUSED: u8 = 2;
+const LOGIN_REFUSED: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Region {
@@ -51,6 +57,8 @@ enum Stage {
     NatnegHostname(Region),
     Connection,
     Refused,
+    /// The refusal's text sent: the console leaves (`net.rs`, closing).
+    Told,
     LoggedIn,
 }
 
@@ -62,6 +70,9 @@ enum Refusal {
     UnsupportedDisc,
     Unpatched,
     NotAllowed,
+    /// A token our Nintendo login didn't issue, or expired.
+    LoginElsewhere,
+    Banned,
 }
 
 pub struct Opn {
@@ -144,8 +155,14 @@ impl Opn {
                 };
                 reply(seq, &NtcLogin { status })
             }
+            // Sent after a refused `NtcLogin` too: acknowledged, the refusal is decided.
+            (Stage::Refused, ReqAuthenticationToken::ID) => {
+                ReqAuthenticationToken::decode(&req.payload)?;
+                reply(seq, &AnsAuthenticationToken {})
+            }
             (Stage::Refused, ReqMaintenance::ID) => {
                 ReqMaintenance::decode(&req.payload)?;
+                self.stage = Stage::Told;
                 let text = match self.refusal {
                     Some(Refusal::Maintenance) => {
                         shared.maintenance().unwrap_or_default().to_owned().into()
@@ -170,8 +187,21 @@ impl Opn {
         let p = &req.payload;
         match req.id {
             ReqAuthenticationToken::ID => {
-                // The Nintendo login's token; checking it is the Nintendo login server's job. Never logged.
-                ReqAuthenticationToken::decode(p)?;
+                // Our Nintendo login's token (decision 13), only looked at: LMP uses it up. Never logged.
+                let token = ReqAuthenticationToken::decode(p)?.token;
+                let Some(device) = shared.nas.get(String::from_utf8_lossy(&token).as_ref()) else {
+                    return self.refuse(seq, Refusal::LoginElsewhere);
+                };
+                let db = shared
+                    .db
+                    .pool()
+                    .ok_or_else(|| Fault::Database(anyhow::anyhow!("database not opened")))?;
+                if crate::access::device_banned(db, &device)
+                    .await
+                    .map_err(Fault::Database)?
+                {
+                    return self.refuse(seq, Refusal::Banned);
+                }
                 reply(seq, &AnsAuthenticationToken {})
             }
             ReqTermsVersion::ID => {
@@ -298,6 +328,24 @@ impl Opn {
         Ok(ans)
     }
 
+    /// Whether the refusal's text was sent.
+    pub fn finished(&self) -> bool {
+        self.stage == Stage::Told
+    }
+
+    /// Refuses a console after its first `NtcLogin`: a second one, status 1, in place of the answer (module doc).
+    fn refuse(&mut self, seq: u16, reason: Refusal) -> Handled {
+        warn!(?reason, region = ?self.region, "login refused");
+        self.refusal = Some(reason);
+        self.stage = Stage::Refused;
+        reply(
+            seq,
+            &NtcLogin {
+                status: LOGIN_REFUSED,
+            },
+        )
+    }
+
     /// The disc checks are done: ask for the connection data.
     fn connection(&mut self) -> Handled {
         self.stage = Stage::Connection;
@@ -350,6 +398,8 @@ impl Refusal {
             Refusal::UnsupportedDisc => Text::UnsupportedDisc,
             Refusal::Unpatched => Text::Unpatched,
             Refusal::NotAllowed => Text::NotAllowed,
+            Refusal::LoginElsewhere => Text::LoginElsewhere,
+            Refusal::Banned => Text::WiiBanned,
         }
     }
 }

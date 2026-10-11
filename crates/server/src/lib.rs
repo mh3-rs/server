@@ -24,6 +24,7 @@ mod game;
 pub mod health;
 mod keys;
 mod metrics;
+mod nas;
 mod natneg;
 mod net;
 #[cfg(feature = "bot")]
@@ -63,6 +64,8 @@ struct Shared {
     /// The LMP and FMP ports consoles are handed: the ones listened on.
     lmp_port: u16,
     fmp_port: u16,
+    /// Our Nintendo login's tokens, waiting for their console (`nas.rs`).
+    nas: nas::Tokens,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
     /// The quest bots' brain, when connected (`bots.rs`).
@@ -136,6 +139,8 @@ pub struct Running {
     pub lmp: Option<SocketAddr>,
     pub fmp: Option<SocketAddr>,
     pub health: SocketAddr,
+    /// The Nintendo login (HTTP).
+    pub nas: SocketAddr,
     /// Off in maintenance mode.
     pub api: Option<SocketAddr>,
     /// UDP; off in maintenance mode.
@@ -241,6 +246,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         db,
         lmp_port: lmp.map_or(0, |a| a.port()),
         fmp_port: fmp.map_or(0, |a| a.port()),
+        nas: nas::tokens(),
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
@@ -280,6 +286,14 @@ pub async fn start(config: &Config) -> Result<Running> {
             shutdown.clone(),
         ));
     }
+
+    // The Nintendo login, in maintenance mode too: the console must reach OPN to read why it's refused.
+    let listener = TcpListener::bind(config.nas)
+        .await
+        .with_context(|| format!("bind the NAS on {}", config.nas))?;
+    net::announce("nas", &listener)?;
+    let nas = listener.local_addr()?;
+    tasks.spawn(nas::serve(listener, shared.clone(), shutdown.clone()));
 
     // The game's UDP services (M4): its availability check, NAT negotiation.
     let (mut qr, mut natneg) = (None, None);
@@ -360,6 +374,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         lmp,
         fmp,
         health,
+        nas,
         api,
         qr,
         natneg,

@@ -72,6 +72,13 @@ pub enum Text {
     TooFast,
     /// A console banned (`/ban`, `access.rs`).
     Banned,
+    /// A console that didn't log in through this server's Nintendo login (`nas.rs`): another server's patch, or a
+    /// token expired. An alert (LMP).
+    UnknownLogin,
+    /// The same, refused at OPN.
+    LoginElsewhere,
+    /// A Wii banned (`access.rs`), refused at OPN.
+    WiiBanned,
     // The town's NPCs (content binary 0x03): MH3SP's texts.
     /// Prices, normal or halved (during Jhen Mohran).
     ToolShop {
@@ -200,6 +207,9 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
         Text::NotSupported => "<LF=8><BODY><CENTER>Not available on this server.<END>",
         Text::TooFast => "<LF=8><BODY><CENTER>Too fast: please wait a moment.<END>",
         Text::Banned => "<LF=8><BODY><CENTER>This console is banned from this server.<END>",
+        Text::UnknownLogin => {
+            "<LF=8><BODY><CENTER>Log in again: your login wasn't through this server (check the patch).<END>"
+        }
         Text::ToolShop { sale: true } | Text::MaterialShop { sale: true } => "Half-off sale!",
         Text::ToolShop { sale: false } | Text::MaterialShop { sale: false } => "Prices are normal.",
         Text::TradingPostOpen => "The Trading Post is open!",
@@ -248,6 +258,11 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
             "Please get the patch from the server's website."
         ),
         Text::NotAllowed => refusal!("This console is not allowed on this server.", ""),
+        Text::LoginElsewhere => refusal!(
+            "This console didn't log in through this server.",
+            "Please check the patch, then try again."
+        ),
+        Text::WiiBanned => refusal!("This console is banned from this server.", ""),
     })
 }
 

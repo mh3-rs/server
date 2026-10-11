@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO access_rules (public_id, kind_id, device_id, reason, created_by)\n         SELECT ?1, rule_kinds.id, consoles.device_id, ?3, (SELECT id FROM users WHERE public_id = ?4)\n         FROM hunters JOIN consoles ON consoles.id = hunters.console_id, rule_kinds\n         WHERE hunters.capcom_id = ?2 AND consoles.device_id IS NOT NULL AND rule_kinds.name = 'ban'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "24c18949530cad5704e168ffa4a80fa74204d526fd7d54b76b8735bf570477a8"
+}

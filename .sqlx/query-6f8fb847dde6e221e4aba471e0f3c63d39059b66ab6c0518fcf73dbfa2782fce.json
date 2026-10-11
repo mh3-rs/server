@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO devices (public_id, mac_serial_hmac) VALUES (?1, ?2)\n           ON CONFLICT (mac_serial_hmac) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP\n           RETURNING id AS \"id!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "devices",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6f8fb847dde6e221e4aba471e0f3c63d39059b66ab6c0518fcf73dbfa2782fce"
+}

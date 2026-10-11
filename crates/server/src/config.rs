@@ -10,6 +10,7 @@
 //! | `opn_port`, `lmp_port`, `fmp_port`, `health_port` | 8200, 8201, 8202, 8280 |
 //! | `health_address` | `127.0.0.1`: the health port's operator commands have no authentication yet |
 //! | `api_port`, `api_address` | 8281, `127.0.0.1`: the API (`api.rs`), behind a reverse proxy for the outside |
+//! | `nas_port` | 80: our Nintendo login (`nas.rs`), plain HTTP, the port the patched game calls |
 //! | `qr_port`, `natneg_port` (UDP) | 27900, 27901: the game's fixed ports (its availability check, NAT negotiation) |
 //! | `natneg_strategy` | `hybrid`: P2P, the relay for consoles that can't (`p2p`, `relay`: one way for everyone) |
 //! | `relay_ports` (UDP) | `40000-40999`: one per relayed pair of consoles; open them like the others |
@@ -44,6 +45,8 @@ pub struct Config {
     pub health: SocketAddr,
     /// The API (`api.rs`).
     pub api: SocketAddr,
+    /// The Nintendo login (`nas.rs`).
+    pub nas: SocketAddr,
     /// UDP.
     pub qr: SocketAddr,
     pub natneg: SocketAddr,
@@ -98,6 +101,7 @@ struct File {
     health_address: Option<IpAddr>,
     api_port: Option<u16>,
     api_address: Option<IpAddr>,
+    nas_port: Option<u16>,
     qr_port: Option<u16>,
     natneg_port: Option<u16>,
     natneg_strategy: Option<Strategy>,
@@ -151,6 +155,7 @@ impl Config {
                 f.api_address.unwrap_or(IpAddr::from([127, 0, 0, 1])),
                 listen("api_port", f.api_port, 8281)?.port(),
             ),
+            nas: listen("nas_port", f.nas_port, 80)?,
             qr: listen("qr_port", f.qr_port, 27900)?,
             natneg: listen("natneg_port", f.natneg_port, 27901)?,
             strategy: f.natneg_strategy.unwrap_or(Strategy::Hybrid),
@@ -249,6 +254,7 @@ mod tests {
     fn an_empty_file_is_every_default() {
         let c = Config::parse("").unwrap();
         assert_eq!(c.opn.port(), 8200);
+        assert_eq!(c.nas, SocketAddr::from(([0, 0, 0, 0], 80)));
         assert_eq!(c.health, SocketAddr::from(([127, 0, 0, 1], 8280)));
         assert_eq!(c.strategy, Strategy::Hybrid);
         assert_eq!(c.relay_ports, 40000..=40999);

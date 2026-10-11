@@ -42,6 +42,10 @@ const LINE_CHECK_EVERY: Duration = Duration::from_secs(30);
 /// unanswered line check (provisional, the review's limits). Without it the console's task froze on a full socket and
 /// stayed as a ghost.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// A connection the console is about to close (it sent `ReqShut`, or got a refusal's text): no more line checks or
+/// mail, its `ReqShut` still answered, any other packet closes it, and so does this delay (the user, 2026-10-11: a
+/// socket that should close is kept from normal commands). A console closes within 0.1 s (lab, 2026-10-11).
+const CLOSE_GRACE: Duration = Duration::from_secs(10);
 
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
@@ -263,6 +267,7 @@ async fn serve_frames(
 
     let mut line_check = interval_at(Instant::now() + LINE_CHECK_EVERY, LINE_CHECK_EVERY);
     let mut answered = true;
+    let mut closing: Option<Instant> = None;
     loop {
         let out = tokio::select! {
             _ = shutdown.cancelled() => return Ok(()),
@@ -270,8 +275,12 @@ async fn serve_frames(
                 info!("kicked");
                 return Ok(());
             }
-            Some(frame) = mail.recv() => vec![frame],
-            _ = line_check.tick() => {
+            _ = tokio::time::sleep_until(closing.unwrap_or_else(Instant::now)), if closing.is_some() => {
+                debug!("left open after its goodbye: closed");
+                return Ok(());
+            }
+            Some(frame) = mail.recv(), if closing.is_none() => vec![frame],
+            _ = line_check.tick(), if closing.is_none() => {
                 if !answered {
                     info!("line check unanswered, disconnecting");
                     return Ok(());
@@ -305,6 +314,13 @@ async fn serve_frames(
                 }
                 // Ids and sizes only, at every level: payloads carry support codes and tickets (never logged).
                 debug!(packet = %req.id, seq = req.seq, len = req.payload.len(), "recv");
+                if closing.is_some() {
+                    if req.id != ReqShut::ID {
+                        debug!(packet = %req.id, "a request after its goodbye: closed");
+                        return Ok(());
+                    }
+                    shut(&req)?
+                } else {
                 match req.id {
                     AnsLineCheck::ID => {
                         AnsLineCheck::decode(&req.payload)?;
@@ -319,14 +335,19 @@ async fn serve_frames(
                         {
                             keys.put(crypt.ip, key);
                         }
+                        closing = Some(Instant::now() + CLOSE_GRACE);
                         shut(&req)?
                     }
                     _ => {
                         let start = std::time::Instant::now();
                         let out = handler.handle(shared, &req).await?;
                         shared.metrics.request(start.elapsed());
+                        if handler.finished() {
+                            closing = Some(Instant::now() + CLOSE_GRACE);
+                        }
                         out
                     }
+                }
                 }
             }
         };

@@ -49,8 +49,8 @@ An operator's guide. The server is one process for every role, configured by one
   startup the server checks it and logs what is wrong (`content` lines): an `error` breaks a download, a `warn` is
   served as MH3SP serves it (six of the live branch's quests name small-monster files that don't exist: they spawn
   no small monsters, on MH3SP's live server too).
-- **The Nintendo login (NAS)**: still [AltWFC](https://github.com/polaris-/dwc_network_server_emulator)'s, run beside
-  this server with its NAT negotiation and QR servers off (this server holds their ports). Our own is planned.
+- **The Nintendo login (NAS)**: built in (port 80, plain HTTP), nothing to run beside the server. It also tells the
+  server which Wii a console is on, so a ban holds on a new save.
 - **The players' patch**: today MH3SP's ([MH3SP-patcher](https://github.com/sepalani/MH3SP-patcher)), which rewrites
   no hostname: players point the game's hostnames at your server themselves (DNS or a hosts file, below). A patch
   generated for your domain is planned.
@@ -87,6 +87,7 @@ stops the server, so a typo can't pass for a default.
 | `content_dir` | The event content (above). Default `content`. |
 | `database_url` | `sqlite://data/mh3sp.db` (default). |
 | `tls_cert`, `tls_key` | The OPN certificate (below). Default: the development one in `certs/dev`. |
+| `nas_port` | The Nintendo login, plain HTTP. Default 80, the port the patched game calls. |
 | `natneg_strategy` | `hybrid` (default): direct, the relay for consoles that can't; `p2p` or `relay`: one way for everyone. |
 | `relay_ports` | `40000-40999` (default): one UDP port per relayed pair of consoles. |
 | `opn_port`, `lmp_port`, `fmp_port`, `health_port` | 8200, 8201, 8202, 8280. Consoles are handed the LMP and FMP ports the server listens on: change them here, never in a port mapping. |
@@ -120,9 +121,10 @@ for them (a Wii's network settings take its address), or the hosts file of the m
 
 - OPN: `mmh-t1-opn04.mmh-service.capcom.co.jp` (PAL; `opn03` on the US disc);
 - NAT negotiation: `natneg1`, `natneg2`, `natneg3` under the `natneg_hostname` domain;
-- the Nintendo login and GameSpy services, to AltWFC: `naswii.nintendowifi.net`, `nas.nintendowifi.net`,
-  `gpcm.gs…`, `gpsp.gs…`, `gamestats.gs…`, `monhunter3wii.*.gs…` and `mh3uswii.*.gs…` (AltWFC's README has the list;
-  `lab/hosts.block` in the lab is a working one).
+- the Nintendo login: `naswii.nintendowifi.net`;
+- the availability check: `mh3uswii.available.gs.nintendowifi.net` (on PAL discs too).
+
+The game reaches no other Nintendo or GameSpy service (`../docs/history/nintendo login.md`).
 
 Optionally, point `natneg2` and `natneg3` at a **second** IP of the same server: NAT negotiation then spots
 symmetric NATs and sends their pairs straight to the relay, instead of after one failed attempt (no setting needed).
@@ -133,6 +135,7 @@ Open them in the firewall and forward them from the router, unchanged:
 
 | Port | Protocol | What |
 |---|---|---|
+| 80 | TCP | the Nintendo login (HTTP): the first call, before OPN |
 | 8200 | TCP | OPN (TLS): the first connection |
 | 8201 | TCP | LMP: login, Capcom IDs |
 | 8202 | TCP | FMP: world servers, gates, cities, quests |

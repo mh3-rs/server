@@ -21,6 +21,8 @@
 //! - Line checks are time-driven: recorded ones are skipped, live ones answered on the fly.
 //! - Volatile values are handled with [`crate::masks`]; bindings are shared by every connection and
 //!   console of the scenario.
+//! - With [`Targets::nas`], each recorded OPN session logs in to that Nintendo login first: the token it gets
+//!   replaces the recorded one (`../docs/history/nintendo login.md`), which the server would refuse.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -33,6 +35,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use futures_util::future::join_all;
 use tokio::sync::Notify;
+use wire::packets::{Packet, ReqAuthenticationToken};
 use wire::{Frame, PacketId};
 
 use crate::client::{Console, Received};
@@ -52,6 +55,8 @@ pub struct Targets {
     pub opn: SocketAddr,
     pub lmp: SocketAddr,
     pub fmp: SocketAddr,
+    /// Our Nintendo login (`nas.rs`): none against Python MH3SP, whose AltWFC doesn't check its tokens.
+    pub nas: Option<SocketAddr>,
     /// Python MH3SP only: it reads one frame per socket readiness event from a buffered reader,
     /// so frames that arrive together stay stuck in its buffer until more data comes in. When a
     /// wait stalls, send a harmless `AnsLineCheck` to wake it up. Never used against our server.
@@ -65,6 +70,7 @@ impl Targets {
             opn: SocketAddr::new(ip, 8200),
             lmp: SocketAddr::new(ip, 8201),
             fmp: SocketAddr::new(ip, 8202),
+            nas: None,
             nudge: false,
         }
     }
@@ -223,6 +229,19 @@ async fn replay_console(
     shared: &Shared<'_>,
 ) -> Vec<ConnectionReport> {
     let mut reports = Vec::new();
+    if let Some(nas) = shared.targets.nas
+        && let Err(e) = nas_login(ci, rec, nas, shared).await
+    {
+        reports.push(ConnectionReport {
+            name: format!("{}-nas", rec.console),
+            expected: 0,
+            matched: 0,
+            mismatches: Vec::new(),
+            extras: Vec::new(),
+            aborted: Some(format!("{e:#}")),
+        });
+        return reports;
+    }
     for (n, c) in rec.connections.iter().enumerate() {
         let steps: Vec<Step> = c
             .frames
@@ -273,6 +292,41 @@ async fn replay_console(
         reports.push(report);
     }
     reports
+}
+
+/// Logs each of the console's recorded OPN sessions in to the Nintendo login, and binds the recorded token to the
+/// live one: same length (Nintendo's form, which ours keeps), so it's replaced in place wherever the console sends it.
+/// A Wii per console of the scenario.
+async fn nas_login(
+    ci: usize,
+    rec: &ConsoleRecording,
+    nas: SocketAddr,
+    shared: &Shared<'_>,
+) -> Result<()> {
+    let tokens = rec
+        .connections
+        .iter()
+        .filter(|c| c.role == "opn")
+        .flat_map(|c| &c.frames)
+        .filter(|f| f.name == "ReqAuthenticationToken");
+    for frame in tokens {
+        let payload = hex::decode(&frame.payload)?;
+        let recorded = ReqAuthenticationToken::decode(&payload)?.token;
+        let live =
+            crate::nas::svcloc(nas, &format!("0009bf{ci:06x}"), &format!("LEH{ci:09}")).await?;
+        anyhow::ensure!(
+            live.len() == recorded.len(),
+            "a live token of {} bytes for a recorded one of {}",
+            live.len(),
+            recorded.len()
+        );
+        shared
+            .bindings
+            .lock()
+            .unwrap()
+            .bind("nas-token", &recorded, &live);
+    }
+    Ok(())
 }
 
 /// Replays one connection without the shared state of a scenario (tests, single connections).

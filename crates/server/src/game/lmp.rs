@@ -1,7 +1,8 @@
 //! LMP (port 8201): the login. The console comes twice.
 //!
-//! - First visit (`NtcLogin` 1): the console is recognised by its support code, or gets one; it gets a PAT ticket,
-//!   the 6 Capcom ID slots and the server time.
+//! - First visit (`NtcLogin` 1): the console is recognised by its support code, or gets one, and linked to its Wii
+//!   by our Nintendo login's token (`nas.rs`, used up here); it gets a PAT ticket, the 6 Capcom ID slots and the
+//!   server time.
 //! - Second visit (`NtcLogin` 2), with the ticket: it plays a slot (its Capcom ID, created for an empty slot), gets
 //!   a new ticket, the world server list and the FMP address.
 //!
@@ -36,6 +37,8 @@ pub struct Lmp {
     stage: Stage,
     /// From `AnsConnection` on a first visit: the console's code, unless it has none yet.
     support_code: Option<String>,
+    /// Its Wii's MAC and serial HMAC, from our Nintendo login's token: kept once taken, should it ask again.
+    device: Option<Vec<u8>>,
     region: Option<&'static str>,
     session: Option<Session>,
     /// The last ticket issued: the session is handed off under it when the console leaves.
@@ -49,6 +52,7 @@ impl Lmp {
         Lmp {
             stage: Stage::Connection,
             support_code: None,
+            device: None,
             region: None,
             session: None,
             ticket: None,
@@ -101,8 +105,17 @@ impl Lmp {
                 reply(seq, &NtcLogin { status })
             }
             (Stage::FirstVisit, ReqLoginInfo::ID) => {
-                // The Nintendo login's token: checking it is the Nintendo login server's job. Never logged.
-                ReqLoginInfo::decode(p)?;
+                // Our Nintendo login's token (decision 13), used up here. Never logged.
+                let data = ReqLoginInfo::decode(p)?.data;
+                if self.device.is_none()
+                    && let Some(Item::Binary(token) | Item::String(token)) = data.get(0x0a)
+                {
+                    self.device = shared.nas.remove(String::from_utf8_lossy(token).as_ref());
+                }
+                let Some(device) = self.device.clone() else {
+                    info!("first visit refused: not through our NAS");
+                    return alert(AnsLoginInfo::ID, seq, crate::text::Text::UnknownLogin);
+                };
                 let db = db(shared)?;
                 let secret = shared
                     .config
@@ -144,6 +157,9 @@ impl Lmp {
                     }
                 };
                 Span::current().record("console", tracing::field::display(console.public_id));
+                accounts::link_device(db, &console, &device)
+                    .await
+                    .map_err(Fault::Database)?;
                 if crate::access::banned(db, console.id)
                     .await
                     .map_err(Fault::Database)?

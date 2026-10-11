@@ -53,7 +53,7 @@ pub fn bot_capcom_id() -> String {
     format!("0{}", random_id(CAPCOM_ID_LEN - 1))
 }
 
-fn hmac(secret: &Secret, code: &str) -> Vec<u8> {
+pub(crate) fn hmac(secret: &Secret, code: &str) -> Vec<u8> {
     let key = PKey::hmac(&secret.0).expect("HMAC key");
     let mut signer = Signer::new(MessageDigest::sha256(), &key).expect("HMAC-SHA256");
     signer.update(code.as_bytes()).expect("HMAC update");
@@ -73,6 +73,32 @@ impl Console {
             public_id: Uuid::from_slice(public_id).context("console public id")?,
         })
     }
+}
+
+/// Notes the Wii a console logs in from (`devices`, created at its first sight), known by its MAC and serial's HMAC
+/// (`nas.rs`).
+pub async fn link_device(db: &SqlitePool, console: &Console, device: &[u8]) -> Result<()> {
+    let public_id = Uuid::now_v7();
+    let public_id = public_id.as_bytes().as_slice();
+    let mut tx = db.begin().await?;
+    let device = sqlx::query_scalar!(
+        r#"INSERT INTO devices (public_id, mac_serial_hmac) VALUES (?1, ?2)
+           ON CONFLICT (mac_serial_hmac) DO UPDATE SET last_seen_at = CURRENT_TIMESTAMP
+           RETURNING id AS "id!""#,
+        public_id,
+        device
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "UPDATE consoles SET device_id = ?2 WHERE id = ?1",
+        console.id,
+        device
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// The console with this support code, if the server knows it (its last visit noted).

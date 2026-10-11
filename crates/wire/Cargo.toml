@@ -8,8 +8,10 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.23.1"
 bytes = "1.12.1"
 openssl = "0.10.81"
+percent-encoding = "2.3.2"
 thiserror = "2.0.21"
 tokio-util = { version = "0.7.19", features = ["codec"] }
 

@@ -149,7 +149,7 @@ impl Bindings {
         }
     }
 
-    fn bind(&mut self, var: &str, recorded: &[u8], live: &[u8]) {
+    pub fn bind(&mut self, var: &str, recorded: &[u8], live: &[u8]) {
         if recorded != live && !self.0.iter().any(|b| b.recorded == recorded) {
             self.0.push(Binding {
                 var: var.to_owned(),

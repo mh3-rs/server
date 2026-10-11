@@ -32,6 +32,7 @@ fn config() -> (Config, tempfile::TempDir) {
         lmp: any,
         fmp: any,
         health: any,
+        nas: any,
         api: any,
         qr: any,
         natneg: any,
@@ -104,12 +105,21 @@ async fn opn_login(
     natneg_hostnames: &[u8],
 ) -> (u8, Option<String>) {
     let (mut console, status) = opn_connect(opn, game_id, natneg_hostnames).await;
-    if status != 2 {
+    if status != 1 {
         return (status, None);
     }
-    send(&mut console, 1, ReqMaintenance {}).await;
-    let text = expect::<AnsMaintenance>(&mut console).await.text;
-    (status, Some(String::from_utf8(text.to_vec()).unwrap()))
+    // Refused, the game sends its token anyway, then asks why (`PatInterface.cpp:1250-1275`).
+    let token = Bytes::from_static(b"NDS-from-any-login");
+    send(&mut console, 1, ReqAuthenticationToken { token }).await;
+    expect::<AnsAuthenticationToken>(&mut console).await;
+    (status, Some(refusal_text(&mut console, 2).await))
+}
+
+/// After a refused `NtcLogin`: the text `ReqMaintenance` gets.
+async fn refusal_text(console: &mut Console, seq: u16) -> String {
+    send(console, seq, ReqMaintenance {}).await;
+    let text = expect::<AnsMaintenance>(console).await.text;
+    String::from_utf8(text.to_vec()).unwrap()
 }
 
 /// A console through OPN's disc checks and connection: the connection and its `NtcLogin` status.
@@ -154,7 +164,7 @@ async fn encrypted_login() {
     let (mut config, _db) = config();
     config.encryption = true;
     let running = server::start(&config).await.unwrap();
-    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (lmp, fmp) = (Lmp::of(&running), running.fmp.unwrap());
     // OPN, for two consoles at the same address: each its key, which goes on at `ReqShut`.
     let mut keys = Vec::new();
     for _ in 0..2 {
@@ -173,13 +183,13 @@ async fn encrypted_login() {
     // second's key, its answer is read with its own.
     for key in [keys[0], keys[1]] {
         // LMP's first visit: a new console gets its support code and a ticket.
-        let mut console = open_encrypted(lmp, key, None, 1).await;
-        let data = PatData::new();
+        let mut console = open_encrypted(lmp.addr, key, None, 1).await;
+        let data = login_data(lmp.nas).await;
         send(&mut console, 1, ReqLoginInfo { data }).await;
         expect::<AnsLoginInfo>(&mut console).await;
         let first = ticket_and_shut(&mut console, 2).await;
         // LMP's second visit: a slot, a Capcom ID, the ticket for FMP.
-        let mut console = open_encrypted(lmp, key, Some(first), 2).await;
+        let mut console = open_encrypted(lmp.addr, key, Some(first), 2).await;
         let user = PatData::new().with(0x03, Item::String(Bytes::from_static(b"Aiko")));
         send(
             &mut console,
@@ -198,7 +208,7 @@ async fn encrypted_login() {
     }
 
     // No key in transit at an address (every one used): the connection is closed before a word.
-    let mut stranger = Console::connect(lmp, false).await.unwrap();
+    let mut stranger = Console::connect(lmp.addr, false).await.unwrap();
     assert!(matches!(
         stranger.recv(Duration::from_secs(5)).await.unwrap(),
         Received::Closed
@@ -323,6 +333,7 @@ async fn replay(scenario: &Path) -> Vec<ConnectionReport> {
         opn: running.opn,
         lmp: running.lmp.unwrap(),
         fmp: running.fmp.unwrap(),
+        nas: Some(running.nas),
         nudge: false,
     };
     let reports = replay::replay(scenario, &targets, &masks).await.unwrap();
@@ -399,9 +410,9 @@ async fn refuses_discs_without_our_patch() {
     );
     running.stop().await;
     assert_eq!(ok, (5, None));
-    assert_eq!(unpatched.0, 2);
+    assert_eq!(unpatched.0, 1);
     assert!(unpatched.1.unwrap().contains("not patched"));
-    assert_eq!(unsupported.0, 2);
+    assert_eq!(unsupported.0, 1);
     assert!(unsupported.1.unwrap().contains("not supported"));
 }
 
@@ -411,7 +422,7 @@ async fn refuses_everyone_when_not_configured() {
     config.natneg_hostname = None;
     let running = server::start(&config).await.unwrap();
     let (status, text) = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
-    assert_eq!(status, 2);
+    assert_eq!(status, 1);
     assert!(text.unwrap().contains("not configured"));
     assert_eq!(http_status(running.health, "/health/live").await, "200");
     assert_eq!(http_status(running.health, "/health/ready").await, "503");
@@ -425,7 +436,7 @@ async fn maintenance_mode_refuses_with_the_message() {
     let running = server::start(&config).await.unwrap();
     assert_eq!((running.lmp, running.fmp), (None, None));
     let login = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
-    assert_eq!(login, (2, Some("Back at 18:00 UTC".into())));
+    assert_eq!(login, (1, Some("Back at 18:00 UTC".into())));
     assert_eq!(http_status(running.health, "/health/live").await, "200");
     assert_eq!(http_status(running.health, "/health/ready").await, "503");
     running.stop().await;
@@ -442,7 +453,7 @@ async fn waits_for_the_database_at_startup() {
     let running = server::start(&config).await.unwrap();
     assert_eq!(http_status(running.health, "/health/live").await, "503");
     let (status, text) = opn_login(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
-    assert_eq!(status, 2);
+    assert_eq!(status, 1);
     assert!(text.unwrap().contains("not ready"));
 
     std::fs::create_dir(&folder).unwrap();
@@ -483,12 +494,55 @@ fn string(item: Option<&Item>) -> String {
     }
 }
 
+/// Where a console logs in: LMP, and the Nintendo login whose token its first visit carries.
+#[derive(Clone, Copy)]
+struct Lmp {
+    addr: SocketAddr,
+    nas: SocketAddr,
+    /// The Wii every first visit comes from; none: a new one each time.
+    wii: Option<u32>,
+}
+
+impl Lmp {
+    fn of(running: &server::Running) -> Self {
+        Lmp {
+            addr: running.lmp.unwrap(),
+            nas: running.nas,
+            wii: None,
+        }
+    }
+}
+
+/// A first visit's `ReqLoginInfo` data: the token of a Nintendo login, from a Wii never seen before.
+async fn login_data(nas: SocketAddr) -> PatData {
+    static WIIS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let wii = WIIS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    login_data_from(nas, wii).await
+}
+
+impl Lmp {
+    /// A first visit's `ReqLoginInfo` data, from this side's Wii.
+    async fn login_data(self) -> PatData {
+        match self.wii {
+            Some(wii) => login_data_from(self.nas, wii).await,
+            None => login_data(self.nas).await,
+        }
+    }
+}
+
+/// A first visit's `ReqLoginInfo` data, from Wii number `wii`.
+async fn login_data_from(nas: SocketAddr, wii: u32) -> PatData {
+    let (mac, serial) = (format!("0017ab{wii:06x}"), format!("LEH{wii:09}"));
+    let token = testkit::nas::svcloc(nas, &mac, &serial).await.unwrap();
+    PatData::new().with(0x0a, Item::Binary(token.into()))
+}
+
 /// LMP's first visit: the support code (issued when `None`), the ticket, and the 6 slots' Capcom IDs.
 async fn first_visit(
-    lmp: SocketAddr,
+    lmp: Lmp,
     support_code: Option<&str>,
 ) -> (String, String, Vec<(String, String)>) {
-    let mut console = Console::connect(lmp, false).await.unwrap();
+    let mut console = Console::connect(lmp.addr, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     send(
         &mut console,
@@ -499,14 +553,8 @@ async fn first_visit(
     )
     .await;
     assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
-    send(
-        &mut console,
-        1,
-        ReqLoginInfo {
-            data: PatData::new(),
-        },
-    )
-    .await;
+    let data = lmp.login_data().await;
+    send(&mut console, 1, ReqLoginInfo { data }).await;
     let code = string(expect::<AnsLoginInfo>(&mut console).await.data.get(0x07));
     send(&mut console, 2, ReqTicket {}).await;
     let ticket =
@@ -553,9 +601,9 @@ async fn second_visit(lmp: SocketAddr, ticket: &str, slot: u32, name: Option<&st
 }
 
 /// The whole login of `support_code`'s console playing `slot`: the ticket FMP takes.
-async fn login(lmp: SocketAddr, support_code: &str, slot: u32) -> String {
+async fn login(lmp: Lmp, support_code: &str, slot: u32) -> String {
     let (_, ticket, _) = first_visit(lmp, Some(support_code)).await;
-    let mut console = Console::connect(lmp, false).await.unwrap();
+    let mut console = Console::connect(lmp.addr, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     send(
         &mut console,
@@ -597,7 +645,7 @@ async fn fmp_login(fmp: SocketAddr, ticket: &str) -> Console {
 async fn fmp_sessions_hop_and_kick() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (lmp, fmp) = (Lmp::of(&running), running.fmp.unwrap());
     let (code, _, _) = first_visit(lmp, None).await;
     let ticket = login(lmp, &code, 1).await;
 
@@ -624,17 +672,17 @@ async fn fmp_sessions_hop_and_kick() {
 async fn consoles_keep_their_hunters() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
 
     // A first-time console gets a support code and empty slots; its first hunter gets a Capcom ID.
     let (code, ticket, slots) = first_visit(lmp, None).await;
     assert_eq!(code.len(), 11);
     assert!(slots.iter().all(|(id, _)| id == "******"));
-    let capcom_id = second_visit(lmp, &ticket, 2, Some("Aiko")).await;
+    let capcom_id = second_visit(lmp.addr, &ticket, 2, Some("Aiko")).await;
     assert_eq!(capcom_id.len(), 6);
 
     // A redeemed ticket doesn't work twice: the connection is dropped.
-    let mut reused = Console::connect(lmp, false).await.unwrap();
+    let mut reused = Console::connect(lmp.addr, false).await.unwrap();
     expect::<ReqConnection>(&mut reused).await;
     send(
         &mut reused,
@@ -652,17 +700,20 @@ async fn consoles_keep_their_hunters() {
     // Another console gets another Capcom ID.
     let (other, ticket, _) = first_visit(lmp, None).await;
     assert_ne!(other, code);
-    assert_ne!(second_visit(lmp, &ticket, 2, Some("Aiko")).await, capcom_id);
+    assert_ne!(
+        second_visit(lmp.addr, &ticket, 2, Some("Aiko")).await,
+        capcom_id
+    );
     running.stop().await;
 
     // After a restart, the console finds its hunter in the same slot, with the same Capcom ID.
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let (again, ticket, slots) = first_visit(lmp, Some(&code)).await;
     assert_eq!(again, code);
     assert_eq!(slots[1], (capcom_id.clone(), "Aiko".to_owned()));
     // Picking it without a name (it was listed with its hunter's) keeps the name.
-    assert_eq!(second_visit(lmp, &ticket, 2, None).await, capcom_id);
+    assert_eq!(second_visit(lmp.addr, &ticket, 2, None).await, capcom_id);
     let (_, _, slots) = first_visit(lmp, Some(&code)).await;
     assert_eq!(slots[1], (capcom_id, "Aiko".to_owned()));
     running.stop().await;
@@ -745,7 +796,7 @@ async fn chat_commands() {
     let (mut config, _db) = config();
     // The admin's Capcom ID exists once its console has played: a first server makes it, a second one names it.
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let codes = [
         first_visit(lmp, None).await.0,
         first_visit(lmp, None).await.0,
@@ -1091,7 +1142,7 @@ async fn the_api_serves_admins_only() {
 async fn a_banned_console_is_refused_until_unbanned() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let (addr, lmp) = (running.api.unwrap(), running.lmp.unwrap());
+    let (addr, lmp) = (running.api.unwrap(), Lmp::of(&running));
     let db = server::database::open(&config.database_url).await.unwrap();
     server::users::add(&db, "admin@example.org", server::users::Role::Admin)
         .await
@@ -1223,8 +1274,8 @@ async fn relayed_traffic_is_cut_to_its_rate() {
 }
 
 /// LMP's first visit up to `ReqLoginInfo`: the answer, or `None` when the server closed the connection.
-async fn login_info(lmp: SocketAddr, support_code: Option<&str>) -> Option<Received> {
-    let mut console = Console::connect(lmp, false).await.unwrap();
+async fn login_info(lmp: Lmp, support_code: Option<&str>) -> Option<Received> {
+    let mut console = Console::connect(lmp.addr, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     let data = connection_data(support_code, None);
     send(&mut console, 0, AnsConnection { data }).await;
@@ -1232,7 +1283,7 @@ async fn login_info(lmp: SocketAddr, support_code: Option<&str>) -> Option<Recei
         return None;
     }
     let info = ReqLoginInfo {
-        data: PatData::new(),
+        data: lmp.login_data().await,
     };
     send(&mut console, 1, info).await;
     match console.recv(Duration::from_secs(5)).await.unwrap() {
@@ -1248,7 +1299,7 @@ async fn the_per_address_limits_hold() {
     let (mut config, _db) = config();
     config.loopback_exempt = false;
     let running = server::start(&config).await.unwrap();
-    let (opn, lmp) = (running.opn, running.lmp.unwrap());
+    let (opn, lmp) = (running.opn, Lmp::of(&running));
     assert!(login_info(lmp, None).await.is_none(), "LMP before OPN");
     let (mut console, status) = opn_connect(opn, b"RMHP08", NATNEG_HOSTNAMES).await;
     assert_eq!(status, 5);
@@ -1270,11 +1321,11 @@ async fn the_per_address_limits_hold() {
 
     let mut open = Vec::new();
     for _ in 0..16 {
-        let mut c = Console::connect(lmp, false).await.unwrap();
+        let mut c = Console::connect(lmp.addr, false).await.unwrap();
         expect::<ReqConnection>(&mut c).await;
         open.push(c);
     }
-    let mut seventeenth = Console::connect(lmp, false).await.unwrap();
+    let mut seventeenth = Console::connect(lmp.addr, false).await.unwrap();
     assert!(matches!(
         seventeenth.recv(Duration::from_secs(5)).await.unwrap(),
         Received::Closed
@@ -1288,26 +1339,26 @@ async fn the_per_address_limits_hold() {
 async fn a_database_failure_at_login_keeps_the_code() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let (code, _, _) = first_visit(lmp, None).await;
     let db = sqlx::SqlitePool::connect(&config.database_url)
         .await
         .unwrap();
     let sql = |sql: &'static str| sqlx::query(sql).execute(&db);
-    let mut console = Console::connect(lmp, false).await.unwrap();
+    let mut console = Console::connect(lmp.addr, false).await.unwrap();
     expect::<ReqConnection>(&mut console).await;
     let data = connection_data(Some(&code), None);
     send(&mut console, 0, AnsConnection { data }).await;
     assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
     sql("ALTER TABLE consoles RENAME TO hidden").await.unwrap();
-    let info = || ReqLoginInfo {
-        data: PatData::new(),
-    };
-    send(&mut console, 1, info()).await;
+    // The token is used up by the first ask: the second, without it, is the same Wii.
+    let data = login_data(lmp.nas).await;
+    send(&mut console, 1, ReqLoginInfo { data }).await;
     let text = expect_alert(&mut console, AnsLoginInfo::ID).await;
     assert!(text.contains("Not available right now"), "{text}");
     sql("ALTER TABLE hidden RENAME TO consoles").await.unwrap();
-    send(&mut console, 2, info()).await;
+    let data = PatData::new();
+    send(&mut console, 2, ReqLoginInfo { data }).await;
     let again = expect::<AnsLoginInfo>(&mut console).await;
     assert_eq!(string(again.data.get(0x07)), code);
     running.stop().await;
@@ -1363,13 +1414,13 @@ async fn malformed_packets_drop_the_connection() {
 
 /// A new console's whole way in: login, server selection (Valor1), then the world server connection.
 async fn enter_world(running: &server::Running) -> Console {
-    let (code, _, _) = first_visit(running.lmp.unwrap(), None).await;
+    let (code, _, _) = first_visit(Lmp::of(running), None).await;
     play(running, &code).await
 }
 
 /// A new game of `support_code`'s console, slot 1, up to a world server.
 async fn play(running: &server::Running, support_code: &str) -> Console {
-    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (lmp, fmp) = (Lmp::of(running), running.fmp.unwrap());
     let ticket = login(lmp, support_code, 1).await;
     let mut selection = fmp_login(fmp, &ticket).await;
     send(
@@ -1693,7 +1744,7 @@ async fn city_search_finds_nothing() {
 async fn jumps_to_another_world_server() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let (lmp, fmp) = (running.lmp.unwrap(), running.fmp.unwrap());
+    let (lmp, fmp) = (Lmp::of(&running), running.fmp.unwrap());
     let (code, _, _) = first_visit(lmp, None).await;
     let ticket = login(lmp, &code, 1).await;
     let mut selection = fmp_login(fmp, &ticket).await;
@@ -1846,7 +1897,7 @@ async fn cities_are_shared() {
 }
 
 /// A new console with its hunter on slot 1: its support code and Capcom ID.
-async fn new_hunter(lmp: SocketAddr) -> (String, String) {
+async fn new_hunter(lmp: Lmp) -> (String, String) {
     let (code, _, _) = first_visit(lmp, None).await;
     login(lmp, &code, 1).await;
     let (_, _, slots) = first_visit(lmp, Some(&code)).await;
@@ -1866,7 +1917,7 @@ async fn mail(console: &mut Console) -> Vec<wire::PacketId> {
 async fn messages_wait_for_their_recipient() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let (a_code, a_id) = new_hunter(lmp).await;
     let (b_code, b_id) = new_hunter(lmp).await;
     let (c_code, c_id) = new_hunter(lmp).await;
@@ -1929,7 +1980,7 @@ async fn messages_wait_for_their_recipient() {
 async fn a_database_failure_keeps_the_player() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let (code, me) = new_hunter(running.lmp.unwrap()).await;
+    let (code, me) = new_hunter(Lmp::of(&running)).await;
     let mut console = play(&running, &code).await;
     // A table gone under the server, as a corrupted file would have it; back afterwards.
     let db = sqlx::SqlitePool::connect(&config.database_url)
@@ -1950,7 +2001,7 @@ async fn a_database_failure_keeps_the_player() {
     sql("ALTER TABLE hidden RENAME TO blacklist").await.unwrap();
 
     // Mail that can't be read at a position in a city waits for the next one.
-    let (other_code, _) = new_hunter(running.lmp.unwrap()).await;
+    let (other_code, _) = new_hunter(Lmp::of(&running)).await;
     let mut other = play(&running, &other_code).await;
     for step in 1..=3 {
         meet(&mut console, &mut other, 1, step).await;
@@ -1984,7 +2035,7 @@ async fn a_database_failure_keeps_the_player() {
 async fn profile_notices_reach_their_target() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let mut consoles = Vec::new();
     let mut ids = Vec::new();
     for _ in 0..3 {
@@ -2263,7 +2314,7 @@ async fn one_player_per_seat() {
 async fn player_search() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let lmp = running.lmp.unwrap();
+    let lmp = Lmp::of(&running);
     let mut searcher = enter_world(&running).await;
     let mut ids = Vec::new();
     let mut others = Vec::new();
@@ -3674,6 +3725,204 @@ async fn a_vanishing_leader_is_cleaned_up() {
     assert!(
         !seen.contains(&NtcCircleBreak::ID),
         "a departed quest goes on: {seen:?}"
+    );
+    running.stop().await;
+}
+
+/// Our Nintendo login (`nas.rs`, architecture decision 13): its three actions over HTTP, in the game's base64; its
+/// token checked at OPN, used up at LMP's first visit, which links the console to its Wii.
+#[tokio::test]
+async fn our_nintendo_login() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let nas = running.nas;
+    let field = |reply: &[(String, Vec<u8>)], key: &str| {
+        let value = reply.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        String::from_utf8(value.unwrap_or_default()).unwrap()
+    };
+    let created = testkit::nas::ac(nas, &[("action", b"acctcreate")])
+        .await
+        .unwrap();
+    assert_eq!(field(&created, "returncd"), "002");
+    let user_id = field(&created, "userid");
+    assert!(
+        user_id.len() == 13 && user_id.bytes().all(|b| b.is_ascii_digit()),
+        "{user_id}"
+    );
+    let fields: [(&str, &[u8]); 2] = [("action", b"login"), ("userid", user_id.as_bytes())];
+    let login = testkit::nas::ac(nas, &fields).await.unwrap();
+    assert_eq!(field(&login, "returncd"), "001");
+    // A lab Dolphin's login, as captured in the first console run (2026-10-11): URL-encoded on top of the base64.
+    let recorded = "action=bG9naW4%2A&gsbrcd=&userid=MDAwMDAwMDAwMDAwMg%2A%2A&ingamesn=&sdkver=MDAxMDAw&\
+        gamecd=Uk1IUA%2A%2A&makercd=MDg%2A&unitcd=MQ%2A%2A&macadr=MDAxN2FiYjMzYjJi&lang=MDE%2A&\
+        devtime=MjYxMDA5MTk1MjQ5&csnum=TEVINzkxNDY0MzE3&cfc=Mjc5MDQ5MTU3ODg5NTg5OQ%2A%2A&region=MDI%2A";
+    let login = testkit::nas::post(nas, recorded).await.unwrap();
+    assert_eq!(field(&login, "returncd"), "001");
+    let token = testkit::nas::svcloc(nas, "0017abcdef01", "LEH123456789")
+        .await
+        .unwrap();
+    assert!(
+        token.len() == 83 && token.starts_with(b"NDS"),
+        "Nintendo's form"
+    );
+    // Refused: an unknown action, a MAC that isn't one, a form that isn't base64 in the game's alphabet.
+    assert!(
+        testkit::nas::ac(nas, &[("action", b"other")])
+            .await
+            .is_err()
+    );
+    assert!(
+        testkit::nas::svcloc(nas, "nomac", "LEH123456789")
+            .await
+            .is_err()
+    );
+
+    // OPN: a token from another login is refused (a second `NtcLogin`) with a text; ours is accepted, only looked at.
+    for (token, ours) in [(vec![b'N'; 83], false), (token.clone(), true)] {
+        let (mut opn, status) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+        assert_eq!(status, 5);
+        let token = token.into();
+        send(&mut opn, 1, ReqAuthenticationToken { token }).await;
+        match ours {
+            true => {
+                expect::<AnsAuthenticationToken>(&mut opn).await;
+            }
+            false => {
+                // A second `NtcLogin`, refused, then the text.
+                assert_eq!(expect::<NtcLogin>(&mut opn).await.status, 1);
+                let text = refusal_text(&mut opn, 2).await;
+                assert!(text.contains("didn't log in through this server"), "{text}");
+            }
+        }
+    }
+
+    // LMP: without a token, or with one used already, a first visit is refused with that message.
+    let lmp = Lmp::of(&running);
+    let with = |token: Option<Vec<u8>>| async move {
+        let mut console = Console::connect(lmp.addr, false).await.unwrap();
+        expect::<ReqConnection>(&mut console).await;
+        let data = connection_data(None, None);
+        send(&mut console, 0, AnsConnection { data }).await;
+        assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
+        let data = match token {
+            Some(token) => PatData::new().with(0x0a, Item::Binary(token.into())),
+            None => PatData::new(),
+        };
+        send(&mut console, 1, ReqLoginInfo { data }).await;
+        console
+    };
+    let text = expect_alert(&mut with(None).await, AnsLoginInfo::ID).await;
+    assert!(text.contains("Log in again"), "{text}");
+    expect::<AnsLoginInfo>(&mut with(Some(token.clone())).await).await;
+    expect_alert(&mut with(Some(token)).await, AnsLoginInfo::ID).await;
+    let db = server::database::open(&config.database_url).await.unwrap();
+    let linked: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM devices), (SELECT count(*) FROM consoles WHERE device_id IS NOT NULL)",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(linked, (1, 1));
+    running.stop().await;
+}
+
+/// A ban holds on the Wii (Nintendo login D1, D5): a new save on it is refused at OPN, then at LMP; another Wii isn't;
+/// unbanned, it plays again.
+#[tokio::test]
+async fn a_ban_holds_on_its_wii() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let addr = running.api.unwrap();
+    let db = server::database::open(&config.database_url).await.unwrap();
+    server::users::add(&db, "admin@example.org", server::users::Role::Admin)
+        .await
+        .unwrap();
+    let token = server::users::issue(&db, "admin@example.org", "cli")
+        .await
+        .unwrap();
+    let admin = format!("Authorization: Bearer {token}");
+    let wii = |n| Lmp {
+        wii: Some(n),
+        ..Lmp::of(&running)
+    };
+    let (code, _, _) = first_visit(wii(900), None).await;
+    login(wii(900), &code, 1).await;
+    let capcom_id = first_visit(wii(900), Some(&code)).await.2[0].0.clone();
+    let ban = format!(r#"{{"player":"{capcom_id}","reason":"cheating"}}"#);
+    assert_eq!(api(addr, "POST", "/api/ban", &admin, &ban).await.0, 200);
+
+    // A new save on the banned Wii: refused at OPN, and at LMP should it skip OPN's check.
+    let token = testkit::nas::svcloc(running.nas, "0017ab000384", "LEH000000900")
+        .await
+        .unwrap();
+    let (mut opn, _) = opn_connect(running.opn, b"RMHP08", NATNEG_HOSTNAMES).await;
+    send(
+        &mut opn,
+        1,
+        ReqAuthenticationToken {
+            token: token.into(),
+        },
+    )
+    .await;
+    assert_eq!(expect::<NtcLogin>(&mut opn).await.status, 1);
+    let text = refusal_text(&mut opn, 2).await;
+    assert!(text.contains("banned"), "{text}");
+    match login_info(wii(900), None).await {
+        Some(Received::Frame(f)) => assert_eq!(f.id.0, AnsLoginInfo::ID.0 | 0x01, "an alert"),
+        other => panic!("expected an alert, got {other:?}"),
+    }
+    // Another Wii plays.
+    first_visit(wii(901), None).await;
+
+    let unban = format!(r#"{{"player":"{capcom_id}"}}"#);
+    assert_eq!(api(addr, "POST", "/api/unban", &admin, &unban).await.0, 200);
+    first_visit(wii(900), None).await;
+    running.stop().await;
+}
+
+/// In maintenance mode the Nintendo login still answers: the console must reach OPN to read why it's refused.
+#[tokio::test]
+async fn the_nintendo_login_answers_in_maintenance() {
+    let (mut config, _db) = config();
+    config.maintenance = Some("Back soon.".into());
+    let running = server::start(&config).await.unwrap();
+    testkit::nas::svcloc(running.nas, "0017abcdef01", "LEH123456789")
+        .await
+        .unwrap();
+    running.stop().await;
+}
+
+/// A refused console, once told why, is only let go (the user, 2026-10-11): any other request closes its connection
+/// at once, its goodbye is answered, and a connection left open is closed after the grace (10 s), with no line check
+/// meanwhile.
+#[tokio::test]
+async fn a_refused_console_is_only_let_go() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let refused = || async {
+        let other_patch = b"natneg1.gs.example.com\0natneg2.gs.example.com\0";
+        let (mut console, status) = opn_connect(running.opn, b"RMHP08", other_patch).await;
+        assert_eq!(status, 1);
+        let token = Bytes::from_static(b"NDS-from-any-login");
+        send(&mut console, 1, ReqAuthenticationToken { token }).await;
+        expect::<AnsAuthenticationToken>(&mut console).await;
+        assert!(refusal_text(&mut console, 2).await.contains("not patched"));
+        console
+    };
+    // Closed: over TLS without its goodbye, which reads as an error.
+    let closed = |r: anyhow::Result<Received>| matches!(r, Ok(Received::Closed) | Err(_));
+    let mut pushy = refused().await;
+    send(&mut pushy, 3, ReqTermsVersion {}).await;
+    assert!(closed(pushy.recv(Duration::from_secs(2)).await));
+    let mut lingering = refused().await;
+    send(&mut lingering, 3, ReqShut { kind: 1 }).await;
+    expect::<AnsShut>(&mut lingering).await;
+    let start = std::time::Instant::now();
+    assert!(closed(lingering.recv(Duration::from_secs(15)).await));
+    assert!(
+        start.elapsed() >= Duration::from_secs(9),
+        "{:?}",
+        start.elapsed()
     );
     running.stop().await;
 }

@@ -34,12 +34,24 @@ CREATE INDEX terms_current ON terms (kind, language, id DESC);
 -- World servers, server types (with their HR limits) and the world layout are not in the database: they are game
 -- constants in the code.
 
+-- A Wii, as our Nintendo login sees it (architecture decision 13): its MAC and serial, the pair a real Wii can't
+-- change, stored only as HMAC-SHA256(pepper, macadr ‖ csnum). For bans that survive a deleted save.
+CREATE TABLE devices (
+    id                  INTEGER PRIMARY KEY,
+    public_id           BLOB NOT NULL UNIQUE CHECK (length(public_id) = 16),
+    mac_serial_hmac     BLOB NOT NULL UNIQUE CHECK (length(mac_serial_hmac) = 32),
+    created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
+
 -- A console, identified by HMAC-SHA256(pepper, online support code); the code itself is never stored.
 CREATE TABLE consoles (
     id                  INTEGER PRIMARY KEY,
     public_id           BLOB NOT NULL UNIQUE CHECK (length(public_id) = 16),
     support_code_hmac   BLOB NOT NULL UNIQUE CHECK (length(support_code_hmac) = 32),
     region              TEXT NOT NULL CHECK (region IN ('RMHP08', 'RMHE08', 'RMHJ08')),
+    -- The last Wii it logged in from.
+    device_id           INTEGER REFERENCES devices (id),
     created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
@@ -192,8 +204,9 @@ CREATE TABLE tokens (
 ) STRICT;
 CREATE INDEX tokens_user ON tokens (user_id);
 
--- Bans (and later the whitelist): one rule on one target, a console, a hunter or a user. A ban on a console stops all
--- its hunters (a banned player can't switch slots). Revoked, never deleted.
+-- Bans (and later the whitelist): one rule on one target, a console, a hunter, a Wii or a user. A ban on a console stops
+-- all its hunters (a banned player can't switch slots), and comes with a ban on its Wii (a new save doesn't lift it).
+-- Revoked, never deleted.
 CREATE TABLE rule_kinds (
     id      INTEGER PRIMARY KEY,
     name    TEXT NOT NULL UNIQUE
@@ -205,6 +218,7 @@ CREATE TABLE access_rules (
     kind_id             INTEGER NOT NULL REFERENCES rule_kinds (id),
     console_id          INTEGER REFERENCES consoles (id),
     hunter_id           INTEGER REFERENCES hunters (id),
+    device_id           INTEGER REFERENCES devices (id),
     user_id             INTEGER REFERENCES users (id),
     reason              TEXT NOT NULL,
     -- NULL: the operator (the binary, or an admin of the configuration's `admins`, who isn't a user yet).
@@ -214,10 +228,11 @@ CREATE TABLE access_rules (
     expires_at          TEXT,
     revoked_at          TEXT,
     revocation_reason   TEXT,
-    CHECK ((console_id IS NOT NULL) + (hunter_id IS NOT NULL) + (user_id IS NOT NULL) = 1),
+    CHECK ((console_id IS NOT NULL) + (hunter_id IS NOT NULL) + (device_id IS NOT NULL) + (user_id IS NOT NULL) = 1),
     CHECK ((revoked_at IS NULL) = (revocation_reason IS NULL))
 ) STRICT;
 CREATE INDEX access_rules_console ON access_rules (console_id) WHERE console_id IS NOT NULL;
+CREATE INDEX access_rules_device ON access_rules (device_id) WHERE device_id IS NOT NULL;
 
 -- Initial data.
 

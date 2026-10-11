@@ -9,7 +9,7 @@
 //!   differ: the candidates for `corpus/masks.toml`.
 //!
 //! `corpus replay <scenario-dir>... [--host <ip>] [--before <command>] [--nudge] [--retries <n>]`
-//!   Replays the scenarios against a server (default 127.0.0.1, ports 8200-8202) and reports
+//!   Replays the scenarios against a server (default 127.0.0.1, ports 8200-8202, its Nintendo login on 80) and reports
 //!   every server frame that differs from the recording. Exits 1 if any does. `--before` runs a
 //!   command before each scenario, to give it a fresh server (e.g. `tools/oracle.sh`). `--nudge`
 //!   works around Python MH3SP's stalled reads (see `Targets::nudge`); use it only against Python.
@@ -85,8 +85,10 @@ async fn replay_all(args: &[String]) -> Result<bool> {
             _ => scenarios.push(PathBuf::from(arg)),
         }
     }
+    // Our server checks the Nintendo login's tokens, on port 80 beside it; Python MH3SP's AltWFC doesn't.
     let targets = Targets {
         nudge,
+        nas: (!nudge).then(|| std::net::SocketAddr::new(host, 80)),
         ..Targets::host(host)
     };
     // Masks live next to the scenarios: corpus/masks.toml, corpus/divergences.toml.
