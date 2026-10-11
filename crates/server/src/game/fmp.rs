@@ -38,7 +38,7 @@ pub struct Fmp {
     limits: Box<Limits>,
 }
 
-/// Rate limits (provisional, the review's): what one console sends the others, chat, and quest joins (a password is
+/// Rate limits (the review's, confirmed): what one console sends the others, chat, and quest joins (a password is
 /// checked with argon2). A flood would fill the others' mailboxes, which drops *them*.
 struct Limits {
     relayed: Bucket,

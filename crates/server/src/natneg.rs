@@ -25,7 +25,7 @@ use crate::relay::Relays;
 /// A negotiation nobody has spoken in for this long is forgotten (the game gives up waiting for `CONNECT` after
 /// 60 s).
 const FORGET_AFTER: Duration = Duration::from_secs(60);
-/// Negotiations one IP address may have open (provisional, the review's limits): a console negotiates with each
+/// Negotiations one IP address may have open (the review's limits, confirmed): a console negotiates with each
 /// party member (3 pairs at most) and several consoles may share an address; a console making up cookies stops here
 /// instead of filling the table.
 const MAX_PER_ADDRESS: usize = 32;

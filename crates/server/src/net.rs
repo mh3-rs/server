@@ -39,7 +39,7 @@ const PAUSE: Duration = Duration::from_millis(250);
 /// up after 90 s without one.)
 const LINE_CHECK_EVERY: Duration = Duration::from_secs(30);
 /// How long a write may wait for a console that stopped reading before the connection is dropped: as long as an
-/// unanswered line check (provisional, the review's limits). Without it the console's task froze on a full socket and
+/// unanswered line check (the review's limits, confirmed). Without it the console's task froze on a full socket and
 /// stayed as a ghost.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A connection the console is about to close (it sent `ReqShut`, or got a refusal's text): no more line checks or
@@ -53,7 +53,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 /// Internal connection number: the only way logs identify a connection (no IP addresses).
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
-/// Connections open at once, in total and from one IP address (provisional, the review's limits): a client opening
+/// Connections open at once, in total and from one IP address (the review's limits, confirmed): a client opening
 /// sockets in a loop (each TLS handshake costs an RSA operation) is refused at accept. A console holds one or two at
 /// a time; several consoles may share an address.
 const MAX_CONNECTIONS: usize = 2000;

@@ -345,7 +345,7 @@ pub struct Admission {
 
 /// How long after OPN an address may come to LMP: seconds in practice.
 const PASSED_FOR: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-/// New consoles per address (provisional, the review's limits): a household's few, not a loop. The hour restarts
+/// New consoles per address (the review's limits, confirmed): a household's few, not a loop. The hour restarts
 /// with each creation.
 const CREATED_PER_HOUR: u32 = 5;
 
