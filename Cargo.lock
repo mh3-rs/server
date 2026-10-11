@@ -1496,7 +1496,9 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.0.0"
+version = "0.1.0"
+source = "sparse+https://git.pband.ch/api/packages/experiment/cargo/"
+checksum = "f9c5613a44435dda37f7f31a919799250be5f140425d715e955f3f3a418be9b7"
 dependencies = [
  "serde",
 ]
@@ -2058,7 +2060,8 @@ dependencies = [
 [[package]]
 name = "tunnel"
 version = "0.1.0"
-source = "git+ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git?rev=d54e731d7b0559db82af45600ea8ada9da300289#d54e731d7b0559db82af45600ea8ada9da300289"
+source = "sparse+https://git.pband.ch/api/packages/experiment/cargo/"
+checksum = "649d8f010e547d97e12ca4f1b794ff642f3a54c724d30f2b4e9f5aa500c21058"
 dependencies = [
  "anyhow",
  "bytes",

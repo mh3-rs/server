@@ -1,0 +1,36 @@
+# The server's image, to the Gitea registry (git.pband.ch/experiment/mh3sp-rs), on main once the checks pass: tagged
+# `main` and with the commit. Docker Hub and versioned tags come with the release pipeline.
+when:
+  - event: push
+    branch: main
+    path:
+      exclude: ["**/*.md", "roadmap/**", "LICENSE", ".gitignore"]
+  - event: manual
+    branch: main
+
+depends_on: [push]
+
+steps:
+  - name: tags
+    image: alpine:3.22
+    commands:
+      - printf '%s\n' main "$${CI_COMMIT_SHA:0:8}" > .tags
+      - cat .tags
+
+  # The only privileged plugin the server trusts (WOODPECKER_PLUGINS_PRIVILEGED): keep this exact version.
+  - name: image
+    image: woodpeckerci/plugin-docker-buildx:5.0.0
+    depends_on: [tags]
+    settings:
+      registry: git.pband.ch
+      repo: git.pband.ch/${CI_REPO}
+      platforms: linux/amd64,linux/arm64
+      dockerfile: Dockerfile
+      tags_file: .tags
+      username:
+        from_secret: gitea_user
+      password:
+        from_secret: gitea_token
+      # The registry token for cargo (the Dockerfile's build secret): the plugin holds the password, the same Gitea
+      # token, in PLUGIN_PASSWORD, and a secret named after a variable reads it. No comma: the plugin splits on them.
+      secrets: id=PLUGIN_PASSWORD

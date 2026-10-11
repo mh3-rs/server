@@ -22,10 +22,10 @@ toml = "1.1.7"
 wire = { path = "../wire" }
 
 [dev-dependencies]
-tunnel = { git = "ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git", rev = "d54e731d7b0559db82af45600ea8ada9da300289" }
+tunnel = { version = "=0.1.0", registry = "gitea" }
 # The tests cover the quest bots too (the `bot` feature).
 server = { path = "../server", features = ["bot"] }
 tempfile = "3.27.0"
 # To break a test's database under the running server.
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite"] }
-shared = { path = "../../../shared" }
+shared = { version = "=0.1.0", registry = "gitea" }

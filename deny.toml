@@ -9,9 +9,11 @@ version = 2
 version = 2
 # Permissive licenses the dependencies use today, all compatible with AGPL-3.0-or-later. A new one is a decision.
 allow = ["MIT", "Apache-2.0", "Unicode-3.0", "Zlib", "BSD-3-Clause"]
+# Ours, from our registry (.cargo/config.toml): AGPL, as this one.
+exceptions = [{ crate = "shared", allow = ["AGPL-3.0-or-later"] }, { crate = "tunnel", allow = ["AGPL-3.0-or-later"] }]
 
 [licenses.private]
-# Our own crates (`publish = false`): this workspace, the tunnel and `shared`.
+# Our own crates (`publish = false`).
 ignore = true
 
 [bans]
@@ -20,5 +22,5 @@ multiple-versions = "allow"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# The quest bots' tunnel, ours.
-allow-git = ["ssh://git@git.pband.ch/experiment/mh3sp-tunnel.git"]
+# Our registry (.cargo/config.toml), besides crates.io.
+allow-registry = ["https://github.com/rust-lang/crates.io-index", "sparse+https://git.pband.ch/api/packages/experiment/cargo/"]

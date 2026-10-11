@@ -66,12 +66,12 @@ git clone -b event-quest-rotation-full https://github.com/sepalani/MH3SP content
 cp mh3sp.toml.example mh3sp.toml         # fill in external_address and natneg_hostname
 openssl rand -hex 32 > secret && chmod 600 secret
 mkdir data && sudo chown 999 data        # the image's user
-GITEA_AUTH=user:token docker compose up -d --build && docker compose logs -f
+docker login git.pband.ch                # until the image is on Docker Hub
+docker compose up -d && docker compose logs -f
 ```
 
-No image is published yet: compose builds it from the repository, which needs a token for the quest bots' private
-tunnel (fetched even without them; to be fixed before the release). Everything you add to `deploy/` stays out of
-git.
+The image is `main`'s, from the project's Gitea registry for now (Docker Hub comes with the release). Everything you
+add to `deploy/` stays out of git.
 
 ### Configuration
 

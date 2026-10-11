@@ -39,8 +39,8 @@ taken (if any). Delete an entry once answered.
   `tokens` as `schema.md` sketched them, with its departures listed there ("Built since"): **the data model is
   yours to review**. A new license allowed for axum's router (matchit): `BSD-3-Clause` (AGPL-compatible).
   The health port's `announce`, `stop` and `bot` stay until the CLI replaces `mh3sp announce` and the rest.
-- **`shared` is a path dependency** (`../../../shared`): local builds work, Woodpecker's (a clone of `core` alone)
-  can't until `shared` is pushed and pinned by commit like the tunnel. Pushing is yours.
+- ~~**`shared` is a path dependency**~~: settled (the user, 2026-10-11): `shared` and `tunnel` are published to the
+  private Gitea registry on a version tag, and pinned exactly; only the image will be public (Docker Hub, later).
 
 - **Bans** (`feat/solo-run2`): a ban targets the player's console (all its hunters), checked at LMP's login, answered
   with an alert ("This console is banned from this server", unverified on consoles, like decision 9 at LMP), the

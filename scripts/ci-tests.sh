@@ -8,7 +8,9 @@ cd "$(dirname "$0")/.."
 
 if [ "${1:-}" = "--docker" ]; then
   image=$(sed -n 's/^ *image: *\(rust:.*\)/\1/p' .woodpecker/push.yml | head -1)
+  # The registry token for our crates (.cargo/config.toml): the developer's, read-only.
   exec docker run --rm -v "$PWD":/src -w /src -v mh3sp-rs-ci-target:/target \
+    -v "$HOME/.cargo/credentials.toml":/usr/local/cargo/credentials.toml:ro \
     -e CARGO_TARGET_DIR=/target "$image" scripts/ci-tests.sh
 fi
 

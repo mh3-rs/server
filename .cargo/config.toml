@@ -1,3 +1,6 @@
-# Fetch git dependencies (the bots' tunnel, over SSH) with the system git: its SSH keys and credentials.
-[net]
-git-fetch-with-cli = true
+# The mh3sp crates (shared, tunnel) are published to the Gitea registry of the `experiment` organization, which is
+# private: cargo needs a token, `Bearer <token>`, in ~/.cargo/credentials.toml ([registries.gitea]) or in
+# CARGO_REGISTRIES_GITEA_TOKEN.
+[registries.gitea]
+index = "sparse+https://git.pband.ch/api/packages/experiment/cargo/"
+credential-provider = "cargo:token"

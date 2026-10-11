@@ -3,12 +3,8 @@
 # event-quest-rotation-full checkout), data/ (owned by uid 999, the image's user: `mkdir data && sudo chown 999 data`).
 services:
   mh3sp:
-    # No published image yet: built from the repository. The quest bots' tunnel is a private repository fetched
-    # even without them: the build needs a Gitea token (GITEA_AUTH=user:token in the environment).
-    build:
-      context: ..
-      secrets: [gitea]
-    image: mh3sp
+    # main's image, from the private Gitea registry until the release on Docker Hub (`docker login git.pband.ch`).
+    image: git.pband.ch/experiment/mh3sp-rs:main
     # NAT negotiation needs the consoles' real addresses: no published ports, no Docker Desktop, no rootless.
     network_mode: host
     restart: unless-stopped
@@ -24,5 +20,3 @@ services:
 secrets:
   mh3sp:
     file: ./secret
-  gitea:
-    environment: GITEA_AUTH
