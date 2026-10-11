@@ -65,6 +65,8 @@ pub struct Context<'a> {
     pub started: SystemTime,
     pub now: SystemTime,
     pub language: Language,
+    /// The Guildmaster's notice (`guildmaster` in `mh3sp.toml`).
+    pub guildmaster: &'a str,
 }
 
 impl Context<'_> {
@@ -232,7 +234,7 @@ fn greeters(ctx: &Context) -> Result<Vec<u8>> {
         text(Text::TradingPostOpen, ctx.language).into_owned(),
         event_text,
         arena.join("\n"),
-        text(Text::Guildmaster, ctx.language).into_owned(),
+        ctx.guildmaster.to_owned(),
     ] {
         pad(&mut out, &t, GREETER_SIZE);
     }
@@ -355,6 +357,7 @@ mod tests {
             started: SystemTime::now(),
             now: SystemTime::now(),
             language: Language::English,
+            guildmaster: crate::config::GUILDMASTER,
         };
         let b = binary(0x01, &ctx).unwrap().unwrap();
         assert_eq!(b.bytes.len(), 5068);

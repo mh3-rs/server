@@ -15,6 +15,31 @@ use wire::packets::*;
 use wire::{Frame, Item, PatData};
 
 /// What the recorded consoles' discs hold (the lab's hosts file points it at AltWFC).
+const MH3SP_ANNOUNCE: &str = concat!(
+    "<BR><CENTER><BODY><SIZE=6>Monster Hunter 3 (Tri) Server Project<BR><BODY>",
+    "<BR><LEFT><SIZE=4>Welcome to the MH3SP Beta Test! We ask that you<BR><BODY>",
+    "keep few things in mind while connected in order to<BR><BODY>",
+    "make the experience as fun as possible for everyone.<BR><BODY>",
+    "No abusing other players, no exploiting bugs, and<BR><BODY>",
+    "please report bugs that you find to the server<BR><BODY>",
+    "staff/dev team. We thank you for your patience as<BR><BODY>",
+    "we prepared this server to be fit for public use,<BR><BODY>",
+    "and ask your continued patience in the weeks to<BR><BODY>",
+    "come as you may encounter some bugs and errors<BR><BODY>",
+    "while playing. Please see the Public Test Server<BR><BODY>",
+    "Roadmap for a list of features we are working on.<BR><BODY>",
+    "<BR><CENTER><C=2>Welcome to Loc Lac!<END>",
+);
+const MH3SP_GUILDMASTER: &str = concat!(
+    "To all hunters:\n",
+    "Loc Lac is in \"beta,\"\n",
+    "whatever that means. Also,\n",
+    "the Arena is back in\n",
+    "operation! And now, a:\n",
+    "haiku: \"Patient warriors /\n",
+    "returning home at long last /\n",
+    "now join hands to hunt!\"",
+);
 /// The tests' `domain`.
 const DOMAIN: &str = "mh3.example.org";
 /// What OPN reads on a disc with our patch for [`DOMAIN`].
@@ -54,6 +79,13 @@ fn config() -> (Config, tempfile::TempDir) {
             .unwrap_or_else(|| repo().join("../reference")),
         encryption: false,
         admins: Vec::new(),
+        name: "Test Server".into(),
+        // MH3SP's texts: the corpus recorded them.
+        announce: MH3SP_ANNOUNCE.into(),
+        no_charge: "<BODY><CENTER>MH3 Server Project - No charge.<END>".into(),
+        terms: "MH3 Server Project - Terms.".into(),
+        subterms: "MH3 Server Project - SubTerms.".into(),
+        guildmaster: MH3SP_GUILDMASTER.into(),
         bot_port: None,
         clock_offset: 0,
         // Replays send faster than any console: `a_chat_flood_is_cut_to_its_rate` turns them on.
@@ -426,7 +458,12 @@ async fn refuses_discs_without_our_patch() {
     running.stop().await;
     assert_eq!(ok, (5, None));
     assert_eq!(unpatched.0, 1);
-    assert!(unpatched.1.unwrap().contains("not patched"));
+    let unpatched = unpatched.1.unwrap();
+    assert!(unpatched.contains("not patched"), "{unpatched}");
+    assert!(
+        unpatched.contains("<SIZE=6>Test Server<"),
+        "the configured name heads it"
+    );
     assert_eq!(unsupported.0, 1);
     assert!(unsupported.1.unwrap().contains("not supported"));
 }

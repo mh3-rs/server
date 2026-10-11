@@ -10,3 +10,9 @@ content_dir = "/opt/mh3sp/content"
 
 # Optional: natneg_strategy, relay_ports, health_address, the ports, tls_dir (default data/tls: the CA, created at the
 # first start; back it up with the database).
+
+# Your texts (a sentence each by default; README, "Configuration"):
+# name = "My Monster Hunter Tri server"
+# announce = "<BODY><CENTER>Welcome to our server!<END>"
+# terms = "Play fair and be kind to other hunters."
+# guildmaster = "To all hunters:\nthe Arena is open!"

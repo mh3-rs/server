@@ -16,7 +16,7 @@ use wire::{Frame, Item, PatData};
 use super::{Fault, Handled, allowed, frame, reply, unexpected};
 use crate::Shared;
 use crate::patch::{Region, natneg_name};
-use crate::text::{Language, Terms, TermsKind, Text, terms, text};
+use crate::text::{Language, Reason, Terms, TermsKind, refusal, terms};
 
 /// Where every disc keeps its game id (`RMHP08`, …).
 const GAME_ID: (u32, u32) = (0x8000_0000, 6);
@@ -144,9 +144,9 @@ impl Opn {
                 self.stage = Stage::Told;
                 let text = match self.refusal {
                     Some(Refusal::Maintenance) => {
-                        shared.maintenance().unwrap_or_default().to_owned().into()
+                        shared.maintenance().unwrap_or_default().to_owned()
                     }
-                    Some(reason) => text(reason.text(), self.language),
+                    Some(reason) => refusal(reason.reason(), &shared.config.name, self.language),
                     None => unreachable!("refused without a reason"),
                 };
                 reply(
@@ -236,7 +236,7 @@ impl Opn {
                 reply(
                     seq,
                     &AnsAnnounce {
-                        text: text(Text::Announce, self.language).into_owned().into(),
+                        text: shared.config.announce.clone().into(),
                     },
                 )
             }
@@ -245,7 +245,7 @@ impl Opn {
                 reply(
                     seq,
                     &AnsNoCharge {
-                        text: text(Text::NoCharge, self.language).into_owned().into(),
+                        text: shared.config.no_charge.clone().into(),
                     },
                 )
             }
@@ -362,23 +362,27 @@ impl Opn {
                 .db
                 .pool()
                 .ok_or_else(|| Fault::Database(anyhow::anyhow!("database not opened")))?;
-            *slot = Some(terms(db, kind, self.language).await?);
+            let configured = match kind {
+                TermsKind::Terms => &shared.config.terms,
+                TermsKind::SubTerms => &shared.config.subterms,
+            };
+            *slot = Some(terms(db, kind, self.language, configured).await?);
         }
         Ok(slot.as_ref().expect("just loaded"))
     }
 }
 
 impl Refusal {
-    fn text(self) -> Text {
+    fn reason(self) -> Reason {
         match self {
             Refusal::Maintenance => unreachable!("maintenance has its own message"),
-            Refusal::NotConfigured => Text::NotConfigured,
-            Refusal::NotReady => Text::NotReady,
-            Refusal::UnsupportedDisc => Text::UnsupportedDisc,
-            Refusal::Unpatched => Text::Unpatched,
-            Refusal::NotAllowed => Text::NotAllowed,
-            Refusal::LoginElsewhere => Text::LoginElsewhere,
-            Refusal::Banned => Text::WiiBanned,
+            Refusal::NotConfigured => Reason::NotConfigured,
+            Refusal::NotReady => Reason::NotReady,
+            Refusal::UnsupportedDisc => Reason::UnsupportedDisc,
+            Refusal::Unpatched => Reason::Unpatched,
+            Refusal::NotAllowed => Reason::NotAllowed,
+            Refusal::LoginElsewhere => Reason::LoginElsewhere,
+            Refusal::Banned => Reason::WiiBanned,
         }
     }
 }

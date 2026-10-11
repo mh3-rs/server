@@ -286,7 +286,12 @@ pub fn write(out: &Path, domain: &str, tls_dir: &Path) -> Result<Vec<String>> {
 }
 
 /// The page players download the patch from (`GET /patch` on the NAS port, the domain's port 80).
-pub(crate) fn page(domain: &str) -> String {
+/// `name` is the server's (`name` in `mh3sp.toml`), escaped for HTML; the domain is checked already (`config.rs`).
+pub(crate) fn page(name: &str, domain: &str) -> String {
+    let name = name
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
     let link = |path: String, label: &str| format!("<a href=\"/patch/{path}\">{label}</a>");
     let both = |path: &dyn Fn(&str) -> String| {
         format!(
@@ -296,9 +301,9 @@ pub(crate) fn page(domain: &str) -> String {
         )
     };
     format!(
-        "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Monster Hunter Tri on {domain}</title>\n\
-         <h1>Monster Hunter Tri on {domain}</h1>\n\
-         <p>The patch for this server: it points the game here and makes it trust this server's certificate. Take the \
+        "<!doctype html>\n<meta charset=\"utf-8\">\n<title>{name}: the patch</title>\n\
+         <h1>{name}</h1>\n\
+         <p>The patch for this server, {domain}: it points the game here and makes it trust this server's certificate. Take the \
          file for your disc and the way you play.</p>\n<ul>\n\
          <li><b>Dolphin, or a Wii booting the disc</b> (Riivolution): {}. Into the <code>riivolution</code> folder \
          of the SD card (Dolphin: <code>Load/Riivolution/riivolution</code> in its user folder).</li>\n\
@@ -417,7 +422,8 @@ mod tests {
 
     #[test]
     fn the_page_links_every_file() {
-        let page = page("mh3.example.org");
+        let page = page("Tom & Jerry's <server>", "mh3.example.org");
+        assert!(page.contains("<h1>Tom &amp; Jerry's &lt;server&gt;</h1>"));
         for (path, _) in files("mh3.example.org", &ca()).unwrap() {
             assert!(page.contains(&format!("href=\"/patch/{path}\"")), "{path}");
         }

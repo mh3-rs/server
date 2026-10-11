@@ -65,6 +65,18 @@ taken (if any). Delete an entry once answered.
 
 ## Questions
 
+- **"Mic chat enabled: You can now talk with other players."** (seen on a console, 2026-10-11). Open. Research in
+  the decomp, not a console test:
+  - The game shows it by itself, once in a layer (a city): its voice option on (option 28) and a Wii Speak detected
+    (`network_pat_control.cpp:3014-3040`, `:3530-3535`, `:8039-8058`). No field we send sets it, and the server
+    can't turn it off (only the player, with the option or by unplugging the Wii Speak).
+  - Voice goes console to console, over the hunts' link (`NetworkLayerPat.cpp:856-907`); each console tells the
+    others its mic is on through `NtcLayerBinary2`, which we relay (`fmp.rs`). So it should work between consoles
+    in a direct link (*inferred*).
+  - The relay is the risk: voice is an estimated ~16 KB/s per peer (528-byte frames at 60 Hz, *inferred*), and the
+    relay caps a console at 20,000 B/s (`relay.rs`): a relayed console talking to 2–3 players would go over, and
+    lose game packets with its voice. To measure with a Wii Speak (an emulated one in Dolphin), the relay forced,
+    before deciding (raise the cap, or drop voice before game packets).
 - **Which content the six quests without small monsters should come from.** The code already serves inline small
   monsters, byte-identical to MH3SP's generator. The live branch (`content/`, 7e21e0a) names `.dat` files that don't
   exist in six quests (Flooded Forest Free-For-All, Gobuled Everything in Sight, Shut Up and Fish!, Speak of the

@@ -69,7 +69,7 @@ async fn patch_page(State(shared): State<Arc<Shared>>) -> Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
-    (html, crate::patch::page(domain)).into_response()
+    (html, crate::patch::page(&shared.config.name, domain)).into_response()
 }
 
 async fn patch_file(State(shared): State<Arc<Shared>>, Path(path): Path<String>) -> Response {

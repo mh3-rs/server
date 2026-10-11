@@ -96,6 +96,10 @@ stops the server, so a typo can't pass for a default.
 | `api_port`, `api_address` | 8281, `127.0.0.1` (default): the API (below). |
 | `admins` | `[]` (default): the Capcom IDs allowed the admins' chat commands (below). |
 | `encryption` | `false` (default); `true` turns on the game's packet encryption (an experiment). |
+| `name` | Your server's name, atop its refusal screens (maintenance aside: that message is yours whole) and its patch's page. Default `Monster Hunter Tri`. |
+| `announce`, `no_charge` | Your texts after the terms, at every login: your welcome, then a short notice. In the game's markup (`<BR>` a new line, `<CENTER>`, `<SIZE=n>`, `<C=n>` a colour, `<END>` last; see `crates/server/src/text.rs`). Default: one sentence each. |
+| `terms`, `subterms` | The terms every console accepts (plain text). A new text shows them again to every console. Default: one sentence each. |
+| `guildmaster` | The Guildmaster's notice in the city (plain text, `\n` between lines). Default: one sentence. |
 
 Logs: the `RUST_LOG` environment variable, `info,sqlx=warn` by default. They are anonymous: IDs, never names or
 addresses; never a secret.

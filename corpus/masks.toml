@@ -86,3 +86,14 @@ packet = "AnsFmpInfo2"
 pattern = "0302200a"
 offset = 2
 len = 2
+
+# The terms' version: ours comes from the text when the configuration sets it (`text.rs`), MH3SP's was always 1.
+[[mask]]
+packet = "AnsTermsVersion"
+offset = 0
+len = 4
+
+[[mask]]
+packet = "AnsSubTermsInfo"
+offset = 0
+len = 4

@@ -2,7 +2,9 @@
 //!
 //! Texts are a dictionary in the code: [`text`] returns English for every [`Text`], so a missing text is a compile
 //! error. Overrides and translations come with the website (M8) by changing only that function's body.
-//! Terms are overridable already (the `terms` table): an edit must change the version the console remembers.
+//! The operator's texts (the announce, the no-charge notice, the terms, the Guildmaster's notice) come from
+//! `mh3sp.toml` (`config.rs`), each with a one-sentence default. Terms are also overridable in the `terms` table: an
+//! edit must change the version the console remembers.
 //! Markup is the game's: `<BR>`, `<BODY>`, `<CENTER>`, `<LEFT>`, `<SIZE=n>`, `<C=n>` (colour), `<END>`.
 
 use std::borrow::Cow;
@@ -28,16 +30,6 @@ impl Language {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Text {
-    /// Shown after the terms, at every login.
-    Announce,
-    /// The billing notice of the Japanese servers; western ones only showed it.
-    NoCharge,
-    // Refusals (`AnsMaintenance`).
-    NotConfigured,
-    NotReady,
-    UnsupportedDisc,
-    Unpatched,
-    NotAllowed,
     // The server type list (content binary 0x01): MH3SP's labels.
     ServerTypeName(usize),
     ServerTypeDescription(usize),
@@ -75,10 +67,6 @@ pub enum Text {
     /// A console that didn't log in through this server's Nintendo login (`nas.rs`): another server's patch, or a
     /// token expired. An alert (LMP).
     UnknownLogin,
-    /// The same, refused at OPN.
-    LoginElsewhere,
-    /// A Wii banned (`access.rs`), refused at OPN.
-    WiiBanned,
     // The town's NPCs (content binary 0x03): MH3SP's texts.
     /// Prices, normal or halved (during Jhen Mohran).
     ToolShop {
@@ -90,7 +78,6 @@ pub enum Text {
     TradingPostOpen,
     /// Heads the event quest list during Jhen Mohran.
     JhenFestival,
-    Guildmaster,
 }
 
 const SERVER_TYPE_NAMES: [&str; 4] = ["Open", "Rookie", "Expert", "Recruiting"];
@@ -169,20 +156,6 @@ fn indexed(list: &[&'static str], i: usize, placeholder: &str) -> Cow<'static, s
     )
 }
 
-/// A refusal screen: the title, a line, and a highlighted line.
-macro_rules! refusal {
-    ($line:literal, $highlight:literal) => {
-        concat!(
-            "<BR><CENTER><BODY><SIZE=6>Monster Hunter 3 (Tri) Server Project<BR><BODY>",
-            "<BR><CENTER><SIZE=4>",
-            $line,
-            "<BR><BODY><BR><CENTER><C=2>",
-            $highlight,
-            "<END>"
-        )
-    };
-}
-
 pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
     Cow::Borrowed(match text {
         Text::ServerTypeName(i) => return indexed(&SERVER_TYPE_NAMES, i, "Type"),
@@ -214,56 +187,53 @@ pub fn text(text: Text, _language: Language) -> Cow<'static, str> {
         Text::ToolShop { sale: false } | Text::MaterialShop { sale: false } => "Prices are normal.",
         Text::TradingPostOpen => "The Trading Post is open!",
         Text::JhenFestival => "The Festival of Fear",
-        Text::Guildmaster => concat!(
-            "To all hunters:\n",
-            "Loc Lac is in \"beta,\"\n",
-            "whatever that means. Also,\n",
-            "the Arena is back in\n",
-            "operation! And now, a:\n",
-            "haiku: \"Patient warriors /\n",
-            "returning home at long last /\n",
-            "now join hands to hunt!\"",
-        ),
-        // MH3SP's texts, kept while the replay harness compares against it.
-        Text::Announce => concat!(
-            "<BR><CENTER><BODY><SIZE=6>Monster Hunter 3 (Tri) Server Project<BR><BODY>",
-            "<BR><LEFT><SIZE=4>Welcome to the MH3SP Beta Test! We ask that you<BR><BODY>",
-            "keep few things in mind while connected in order to<BR><BODY>",
-            "make the experience as fun as possible for everyone.<BR><BODY>",
-            "No abusing other players, no exploiting bugs, and<BR><BODY>",
-            "please report bugs that you find to the server<BR><BODY>",
-            "staff/dev team. We thank you for your patience as<BR><BODY>",
-            "we prepared this server to be fit for public use,<BR><BODY>",
-            "and ask your continued patience in the weeks to<BR><BODY>",
-            "come as you may encounter some bugs and errors<BR><BODY>",
-            "while playing. Please see the Public Test Server<BR><BODY>",
-            "Roadmap for a list of features we are working on.<BR><BODY>",
-            "<BR><CENTER><C=2>Welcome to Loc Lac!<END>",
-        ),
-        Text::NoCharge => "<BODY><CENTER>MH3 Server Project - No charge.<END>",
-        Text::NotConfigured => refusal!(
-            "This server is not configured yet.",
-            "Please check back later!"
-        ),
-        Text::NotReady => refusal!(
-            "The server is not ready.",
-            "Please try again in a few minutes."
-        ),
-        Text::UnsupportedDisc => refusal!(
-            "This version of the game is not supported.",
-            "Supported: Monster Hunter Tri, PAL and US."
-        ),
-        Text::Unpatched => refusal!(
-            "This game is not patched for this server.",
-            "Please get the patch from the server's website."
-        ),
-        Text::NotAllowed => refusal!("This console is not allowed on this server.", ""),
-        Text::LoginElsewhere => refusal!(
-            "This console didn't log in through this server.",
-            "Please check the patch, then try again."
-        ),
-        Text::WiiBanned => refusal!("This console is banned from this server.", ""),
     })
+}
+
+/// Why OPN refuses a console (`game::opn`): a screen of its own (`AnsMaintenance`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reason {
+    NotConfigured,
+    NotReady,
+    UnsupportedDisc,
+    Unpatched,
+    NotAllowed,
+    /// A console that didn't log in through this server's Nintendo login (`nas.rs`): another server's patch, or a
+    /// token expired.
+    LoginElsewhere,
+    /// A Wii banned (`access.rs`).
+    WiiBanned,
+}
+
+/// A refusal screen: the server's name (`name` in `mh3sp.toml`), the reason, and a highlighted line.
+pub fn refusal(reason: Reason, name: &str, _language: Language) -> String {
+    let (line, highlight) = match reason {
+        Reason::NotConfigured => (
+            "This server is not configured yet.",
+            "Please check back later!",
+        ),
+        Reason::NotReady => (
+            "The server is not ready.",
+            "Please try again in a few minutes.",
+        ),
+        Reason::UnsupportedDisc => (
+            "This version of the game is not supported.",
+            "Supported: Monster Hunter Tri, PAL and US.",
+        ),
+        Reason::Unpatched => (
+            "This game is not patched for this server.",
+            "Please get the patch from the server's website.",
+        ),
+        Reason::NotAllowed => ("This console is not allowed on this server.", ""),
+        Reason::LoginElsewhere => (
+            "This console didn't log in through this server.",
+            "Please check the patch, then try again.",
+        ),
+        Reason::WiiBanned => ("This console is banned from this server.", ""),
+    };
+    format!(
+        "<BR><CENTER><BODY><SIZE=6>{name}<BR><BODY><BR><CENTER><SIZE=4>{line}<BR><BODY><BR><CENTER><C=2>{highlight}<END>"
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,15 +249,30 @@ pub struct Terms {
     pub text: String,
 }
 
-/// The built-in terms are version 1; overrides (`terms` rows) start at 2.
-const BUILT_IN_VERSION: u32 = 1;
+/// The default terms are version 1; overrides (`terms` rows) start at 2.
+const DEFAULT_VERSION: u32 = 1;
+
+/// The version of the configuration's terms: 1 for the default, else from the text, so a console shows edited
+/// terms again. The top bit set: never a `terms` row's id.
+fn configured_version(text: &str, default: &str) -> u32 {
+    if text == default {
+        return DEFAULT_VERSION;
+    }
+    let hash = openssl::sha::sha256(text.as_bytes());
+    u32::from_be_bytes([hash[0], hash[1], hash[2], hash[3]]) | 0x8000_0000
+}
 
 /// The current terms for `language`: the latest override in that language, else the latest in English, else the
-/// built-in ones.
-pub async fn terms(db: &SqlitePool, kind: TermsKind, language: Language) -> sqlx::Result<Terms> {
-    let (kind_name, built_in) = match kind {
-        TermsKind::Terms => ("terms", "MH3 Server Project - Terms."),
-        TermsKind::SubTerms => ("subterms", "MH3 Server Project - SubTerms."),
+/// configuration's (`configured`, `terms` or `subterms` in `mh3sp.toml`).
+pub async fn terms(
+    db: &SqlitePool,
+    kind: TermsKind,
+    language: Language,
+    configured: &str,
+) -> sqlx::Result<Terms> {
+    let (kind_name, default) = match kind {
+        TermsKind::Terms => ("terms", crate::config::TERMS),
+        TermsKind::SubTerms => ("subterms", crate::config::SUBTERMS),
     };
     let code = language.code();
     let row = sqlx::query!(
@@ -305,8 +290,27 @@ pub async fn terms(db: &SqlitePool, kind: TermsKind, language: Language) -> sqlx
             text: row.value,
         },
         None => Terms {
-            version: BUILT_IN_VERSION,
-            text: built_in.to_owned(),
+            version: configured_version(configured, default),
+            text: configured.to_owned(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edited_terms_get_a_new_version_never_a_row_s() {
+        let default = crate::config::TERMS;
+        assert_eq!(configured_version(default, default), DEFAULT_VERSION);
+        let edited = configured_version("No griefing.", default);
+        assert!(edited & 0x8000_0000 != 0, "never a `terms` row's id");
+        assert_ne!(edited, configured_version("No griefing!", default));
+        assert_eq!(
+            edited,
+            configured_version("No griefing.", default),
+            "stable across restarts"
+        );
+    }
 }

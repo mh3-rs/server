@@ -1914,6 +1914,7 @@ fn binary(shared: &Shared, kind: u8) -> Result<Binary, Fault> {
         started: shared.started,
         now: shared.now(),
         language: Language::default(),
+        guildmaster: &shared.config.guildmaster,
     };
     content::binary(kind, &ctx)
         .map_err(Fault::Server)?

@@ -23,6 +23,10 @@
 //! | `content_dir` | `content`: event content, MH3SP's files (`event/…`); never in this repository |
 //! | `admins` | `[]`: Capcom IDs allowed the admins' chat commands (`game::commands`) |
 //! | `encryption` | `false`: `true` gives consoles a key at login, which turns on the game's packet encryption (an experiment) |
+//! | `name` | `Monster Hunter Tri`: the server's name, atop its refusal screens and its patch's page |
+//! | `announce`, `no_charge` | a sentence: the texts after the terms at each login, in the game's markup (`text.rs`) |
+//! | `terms`, `subterms` | a sentence: the terms a console accepts; a new text shows them again (`text.rs`) |
+//! | `guildmaster` | a sentence: the Guildmaster's notice in the city (plain text, `\n` between lines) |
 //!
 //! Without `external_address` or `domain` the server runs but refuses every console ("not configured").
 //! Without a secret it doesn't start (maintenance mode doesn't need one). The secret must never change once
@@ -66,6 +70,13 @@ pub struct Config {
     /// Capcom IDs allowed the admins' chat commands (`game::commands`). ponytail: until the website's users and
     /// roles (`../docs/schema.md`, S2).
     pub admins: Vec<String>,
+    /// The operator's texts (`text.rs`), each with a one-sentence default.
+    pub name: String,
+    pub announce: String,
+    pub no_charge: String,
+    pub terms: String,
+    pub subterms: String,
+    pub guildmaster: String,
     /// Seconds added to the system clock (not an environment variable, 0 in production): tests replay recordings
     /// at their date, since content depends on it.
     pub clock_offset: i64,
@@ -117,6 +128,12 @@ struct File {
     bot_port: Option<u16>,
     encryption: bool,
     admins: Vec<String>,
+    name: Option<String>,
+    announce: Option<String>,
+    no_charge: Option<String>,
+    terms: Option<String>,
+    subterms: Option<String>,
+    guildmaster: Option<String>,
 }
 
 impl Config {
@@ -170,6 +187,12 @@ impl Config {
             bot_port: f.bot_port,
             encryption: f.encryption,
             admins: f.admins,
+            name: f.name.unwrap_or_else(|| NAME.into()),
+            announce: f.announce.unwrap_or_else(|| ANNOUNCE.into()),
+            no_charge: f.no_charge.unwrap_or_else(|| NO_CHARGE.into()),
+            terms: f.terms.unwrap_or_else(|| TERMS.into()),
+            subterms: f.subterms.unwrap_or_else(|| SUBTERMS.into()),
+            guildmaster: f.guildmaster.unwrap_or_else(|| GUILDMASTER.into()),
             clock_offset: 0,
             rate_limits: true,
             loopback_exempt: true,
@@ -199,6 +222,14 @@ fn domain(value: &str) -> Result<String> {
     }
     Ok(value)
 }
+
+/// The texts' defaults: a sentence each, the operator's to replace.
+pub const NAME: &str = "Monster Hunter Tri";
+pub const ANNOUNCE: &str = "<BODY><CENTER>Welcome, hunter!<END>";
+pub const NO_CHARGE: &str = "<BODY><CENTER>Playing here is free.<END>";
+pub const TERMS: &str = "Play fair and be kind to other hunters.";
+pub const SUBTERMS: &str = "Have fun!";
+pub const GUILDMASTER: &str = "Happy hunting!";
 
 fn listen(key: &str, port: Option<u16>, default: u16) -> Result<SocketAddr> {
     match port.unwrap_or(default) {
@@ -285,6 +316,17 @@ mod tests {
                 && !c.encryption
         );
         assert_eq!(c.tls_dir, PathBuf::from("data/tls"));
+        assert_eq!(
+            [
+                c.name,
+                c.announce,
+                c.no_charge,
+                c.terms,
+                c.subterms,
+                c.guildmaster
+            ],
+            [NAME, ANNOUNCE, NO_CHARGE, TERMS, SUBTERMS, GUILDMASTER]
+        );
     }
 
     #[test]
@@ -300,9 +342,14 @@ mod tests {
             lmp_port = 9201
             encryption = true
             admins = ["ABC123"]
+            announce = "<BODY><CENTER>Hello<END>"
+            guildmaster = "Line one\nline two"
             "#,
         )
         .unwrap();
+        assert_eq!(c.announce, "<BODY><CENTER>Hello<END>");
+        assert_eq!(c.guildmaster, "Line one\nline two");
+        assert_eq!(c.terms, TERMS);
         assert_eq!(c.external_address.as_deref(), Some("203.0.113.10"));
         assert_eq!(c.domain.as_deref(), Some("mh3.example.org"), "lowercase");
         assert_eq!(c.secret.unwrap().0, b"s");
