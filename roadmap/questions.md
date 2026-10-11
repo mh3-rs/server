@@ -11,22 +11,6 @@ taken (if any). Delete an entry once answered.
   text). Provisional: keep the alert (decision 9's wording); a lab check is pending in `recordings.md`. If it hangs,
   LMP goes back to dropping and FMP keeps the alert.
 
-- **The limits' values** ("Safe to leave running"; [user] in the roadmap): each a constant with its reason, picked
-  by me, to confirm or change.
-  - Write timeout: 30 s (`net.rs`, `WRITE_TIMEOUT`), as long as an unanswered line check.
-  - TCP connections: 2000 in total, 16 per IP address (`net.rs`); loopback has no per-address cap (the lab and the
-    tests run every console on one address).
-  - Per console (`fmp.rs`, token buckets; the corpus peaks at 9 relayed messages in a second, 42 in ten, and 1 chat line a second): relayed
-    game traffic 20 a second (burst 40), chat 1 a second (burst 5), quest joins 1 a second (burst 5; a join over it
-    gets "Too fast: please wait a moment."). Over the limit, a relayed message or a chat line is dropped quietly.
-  - New consoles: 5 an hour per IP address (`game::Admission`); LMP's first visit within 10 minutes of passing OPN
-    from the same address. Risk: a carrier-grade NAT that changes a console's public address between two
-    connections would be refused at LMP (the encryption's keys in transit already assume the same address).
-  - NatNeg negotiations under way per IP address: 32 (`natneg.rs`, `MAX_PER_ADDRESS`); a party needs 3 per console,
-    and a finished one no longer counts.
-  - Every refusal by a limit counts in `/metrics`' `limited` (logged at `debug` only, so a flood can't flood the
-    logs): the operator's way to see a limit too tight.
-
 - **Chat commands** (`feat/solo-run2`, from the notes): the admins are Capcom IDs in the configuration (`admins`)
   until the website's users and roles; an admin command from anyone else answers "Unknown command" (not "not
   allowed": it doesn't say there's something to try). `/tell` names a player by Capcom ID or by a name only one
@@ -60,8 +44,8 @@ taken (if any). Delete an entry once answered.
   sign-in.) (The
   `secret`/`secret__file` warning lost before the logger is gone: both set is now an error.)
 
-- **The website's end-to-end tests need `core`'s binary**: separate repositories make that a cross-repository CI
-  job (or an image of the server to run as a service, once the image pipeline exists). Until then, local only.
+- **The website's end-to-end tests need `core`'s binary**: separate repositories. `main`'s image is in the Gitea
+  registry now (`git.pband.ch/experiment/mh3sp-rs:main`): the website's CI can run it as a service. Not wired yet.
 
 ## Questions
 
