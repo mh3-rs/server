@@ -1503,8 +1503,7 @@ dependencies = [
 [[package]]
 name = "shared"
 version = "0.1.0"
-source = "sparse+https://git.pband.ch/api/packages/experiment/cargo/"
-checksum = "f9c5613a44435dda37f7f31a919799250be5f140425d715e955f3f3a418be9b7"
+source = "git+https://github.com/mh3-rs/shared?rev=b826efeeb6a0bde62d81093c5f1105ed392afa34#b826efeeb6a0bde62d81093c5f1105ed392afa34"
 dependencies = [
  "serde",
 ]
@@ -2066,8 +2065,7 @@ dependencies = [
 [[package]]
 name = "tunnel"
 version = "0.1.0"
-source = "sparse+https://git.pband.ch/api/packages/experiment/cargo/"
-checksum = "649d8f010e547d97e12ca4f1b794ff642f3a54c724d30f2b4e9f5aa500c21058"
+source = "git+https://github.com/mh3-rs/tunnel?rev=2387ff5f7f8e6c4463823c73e5b395b3fbb3fcf9#2387ff5f7f8e6c4463823c73e5b395b3fbb3fcf9"
 dependencies = [
  "anyhow",
  "bytes",

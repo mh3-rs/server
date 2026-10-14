@@ -22,5 +22,8 @@ multiple-versions = "allow"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# Our registry (.cargo/config.toml), besides crates.io.
-allow-registry = ["https://github.com/rust-lang/crates.io-index", "sparse+https://git.pband.ch/api/packages/experiment/cargo/"]
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Our crates (shared, tunnel), from their GitHub mirrors.
+[sources.allow-org]
+github = ["mh3-rs"]

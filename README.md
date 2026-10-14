@@ -4,6 +4,10 @@ A server for *Monster Hunter Tri*'s online mode (Wii), in Rust: login, world ser
 friends, NAT negotiation and a relay for consoles that can't connect directly. The active plans are in
 [`roadmap/`](roadmap/); the lasting decisions in the `docs` repository.
 
+The [GitHub repository](https://github.com/mh3-rs/server) is a read-only mirror of `main`, pushed by our CI once
+the checks and the image pass; the image is [`mh3rs/server`](https://hub.docker.com/r/mh3rs/server) on Docker Hub.
+Issues are off; reach us at [pascal@pband.ch](mailto:pascal@pband.ch).
+
 ## Against MH3SP
 
 [MH3SP](https://github.com/sepalani/MH3SP) (Python) is the reference. Each claim below names its proof; what isn't
@@ -67,13 +71,12 @@ git clone -b event-quest-rotation-full https://github.com/sepalani/MH3SP content
 cp mh3sp.toml.example mh3sp.toml         # fill in external_address and domain
 openssl rand -hex 32 > secret && chmod 600 secret
 mkdir data && sudo chown 999 data        # the image's user
-docker login git.pband.ch                # until the image is on Docker Hub
 docker compose up -d && docker compose logs -f
 docker compose exec mh3sp mh3sp patch data/patch   # the DNS records to create (and the patch's files)
 ```
 
-The image is `main`'s, from the project's Gitea registry for now (Docker Hub comes with the release). Everything you
-add to `deploy/` stays out of git.
+The image is `mh3rs/server:latest`, `main`'s last (also tagged by commit and by version, `X`, `X.Y`, `X.Y.Z`), for
+amd64 and arm64. Everything you add to `deploy/` stays out of git.
 
 ### Configuration
 

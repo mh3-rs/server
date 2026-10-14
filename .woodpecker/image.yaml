@@ -1,6 +1,6 @@
-# The server's image, to the Gitea registry (git.pband.ch/experiment/mh3sp-rs), on main once the checks pass: tagged
-# `main`, the commit, and the server's version as X, X.Y and X.Y.Z (crates/server/Cargo.toml): main is the only branch,
-# so its last image is the version's. Docker Hub: roadmap/docker-hub-github.md.
+# The server's image, on main once the checks pass, to Gitea's registry (git.pband.ch/mh3-rs/server, what the
+# deployment pulls) and Docker Hub (mh3rs/server, public), with one tag list for both: `latest`, the commit (for a
+# rollback), and the server's version as X, X.Y and X.Y.Z (crates/server/Cargo.toml). Only main reaches either.
 when:
   - event: push
     branch: main
@@ -18,7 +18,7 @@ steps:
       # The package's own `version = "X.Y.Z"` line (dependencies' versions are inside braces, never at a line's start).
       - version=$$(sed -n 's/^version = "\([^"]*\)".*/\1/p' crates/server/Cargo.toml)
       - test -n "$$version"
-      - printf '%s\n' main "$${CI_COMMIT_SHA:0:8}" "$$version" "$${version%.*}" "$${version%%.*}" > .tags
+      - printf '%s\n' latest "$${CI_COMMIT_SHA:0:8}" "$$version" "$${version%.*}" "$${version%%.*}" > .tags
       - cat .tags
 
   # The only privileged plugin the server trusts (WOODPECKER_PLUGINS_PRIVILEGED): keep this exact version.
@@ -26,17 +26,21 @@ steps:
     image: woodpeckerci/plugin-docker-buildx:5.0.0
     depends_on: [tags]
     settings:
-      registry: git.pband.ch
-      repo: git.pband.ch/${CI_REPO}
-      # amd64 only while we iterate on the deployment (arm64 under emulation multiplies the build time); arm64 comes
-      # back for the release.
-      platforms: linux/amd64
+      repo:
+        - git.pband.ch/${CI_REPO}
+        - mh3rs/server
+      # arm64 under emulation: several times the build time, for the ARM hosts that pull a public image.
+      platforms: linux/amd64,linux/arm64
       dockerfile: Dockerfile
       tags_file: .tags
-      username:
-        from_secret: gitea_user
-      password:
-        from_secret: gitea_token
-      # The registry token for cargo (the Dockerfile's build secret): the plugin holds the password, the same Gitea
-      # token, in PLUGIN_PASSWORD, and a secret named after a variable reads it. No comma: the plugin splits on them.
-      secrets: id=PLUGIN_PASSWORD
+      logins:
+        - registry: https://git.pband.ch
+          username:
+            from_secret: gitea_user
+          password:
+            from_secret: gitea_token
+        - registry: https://index.docker.io/v1/
+          username:
+            from_secret: docker_hub_user
+          password:
+            from_secret: docker_hub_token

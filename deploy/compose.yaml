@@ -4,8 +4,8 @@
 # the server creates its CA in data/tls at the first start).
 services:
   mh3sp:
-    # main's image, from the private Gitea registry until the release (`docker login git.pband.ch`).
-    image: git.pband.ch/experiment/mh3sp-rs:main
+    # main's last image; pin a version (`mh3rs/server:X.Y.Z`) or a commit to choose when it changes.
+    image: mh3rs/server:latest
     restart: unless-stopped
     secrets: [mh3sp]
     # Each port published unchanged: the server hands consoles its own port numbers. Rootful Docker on Linux keeps the

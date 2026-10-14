@@ -20,9 +20,9 @@ bot = ["dep:tunnel"]
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.6.0"
-# The quest bots' tunnel, shared with mh3sp-brain, from our registry (.cargo/config.toml): pinned exactly, both sides
-# must agree.
-tunnel = { version = "=0.1.0", registry = "gitea", optional = true }
+# The quest bots' tunnel, shared with mh3sp-brain, from its GitHub mirror: pinned by commit, its version checked, both
+# sides must agree (../docs/CLAUDE.md, "Our crates").
+tunnel = { git = "https://github.com/mh3-rs/tunnel", rev = "2387ff5f7f8e6c4463823c73e5b395b3fbb3fcf9", version = "=0.1.0", optional = true }
 bytes = "1.12.1"
 dashmap = "6.2.1"
 futures-util = "0.3.34"
@@ -41,8 +41,8 @@ uuid = { version = "1.27.0", features = ["v7"] }
 wire = { path = "../wire" }
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
-# The API's messages, shared with the clients, from our registry: pinned exactly, as the tunnel.
-shared = { version = "=0.1.0", registry = "gitea" }
+# The API's messages, shared with the clients, from its GitHub mirror: pinned as the tunnel.
+shared = { git = "https://github.com/mh3-rs/shared", rev = "b826efeeb6a0bde62d81093c5f1105ed392afa34", version = "=0.1.0" }
 
 [dev-dependencies]
 # Paused time in tests.

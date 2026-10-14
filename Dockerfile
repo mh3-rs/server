@@ -6,12 +6,7 @@ WORKDIR /src
 COPY . .
 # FEATURES=prometheus builds the `…-prometheus` image (`/metrics/prometheus`).
 ARG FEATURES=""
-# Our crates (shared, tunnel) come from the private Gitea registry (.cargo/config.toml): a Gitea token, given as a
-# build secret and passed to cargo for this one command, so it's in no layer. Its id is the variable that holds it in
-# the CI's build plugin (.woodpecker/image.yaml); locally: `--secret id=PLUGIN_PASSWORD,env=GITEA_TOKEN`.
-RUN --mount=type=secret,id=PLUGIN_PASSWORD,env=GITEA_TOKEN \
-    CARGO_REGISTRIES_GITEA_TOKEN="Bearer ${GITEA_TOKEN}" \
-    cargo build --release --locked -p server --features "$FEATURES"
+RUN cargo build --release --locked -p server --features "$FEATURES"
 
 FROM debian:bookworm-slim
 RUN apt-get update \

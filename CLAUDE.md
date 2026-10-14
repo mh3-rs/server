@@ -1,4 +1,4 @@
-# mh3sp-rs
+# mh3sp server
 
 @../docs/CLAUDE.md
 
