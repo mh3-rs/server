@@ -7,3 +7,9 @@ edition = "2024"
 rust-version = "1.98"
 publish = false
 license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+# Our crates, from their GitHub mirrors: pinned by commit, their version checked; both ends of the API and of the
+# tunnel must agree (../docs/CLAUDE.md, "Our crates").
+tunnel = { git = "https://github.com/mh3-rs/tunnel", rev = "2387ff5f7f8e6c4463823c73e5b395b3fbb3fcf9", version = "=0.1.0" }
+shared = { git = "https://github.com/mh3-rs/shared", rev = "b826efeeb6a0bde62d81093c5f1105ed392afa34", version = "=0.1.0" }

@@ -1,4 +1,4 @@
-# The server's image, on main once the checks pass, to Gitea's registry (git.pband.ch/mh3-rs/server, what the
+# The server's image, on main once the checks pass, to Gitea's registry (git.pband.ch/mh3-rs/server, what our own
 # deployment pulls) and Docker Hub (mh3rs/server, public), with one tag list for both: `latest`, the commit (for a
 # rollback), and the server's version as X, X.Y and X.Y.Z (crates/server/Cargo.toml). Only main reaches either.
 when:

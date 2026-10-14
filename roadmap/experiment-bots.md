@@ -241,8 +241,9 @@ before the next; this sprint's scope is to settle.
 - **Three repositories** (2026-10-10): `core` (this one, the server), `brain` (`mh3sp-brain`) and `tunnel` (the
   messages and framing both use), side by side under `~/git/perso/mh3sp/`. `core` and `brain` depend on `tunnel` over
   git, pinned to a commit (branch `main`); a change to the messages is a `tunnel` commit, then both sides move to it.
-  `tunnel` is private: CI fetches it over HTTPS with `gitea_token` (a URL rewrite in the pipeline), the Dockerfile with
-  a build secret. Rejected: one repository with three crates (one CI, but the user wanted them apart).
+  `tunnel` is public since 2026-10-14, from its GitHub mirror
+  ([`history/docker-hub-github.md`](../../docs/history/docker-hub-github.md)). Rejected: one repository with three
+  crates (one CI, but the user wanted them apart).
 - **The tunnel** (2026-10-10): **one TCP connection, kept open, for every bot** (10 bots: one connection; each
   message names its bot); the server listens on localhost only, on a port set by a setting (`BOT_PORT`: no setting,
   no bots), and the brain connects. Messages are length-prefixed frames, each a serde value encoded in binary

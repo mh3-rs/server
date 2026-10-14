@@ -58,8 +58,7 @@ guide is its page there ([`deploy/README.md`](deploy/README.md) here).
 `scripts/dev.sh` prepares `mh3sp.toml` and `.env` (sqlx's tools); `scripts/ci-tests.sh` runs what CI runs. Every quest of `CONTENT_DIR` is checked
 byte-identical to MH3SP's own generator, through the hashes in `crates/server/src/content/reference.sha256`; a
 content folder with quests it doesn't know adds them with `tools/reference-hashes.sh <checkout>` (Python 2 in
-Docker). The working rules are in
-[`CLAUDE.md`](CLAUDE.md).
+Docker).
 
 ## Sources
 

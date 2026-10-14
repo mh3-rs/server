@@ -24,10 +24,12 @@ steps:
     commands:
       - apk add --no-cache curl jq >/dev/null
       # `$$` is a `$` for the shell: Woodpecker substitutes the others.
-      - jq -n --arg u "$$HUB_USER" --arg s "$$HUB_TOKEN" '{identifier:$$u,secret:$$s}' > auth.json
+      # The sign-in through a pipe, never a file in the workspace; pipefail, so a refused sign-in stops here.
+      - set -o pipefail
       - >-
-        access=$$(curl -fsS -H "Content-Type: application/json" -d @auth.json https://hub.docker.com/v2/auth/token
-        | jq -r .access_token)
+        access=$$(jq -n --arg u "$$HUB_USER" --arg s "$$HUB_TOKEN" '{identifier:$$u,secret:$$s}'
+        | curl -fsS -H "Content-Type: application/json" -d @- https://hub.docker.com/v2/auth/token
+        | jq -er .access_token)
       - jq -Rs '{description:"Monster Hunter Tri online server (Wii), in Rust", full_description:.}' deploy/README.md > page.json
       - >-
         curl -fsS -o /dev/null -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $$access"
