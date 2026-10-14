@@ -55,10 +55,14 @@ rollback), `X`, `X.Y`, `X.Y.Z` (`crates/server/Cargo.toml`). New secrets `docker
 The deployment pulls `:latest` from Gitea (Docker Hub's
 pull quotas).
 
-## README and `deploy/compose.yaml`
+## README, Docker Hub's page, `deploy/compose.yaml`
 
-The Docker Hub image, no `docker login`; the README says the GitHub repositories are mirrors (issues disabled, where
-to reach us instead). `docs/CLAUDE.md`'s "Our crates" and `00. global.md`'s CI paragraph say the new way.
+The README is for players and the project (the user, 2026-10-14): how to join (the patch at
+`https://mh3.pband.ch/patch`), the Discord, against MH3SP, the sources we stand on, that GitHub is a mirror (issues off;
+Discord or the email). How to run a server is Docker Hub's page: `deploy/README.md`, the operator's guide with
+absolute links (it is read on Docker Hub), set by `.woodpecker/docker-hub-page.yaml` on `main` when it changes
+(Docker Hub's API, the token needs the Read, Write, Delete scope). `deploy/compose.yaml` pulls `mh3rs/server:latest`,
+no `docker login`. `docs/CLAUDE.md`'s "Our crates" and `00. global.md`'s CI paragraph say the new way.
 
 ## Decisions
 
@@ -84,6 +88,8 @@ to reach us instead). `docs/CLAUDE.md`'s "Our crates" and `00. global.md`'s CI p
 11. **The corpus goes public as is**: lab captures, private addresses only; the tests need it. The author email is
     public too (the user's call).
 12. **Issues disabled on GitHub**; pull requests can't be, the README points elsewhere.
+13. **The operator's guide on Docker Hub, synced by the CI** from `deploy/README.md`: versioned with the code, never
+    pasted by hand (which drifts). Rejected: keeping it in the README, which is now the players' and the project's.
 
 ## Tests
 
@@ -105,7 +111,7 @@ No code changes the server's behaviour: the proof is the CI and a clean build.
 ## Not in this sprint
 
 The website (mirror, image, licence), `brain` and `cli` on GitHub, tags on GitHub and Docker Hub, CI for pull
-requests on GitHub, the Docker Hub page's description.
+requests on GitHub.
 
 ## Done when
 

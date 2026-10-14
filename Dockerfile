@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# mh3sp server image. Configuration: /opt/mh3sp/mh3sp.toml, every key with a default (README.md,
+# mh3sp server image. Configuration: /opt/mh3sp/mh3sp.toml, every key with a default (deploy/README.md,
 # crates/server/src/config.rs). The SQLite database lives in the /opt/mh3sp/data volume (mount it to keep it).
 FROM rust:1.98.0-bookworm AS build
 WORKDIR /src
@@ -23,7 +23,7 @@ VOLUME /opt/mh3sp/data
 USER mh3sp
 # TCP: the Nintendo login (HTTP), OPN (TLS), LMP, FMP, health. UDP: the availability check, NAT negotiation, the
 # relay (relay_ports). Publish them unchanged: NAT negotiation needs the consoles' real addresses, which rootful Docker
-# on Linux keeps (see README.md).
+# on Linux keeps (see deploy/README.md).
 EXPOSE 80 8200 8201 8202 8280 27900/udp 27901/udp 40000-40099/udp
 # Liveness only: a database problem shows on /health/ready, not here (see crates/server/src/health.rs).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD ["mh3sp", "healthcheck"]

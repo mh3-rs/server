@@ -1,0 +1,34 @@
+# Docker Hub's page for mh3rs/server: the operator's guide, deploy/README.md, on main when it changes. Docker Hub's
+# API, as peter-evans/dockerhub-description calls it; the token needs the Read, Write, Delete scope to edit a page.
+when:
+  - event: push
+    branch: main
+    path: deploy/README.md
+  - event: manual
+    branch: main
+
+# The image's first push creates the repository: when the image runs too, wait for it.
+depends_on:
+  - push
+  - name: image
+    optional: true
+
+steps:
+  - name: page
+    image: alpine:3.22
+    environment:
+      HUB_USER:
+        from_secret: docker_hub_user
+      HUB_TOKEN:
+        from_secret: docker_hub_token
+    commands:
+      - apk add --no-cache curl jq >/dev/null
+      # `$$` is a `$` for the shell: Woodpecker substitutes the others.
+      - jq -n --arg u "$$HUB_USER" --arg s "$$HUB_TOKEN" '{identifier:$$u,secret:$$s}' > auth.json
+      - >-
+        access=$$(curl -fsS -H "Content-Type: application/json" -d @auth.json https://hub.docker.com/v2/auth/token
+        | jq -r .access_token)
+      - jq -Rs '{description:"Monster Hunter Tri online server (Wii), in Rust", full_description:.}' deploy/README.md > page.json
+      - >-
+        curl -fsS -o /dev/null -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $$access"
+        -d @page.json https://hub.docker.com/v2/repositories/mh3rs/server/
