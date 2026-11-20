@@ -524,6 +524,112 @@ async fn opn_s_certificate_verifies_against_the_patch_s_ca() {
     running.stop().await;
 }
 
+/// What `mh3sp check` sees of a server on `127.0.0.1`: the game's ports replaced by the server's random ones, `port`
+/// swapped in by the test where it breaks one.
+async fn check_report(
+    running: &server::Running,
+    change: impl FnOnce(&mut server::check::Ports),
+) -> String {
+    let mut ports = server::check::Ports {
+        nas: running.nas.port(),
+        opn: running.opn.port(),
+        lmp: running.lmp.unwrap().port(),
+        fmp: running.fmp.unwrap().port(),
+        qr: running.qr.unwrap().port(),
+    };
+    change(&mut ports);
+    let here = Some(std::net::Ipv4Addr::LOCALHOST);
+    let report = server::check::Report(server::check::probe(DOMAIN, &[here; 6], &ports).await);
+    format!("{report}\npassed={}", report.passed())
+}
+
+/// The `FAIL` lines of a `check_report`.
+fn check_failures(report: &str) -> Vec<&str> {
+    report.lines().filter(|l| l.starts_with("FAIL")).collect()
+}
+
+/// How many checks of a `check_report` passed.
+fn check_passes(report: &str) -> usize {
+    report.lines().filter(|l| l.starts_with("ok    ")).count()
+}
+
+/// `mh3sp check` against a server whose forwards are all in place: every service answers and the run passes.
+#[tokio::test]
+async fn check_passes_against_a_reachable_server() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let report = check_report(&running, |_| {}).await;
+    assert_eq!(check_passes(&report), 5, "{report}");
+    assert!(!report.contains("FAIL"), "{report}");
+    assert!(report.ends_with("passed=true"), "{report}");
+    running.stop().await;
+}
+
+/// A closed TCP port fails its own line, with what to forward, and only that one.
+#[tokio::test]
+async fn check_fails_a_closed_tcp_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // A port nothing listens on: bound, then released.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err(),
+        "the port must refuse, or the test proves nothing"
+    );
+    let report = check_report(&running, |p| p.lmp = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(
+        failed[0].contains(&format!("TCP {port} {DOMAIN} (LMP)")),
+        "{report}"
+    );
+    assert!(
+        failed[0].contains(&format!("forward TCP {port}")),
+        "{report}"
+    );
+    assert_eq!(check_passes(&report), 4, "{report}");
+    assert!(report.ends_with("passed=false"), "{report}");
+    running.stop().await;
+}
+
+/// A UDP port where nothing answers (a router dropping the datagrams) fails after its timeout, and the others pass.
+#[tokio::test]
+async fn check_fails_a_silent_udp_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // Bound and held, never read: the datagrams arrive and nothing comes back.
+    let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let report = check_report(&running, |p| p.qr = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(failed[0].contains(&format!("UDP {port}")), "{report}");
+    assert!(failed[0].contains("forward UDP"), "{report}");
+    assert!(failed[0].contains("no answer"), "{report}");
+    assert_eq!(check_passes(&report), 4, "{report}");
+    drop(silent);
+    running.stop().await;
+}
+
+/// Port 80 answering something else than the patch page (a proxy's error, another service) fails with the status.
+#[tokio::test]
+async fn check_fails_port_80_when_the_patch_page_is_not_served() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // The health port answers HTTP, but has no `/patch`.
+    assert_eq!(http_status(running.health, "/patch").await, "404");
+    let report = check_report(&running, |p| p.nas = running.health.port()).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(failed[0].contains("GET /patch"), "{report}");
+    assert!(failed[0].contains("404"), "{report}");
+    running.stop().await;
+}
+
 /// Players download the patch from the domain's port 80, the Nintendo login's: each file as `mh3sp patch` writes it.
 #[tokio::test]
 async fn the_patch_downloads_from_the_nas_port() {

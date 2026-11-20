@@ -113,6 +113,20 @@ these numbers. Docker's published ports go around `ufw`'s rules: the router is w
 | 8281 | TCP | the API: not to open as such, behind a reverse proxy with TLS |
 | 8280 | TCP | not to open: health, metrics and operator commands, on 127.0.0.1 (`health_address`; with `0.0.0.0` for a metrics scraper elsewhere, keep it behind a firewall: its commands have no authentication yet) |
 
+**Check from outside.** The router is where a forward goes missing, and the server's log shows nothing when it does
+(the first outside player of the first deployment got errors 20100, then 11613: port 80 was forwarded, 8200–8202 were
+not). From another machine, not the server's network, whose router would loop the traffic back:
+
+```sh
+docker run --rm mh3rs/server check <domain>
+```
+
+It resolves the names of the patch (the first four must point to the same address; `mh3uswii.b` and `.c` may
+point at a second one), then tries `GET /patch` on port 80, a connection to 8200, 8201 and 8202, and the availability
+check on 27900. One line each: `ok`, or `FAIL` with what to forward. It exits 1 if any fails. It doesn't check
+27901 (NAT negotiation answers only logged-in consoles: forward it with 27900) nor the relay ports (a relay port
+listens only while it relays a pair).
+
 ## Port 80
 
 The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP. If the host already serves websites on port
@@ -219,6 +233,14 @@ consoles (a four-player quest is six pairs), and a TLS handshake (RSA) per login
 server only relays the pairs that can't reach each other.
 
 ## Alerting
+
+**Ports.** Run `check` regularly from a machine outside your network and have it report to an
+[Uptime Kuma](https://github.com/louislam/uptime-kuma) "Push" monitor (assumed, not tried: it goes red when no ping
+arrives in time), from cron, every few minutes:
+
+```sh
+docker run --rm mh3rs/server check <domain> && curl -fsS <the monitor's push URL>
+```
 
 `/health/live` restarts a dead server (the image's `HEALTHCHECK`); `/health/ready` says whether the database answers.
 The one failure players can't work around is NAT negotiation: nobody can join a city (MH3SP's longest outage, eight

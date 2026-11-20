@@ -102,7 +102,7 @@ pub(crate) fn natneg_name(domain: &str) -> String {
 }
 
 /// The DNS records an operator creates, all pointing to the server.
-fn records(domain: &str) -> Vec<String> {
+pub(crate) fn records(domain: &str) -> Vec<String> {
     let mut names = vec![
         domain.to_owned(),
         format!("opn.{domain}"),

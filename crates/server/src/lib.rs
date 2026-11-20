@@ -17,6 +17,7 @@ mod accounts;
 mod api;
 #[cfg(feature = "bot")]
 mod bots;
+pub mod check;
 pub mod config;
 mod content;
 pub mod database;

@@ -10,6 +10,8 @@
 //! `mh3sp token revoke <key>`  revokes a token (its key: the part before the dot)
 //! `mh3sp patch <dir>`      the players' patch for this deployment (`domain`, the CA in `tls_dir`, created if
 //!                      missing), and the DNS records it needs
+//! `mh3sp check <domain>`   from another machine: which port forward or DNS record is missing (reads no configuration;
+//!                      exit 1 if any check fails)
 //! `mh3sp maintenance "<message>"`  planned maintenance: OPN only, every console refused with the message,
 //!                      no database
 //!
@@ -99,9 +101,16 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
+        ["check", domain] => {
+            // The same rule as the configuration's: it also keeps the name out of the probe's HTTP request.
+            let domain = server::config::domain(domain)?;
+            let report = server::check::run(&domain).await;
+            println!("{report}");
+            std::process::exit(i32::from(!report.passed()));
+        }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | maintenance \"<message>\"]"
+            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | check <domain> | maintenance \"<message>\"]"
         ),
     };
 

@@ -182,7 +182,7 @@ impl Config {
 }
 
 /// A name the game can hold: letters, digits, `-` and `.` (no `%`: some of its hostnames are format strings).
-fn domain(value: &str) -> Result<String> {
+pub fn domain(value: &str) -> Result<String> {
     let value = value.to_ascii_lowercase();
     let max = crate::patch::DOMAIN_MAX;
     if value.len() > max {
