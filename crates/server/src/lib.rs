@@ -48,13 +48,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub use config::Config;
+
+/// The release running: the workspace's version, bumped by `scripts/release.sh`. `--version`, the startup log line and
+/// the metrics all report it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 use config::Strategy;
 use database::Database;
 use game::players::Players;
 use game::{Role, Session};
 use relay::Relays;
 
-/// How long a session waits for the console's next connection (decision 4).
+/// How long a session waits for the console's next connection (ADR 0004).
 const HANDOFF_TTL: Duration = Duration::from_secs(120);
 /// How long a jump to another world server may take to finish (M5 D13).
 const JUMP_TTL: Duration = Duration::from_secs(60);
@@ -369,7 +374,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         Some(_) => None,
     };
 
-    info!("server started");
+    info!(version = VERSION, "server started");
     Ok(Running {
         opn,
         lmp,

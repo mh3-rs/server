@@ -1,4 +1,4 @@
-# `cargo deny check` (scripts/ci-tests.sh): known vulnerabilities, licenses compatible with AGPL-3.0, sources.
+# `cargo deny check` (scripts/ci.sh): known vulnerabilities, licenses compatible with AGPL-3.0, sources.
 [graph]
 all-features = true
 

@@ -1,4 +1,4 @@
-//! A quest bot's connection with one console (`roadmap/experiment-bots.md`, step 2b): GT2's connect, then the
+//! A quest bot's connection with one console (the wiki's "Quest bots", step 2b): GT2's connect, then the
 //! game's connection handshake, then the session as consoles keep it in town. Pure: datagrams and a clock in,
 //! datagrams and PAT messages out, so a test can play the console. Every number here is from the recordings (s04).
 

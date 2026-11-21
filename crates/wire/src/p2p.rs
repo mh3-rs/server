@@ -1,5 +1,5 @@
 //! The consoles' peer-to-peer traffic (towns and quests), as the quest bots need to speak it
-//! (`roadmap/experiment-bots.md`, "How a peer joins a city's session"). Two layers in one UDP flow:
+//! (the wiki's "Quest bots", "How a peer joins a city's session"). Two layers in one UDP flow:
 //! - **GameSpy GT2**, only for connecting and closing: `fefe`, a type, then serial numbers (types 1–4) or an expected
 //!   serial (the ack, 0x64), or nothing (closed, 0x68). The connect is a challenge-response (`gt2_response`).
 //! - **The game's frames**, everything else: a datagram is `[u16 length][frame]` repeated, then `0000`; a frame is a

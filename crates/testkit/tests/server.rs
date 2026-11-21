@@ -73,7 +73,7 @@ fn config() -> (Config, tempfile::TempDir) {
         external_address: Some("192.168.110.150".into()),
         domain: Some(DOMAIN.into()),
         secret: Some(server::config::Secret(b"test secret".to_vec())),
-        // MH3SP's event files (`scripts/ci-tests.sh` provides them).
+        // MH3SP's event files (`scripts/ci.sh` provides them).
         content_dir: std::env::var_os("CONTENT_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| repo().join("../reference")),
@@ -1592,7 +1592,7 @@ async fn the_per_address_limits_hold() {
     running.stop().await;
 }
 
-/// Tier 3, decision 9 at LMP: a database failure at login is refused with a message, and the console asking again
+/// Tier 3, ADR 0009 at LMP: a database failure at login is refused with a message, and the console asking again
 /// keeps its own support code (it isn't handed a new one).
 #[tokio::test]
 async fn a_database_failure_at_login_keeps_the_code() {
@@ -2233,7 +2233,7 @@ async fn messages_wait_for_their_recipient() {
     running.stop().await;
 }
 
-/// Tier 3, architecture decision 9: the database failing mid-game refuses the request with a message and keeps the
+/// Tier 3, ADR 0009: the database failing mid-game refuses the request with a message and keeps the
 /// player; what doesn't need the database goes on.
 #[tokio::test]
 async fn a_database_failure_keeps_the_player() {
@@ -2425,6 +2425,8 @@ async fn metrics_count_what_happens() {
     assert_eq!(status, "200");
     let m: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(m["players"], 2);
+    // The release running: every crate of the workspace has the same version.
+    assert_eq!(m["version"], env!("CARGO_PKG_VERSION"), "{body}");
     assert_eq!(m["world_servers"]["Valor1"], 2);
     assert_eq!(m["natneg"]["pairs_direct"], 1);
     assert!(m["requests"]["count"].as_u64().unwrap() > 10, "{body}");
@@ -4069,7 +4071,7 @@ async fn a_vanishing_leader_is_cleaned_up() {
     running.stop().await;
 }
 
-/// Our Nintendo login (`nas.rs`, architecture decision 13): its three actions over HTTP, in the game's base64; its
+/// Our Nintendo login (`nas.rs`, ADR 0013): its three actions over HTTP, in the game's base64; its
 /// token checked at OPN, used up at LMP's first visit, which links the console to its Wii.
 #[tokio::test]
 async fn our_nintendo_login() {

@@ -1,4 +1,4 @@
-//! The quest bots' P2P side (`roadmap/experiment-bots.md`, A1): to the consoles, a bot is a peer of its city's
+//! The quest bots' P2P side (the wiki's "Quest bots", A1): to the consoles, a bot is a peer of its city's
 //! session. Its UDP socket comes from the relay's range (open on the operator's side already); its peer record goes to
 //! the city through PAT (`NtcLayerBinary` kind 6, answered with kind 7); NAT negotiation pairs it with each console
 //! (`natneg.rs` knows a bot pair by its cookie: the XOR of two peer IDs, one a bot's) and the bot answers the

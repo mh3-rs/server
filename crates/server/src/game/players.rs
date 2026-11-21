@@ -1,5 +1,5 @@
 //! How connections reach each other: each one has a [`Mailbox`]; logged-in players are found by Capcom ID in the
-//! registry (decision 4). The socket stays with its connection task, the only writer: frames for a player go
+//! registry (ADR 0004). The socket stays with its connection task, the only writer: frames for a player go
 //! through its mailbox.
 
 use std::net::IpAddr;

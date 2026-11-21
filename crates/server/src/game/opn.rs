@@ -166,7 +166,7 @@ impl Opn {
         let p = &req.payload;
         match req.id {
             ReqAuthenticationToken::ID => {
-                // Our Nintendo login's token (decision 13), only looked at: LMP uses it up. Never logged.
+                // Our Nintendo login's token (ADR 0013), only looked at: LMP uses it up. Never logged.
                 let token = ReqAuthenticationToken::decode(p)?.token;
                 let Some(device) = shared.nas.get(String::from_utf8_lossy(&token).as_ref()) else {
                     return self.refuse(seq, Refusal::LoginElsewhere);

@@ -1,6 +1,6 @@
 //! `mh3sp check <domain>`: what an operator runs from another machine to learn which port forward or DNS record is
-//! missing (`roadmap/reachability.md`). It reads no configuration: it plays the part of a console, through the names
-//! the patch makes the game look up, on the ports the game calls.
+//! missing (`../docs/history/reachability.md`). It reads no configuration: it plays the part of a console, through the
+//! names the patch makes the game look up, on the ports the game calls.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};

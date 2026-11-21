@@ -48,7 +48,7 @@ pub struct Config {
     /// Give consoles an encryption key at login (`../docs/history/packet encryption.md`).
     pub encryption: bool,
     /// Capcom IDs allowed the admins' chat commands (`game::commands`). ponytail: until the website's users and
-    /// roles (`../docs/schema.md`, S2).
+    /// roles (the wiki's "Project", the data model).
     pub admins: Vec<String>,
     /// The operator's texts (`text.rs`), each with a one-sentence default.
     pub name: String,

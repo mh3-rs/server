@@ -2000,7 +2000,8 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                 capcom_id: Bytes::copy_from_slice(me.as_bytes()),
                 name: session.name.clone(),
                 player: index,
-                // 2 would count the player in a tally the console keeps; leaving must then send 2 too (unk.md).
+                // 2 would count the player in a tally the console keeps; leaving must then send 2 too (the wiki's
+                // "Unknown fields").
                 state: 0,
             };
             let ntc = frame(seq, &ntc)?;
@@ -2072,7 +2073,8 @@ fn quit_quest(
             circle: leaving.id.1,
             capcom_id: Bytes::copy_from_slice(leaver.as_bytes()),
             player: leaving.index,
-            // The same as its `NtcCircleJoin.state`: 2 counts the player in a tally the console keeps (unk.md).
+            // The same as its `NtcCircleJoin.state`: 2 counts the player in a tally the console keeps (the wiki's
+            // "Unknown fields").
             state: 0,
         },
     )?;
@@ -2194,7 +2196,7 @@ async fn deliver_mail(
     }
     match waiting_mail(shared, me).await {
         Ok(mail) => out.extend(mail),
-        // The position still goes to the others (architecture decision 9); the mail waits for the next one.
+        // The position still goes to the others (ADR 0009); the mail waits for the next one.
         Err(Fault::Database(e)) => {
             error!(error = %format!("{e:#}"), "database failed, mail not delivered");
             shared.players.mail(me);

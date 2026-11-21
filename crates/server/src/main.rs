@@ -26,6 +26,11 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let maintenance = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => None,
+        // Before anything reads the configuration: it must answer anywhere, with no `mh3sp.toml`.
+        ["--version"] => {
+            println!("mh3sp {}", server::VERSION);
+            return Ok(());
+        }
         ["healthcheck"] => return server::health::check(Config::load()?.health),
         ["announce", text] => {
             println!(
@@ -110,7 +115,7 @@ async fn main() -> Result<()> {
         }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | check <domain> | maintenance \"<message>\"]"
+            "usage: mh3sp [--version | healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | check <domain> | maintenance \"<message>\"]"
         ),
     };
 

@@ -39,7 +39,7 @@ docker compose up -d && docker compose logs -f
 docker compose exec mh3sp mh3sp patch data/patch   # the DNS records to create (and the patch's files)
 ```
 
-The image is `mh3rs/server:latest`, `main`'s last (also tagged by commit and by version, `X`, `X.Y`, `X.Y.Z`), for
+The image is `mh3rs/server:latest`, the last release (also tagged by version, `X`, `X.Y`, `X.Y.Z`), for
 amd64 and arm64. Everything you add to `deploy/` stays out of git.
 
 ## Configuration
@@ -207,9 +207,9 @@ crate; the admin CLI, `mh3sp-admin`, calls them). Anyone with a token has `GET /
 
 ## Metrics
 
-`GET /metrics` on the health port: players (per world server), cities, quests, NAT negotiations (direct, relayed,
+`GET /metrics` on the health port: the release running (`version`), players (per world server), cities, quests, NAT negotiations (direct, relayed,
 reports), the relay (pairs open, bytes), requests (count, latency buckets), as JSON. Counts only, never a player's
-identity. The `-prometheus` images also serve `GET /metrics/prometheus`, the same in Prometheus' format (built with
+identity. The `-prometheus` images also serve `GET /metrics/prometheus`, the same in Prometheus' format (with `mh3sp_build_info{version="…"}` for the release) (built with
 `--build-arg FEATURES=prometheus`, or `cargo build --features prometheus`).
 
 ## Maintenance mode

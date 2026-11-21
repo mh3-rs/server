@@ -1,7 +1,7 @@
-//! Bans (`access_rules`, `../docs/schema.md` S5): an admin bans a player's console, all its hunters with it, and the
-//! Wii it last logged in from (`devices`, architecture decision 13), so a new save doesn't lift it. A ban is checked
-//! when the console logs in (the Wii at OPN, the console at `game::lmp`) and lifted by revoking it. The whitelist (rules of kind `allow`)
-//! is a question still (`roadmap/00. global.md`, "Open questions").
+//! Bans (`access_rules`, the wiki's "Project", the data model): an admin bans a player's console, all its hunters with
+//! it, and the Wii it last logged in from (`devices`, ADR 0013), so a new save doesn't lift it. A ban is checked
+//! when the console logs in (the Wii at OPN, the console at `game::lmp`) and lifted by revoking it. The whitelist
+//! (rules of kind `allow`) is a question still (the Roadmap: "Moderation, Minecraft-style").
 
 use anyhow::Result;
 use sqlx::SqlitePool;
@@ -62,7 +62,7 @@ pub async fn unban(db: &SqlitePool, capcom_id: &str, reason: &str) -> Result<boo
 }
 
 /// At a hop (a ticket's next connection, LMP or FMP): whether a console banned since its login must be dropped. A
-/// database failure lets it through (architecture decision 9: a failing database keeps players; its next fresh login
+/// database failure lets it through (ADR 0009: a failing database keeps players; its next fresh login
 /// checks again).
 pub async fn banned_since(shared: &crate::Shared, console_id: i64) -> bool {
     let Some(db) = shared.db.pool() else {

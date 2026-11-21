@@ -1,4 +1,4 @@
-//! The quest bots' side of FMP (`roadmap/experiment-bots.md`, the `bot` feature): a bot joining and leaving a
+//! The quest bots' side of FMP (the wiki's "Quest bots", the `bot` feature): a bot joining and leaving a
 //! party as a player would, the peer messages it says and answers for its P2P session (`crate::peer`).
 
 use super::*;

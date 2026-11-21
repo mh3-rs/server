@@ -1,4 +1,4 @@
-//! Our own Nintendo login (NAS, architecture decision 13, `../docs/history/nintendo login.md`). Before OPN the game posts `/ac` three
+//! Our own Nintendo login (NAS, ADR 0013, `../docs/history/nintendo login.md`). Before OPN the game posts `/ac` three
 //! times over plain HTTP (MH3SP's patch turns its `https` into `http`): `acctcreate` when its NAND holds no NAS user
 //! id, `login`, then `svcloc`. The `servicetoken` `svcloc` hands out comes back at OPN (`ReqAuthenticationToken`)
 //! and at LMP's first visit (`ReqLoginInfo` item 0x0a): it tells the server which Wii the console is on, its MAC and

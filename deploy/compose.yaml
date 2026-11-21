@@ -4,7 +4,7 @@
 # the server creates its CA in data/tls at the first start).
 services:
   mh3sp:
-    # main's last image; pin a version (`mh3rs/server:X.Y.Z`) or a commit to choose when it changes.
+    # the last release's image; pin a version (`mh3rs/server:X.Y.Z`) to choose when it changes.
     image: mh3rs/server:latest
     restart: unless-stopped
     secrets: [mh3sp]

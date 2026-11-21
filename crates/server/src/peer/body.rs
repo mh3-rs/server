@@ -1,4 +1,4 @@
-//! A quest bot's body in a hunt (`roadmap/experiment-bots.md`, "The long hunt, decoded"): where it is, which way it
+//! A quest bot's body in a hunt (the wiki's "Quest bots", "The long hunt, decoded"): where it is, which way it
 //! faces, its area and what it's doing, as the player messages it sends say it. Pure: a target and a clock in, game
 //! messages out (`link.rs` frames them). A hunter walks with its full state (kind 1, only when its action changes:
 //! walk or run, stop, idle) and its position (kind 2, every 0.5 s); it enters an area with kind 3.

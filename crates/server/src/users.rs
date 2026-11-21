@@ -1,4 +1,4 @@
-//! Who signs in to the API (`api.rs`), and their tokens (`../docs/schema.md`, S2–S3).
+//! Who signs in to the API (`api.rs`), and their tokens (the wiki's "Project", the data model).
 //!
 //! A token reads `mh3sp_<public>.<secret>`: the key `mh3sp_<public>` names it in lists, and only the SHA-256 of the
 //! whole token is stored (a high-entropy secret needs no slow hash). The `mh3sp_` prefix lets secret scanners spot a

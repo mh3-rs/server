@@ -1,6 +1,6 @@
 //! The SQLite database: one file, shared with the website (same machine) when there is one.
 //!
-//! Outages (decision 9): at startup the server runs without it and retries until it opens and the migrations ran;
+//! Outages (ADR 0009): at startup the server runs without it and retries until it opens and the migrations ran;
 //! it is unhealthy until then. Afterwards a failing database only makes the server not ready.
 
 use std::str::FromStr;
