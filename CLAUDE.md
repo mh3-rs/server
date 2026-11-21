@@ -9,6 +9,11 @@ data model: the wiki of `mh3-rs/docs`.
 
 - The schema is `migrations/0001_schema.sql` (its reasoning: the wiki's `Project`); `scripts/dev.sh --reset` after
   changing it. After changing a query or the schema, `scripts/sqlx-prepare.sh`.
+- Don't touch `migrations/0001_schema.sql` for anything but a schema change, a comment included: `sqlx::migrate!` checks
+  the checksum of a migration a database already applied (assumed, not tried), so an existing database, ours included,
+  would refuse to start. Its two old comments citing removed docs wait for the schema review (mh3-rs/server#9).
+- A worktree where `scripts/ci.sh --woodpecker` ran keeps root-owned files in `target/ci` (the pipeline runs in Docker):
+  `git worktree remove` can't delete it, so remove such a worktree with `sudo`.
 - On the shared server the whole test run is timing-sensitive: under a heavy load (`uptime`) unrelated tests fail
   once and pass alone. Run `RUST_TEST_THREADS=4 scripts/ci.sh`, and rerun a failing test by name before
   suspecting the code.
