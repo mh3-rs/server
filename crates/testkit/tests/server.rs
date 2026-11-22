@@ -1970,11 +1970,35 @@ async fn new_hunter(lmp: Lmp) -> (String, String) {
     (code, slots[0].0.clone())
 }
 
-/// The message notices (`NtcTell`, `NtcFriendAccept`, `NtcFriendAdd`) a console receives within 200 ms.
+/// The message notices (`NtcTell`, `NtcFriendAccept`, `NtcFriendAdd`) a console receives within 200 ms: what a test
+/// that expects none uses (silence can only be waited for).
 async fn mail(console: &mut Console) -> Vec<wire::PacketId> {
     let kinds = [NtcTell::ID, NtcFriendAccept::ID, NtcFriendAdd::ID];
     let seen = drain(console, Duration::from_millis(200)).await;
     seen.into_iter().filter(|id| kinds.contains(id)).collect()
+}
+
+/// The message notices a console receives when some are due: it waits (up to 5 s) for the first, then 200 ms for the
+/// rest. Not `mail`: under load a notice comes later than that window, and a test that expects one must not fail
+/// for it.
+async fn delivered(console: &mut Console) -> Vec<wire::PacketId> {
+    let kinds = [NtcTell::ID, NtcFriendAccept::ID, NtcFriendAdd::ID];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut seen = Vec::new();
+    while seen.is_empty() {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match console
+            .recv(left.max(Duration::from_millis(1)))
+            .await
+            .unwrap()
+        {
+            Received::Frame(f) if kinds.contains(&f.id) => seen.push(f.id),
+            Received::Frame(_) => {}
+            _ => return seen,
+        }
+    }
+    seen.extend(mail(console).await);
+    seen
 }
 
 /// Tier 3: messages, with or without a friend request, are stored and delivered once, when the recipient stands in
@@ -2014,14 +2038,14 @@ async fn messages_wait_for_their_recipient() {
     meet(&mut b, &mut enter_world(&running).await, 1, 2).await;
     assert_eq!(mail(&mut b).await, []);
     send(&mut b, 30, position()).await;
-    assert_eq!(mail(&mut b).await, [NtcTell::ID, NtcFriendAccept::ID]);
+    assert_eq!(delivered(&mut b).await, [NtcTell::ID, NtcFriendAccept::ID]);
     send(&mut b, 31, position()).await;
     assert_eq!(mail(&mut b).await, []);
 
     // B stands in the city now: a message arrives at once; a blocked hunter's never does.
     let mut c = play(&running, &c_code).await;
     send(&mut c, 10, tell(&b_id, b"hi")).await;
-    assert_eq!(mail(&mut b).await, [NtcTell::ID]);
+    assert_eq!(delivered(&mut b).await, [NtcTell::ID]);
     let block = ReqBlackAdd {
         capcom_id: c_id.into(),
         info: PatData::new(),
@@ -2033,10 +2057,10 @@ async fn messages_wait_for_their_recipient() {
 
     // A asks again: delivered again. B asks A too: friends at once, both told.
     send(&mut a, 12, request(&b_id)).await;
-    assert_eq!(mail(&mut b).await, [NtcFriendAccept::ID]);
+    assert_eq!(delivered(&mut b).await, [NtcFriendAccept::ID]);
     send(&mut b, 33, request(&a_id)).await;
-    assert_eq!(mail(&mut b).await, [NtcFriendAdd::ID]);
-    assert_eq!(mail(&mut a).await, [NtcFriendAdd::ID]);
+    assert_eq!(delivered(&mut b).await, [NtcFriendAdd::ID]);
+    assert_eq!(delivered(&mut a).await, [NtcFriendAdd::ID]);
     running.stop().await;
 }
 
@@ -2078,12 +2102,14 @@ async fn a_database_failure_keeps_the_player() {
         text: Bytes::from_static(b"hello"),
     };
     send(&mut other, 30, tell).await;
-    // Stored before the table goes.
-    assert!(
-        drain(&mut other, Duration::from_millis(200))
-            .await
-            .contains(&AnsTell::ID)
-    );
+    // Stored before the table goes: its answer is the proof (other frames may come first).
+    loop {
+        match other.recv(Duration::from_secs(5)).await.unwrap() {
+            Received::Frame(f) if f.id == AnsTell::ID => break,
+            Received::Frame(_) => {}
+            gone => panic!("no answer to the tell: {gone:?}"),
+        }
+    }
     let position = || NtcLayerUserPosition {
         data: wire::packets::Rest(position_lp2(&[0; 37]).into()),
     };
@@ -2092,7 +2118,7 @@ async fn a_database_failure_keeps_the_player() {
     assert_eq!(mail(&mut console).await, []);
     sql("ALTER TABLE hidden RENAME TO messages").await.unwrap();
     send(&mut console, 32, position()).await;
-    assert_eq!(mail(&mut console).await, [NtcTell::ID]);
+    assert_eq!(delivered(&mut console).await, [NtcTell::ID]);
     running.stop().await;
 }
 
