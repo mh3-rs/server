@@ -18,5 +18,9 @@ data model: the wiki of `mh3-rs/docs`.
 - On the shared server the whole test run is timing-sensitive: under a heavy load (`uptime`) unrelated tests fail
   once and pass alone. Run `RUST_TEST_THREADS=4 scripts/ci.sh`, and rerun a failing test by name before
   suspecting the code.
+- A scripted test that expects a frame or a notice waits for it (`expect`, `delivered`: seconds), and a fixed window
+  (`drain`, `mail`: 200 ms) is only for "nothing arrives": on a loaded host a late frame fails the first kind, and
+  `a_database_failure_keeps_the_player` and `messages_wait_for_their_recipient` did until that was fixed. The tests
+  that go through the commands' socket (`mh3sp announce`, `stop`) are Linux only.
 - `mh3sp check <domain>` is for a machine outside the server's network: from inside, a split-horizon DNS or the
   router's loopback gives answers a console would never see (the homelab resolves `pband.ch` to `192.168.1.50`).
