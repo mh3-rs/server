@@ -1,4 +1,4 @@
-//! What an operator watches (M5 D5): `GET /metrics` on the health port, a JSON snapshot; `GET /metrics/prometheus`
+//! What an operator watches (M5 D5): `GET /metrics` on the public port, a JSON snapshot; `GET /metrics/prometheus`
 //! the same in Prometheus' text format (the `prometheus` feature). Counts only, never a Capcom ID. Counters live here
 //! (atomics, bumped where things happen); gauges are read from the world when asked. No history: Prometheus keeps it.
 
@@ -51,6 +51,8 @@ pub fn add(counter: &AtomicU64, n: u64) {
 
 #[derive(Serialize)]
 pub struct Snapshot {
+    /// The release running (`crate::VERSION`).
+    pub version: &'static str,
     /// Logged in on FMP.
     pub players: usize,
     /// Per world server (by name), the players there.
@@ -96,6 +98,7 @@ pub fn snapshot(shared: &Shared) -> Snapshot {
         .map(|(i, (name, _))| (*name, by_server.get(&(i as u32 + 1)).copied().unwrap_or(0)))
         .collect();
     Snapshot {
+        version: crate::VERSION,
         players: shared.players.count(),
         world_servers,
         cities,
@@ -145,6 +148,13 @@ pub fn prometheus(s: &Snapshot) -> String {
         }
     };
     let one = |v: f64| vec![(String::new(), v)];
+    // The usual "info" metric: the value is always 1, the version is the label.
+    metric(
+        "build_info",
+        "gauge",
+        "The release running.",
+        &[(format!("{{version=\"{}\"}}", s.version), 1.0)],
+    );
     metric(
         "players",
         "gauge",
@@ -244,6 +254,7 @@ mod tests {
         let m = Metrics::default();
         m.request(Duration::from_millis(2));
         let s = Snapshot {
+            version: "9.8.7",
             players: 3,
             world_servers: [("Valor1", 3)].into(),
             cities: 1,
@@ -267,6 +278,8 @@ mod tests {
         };
         let text = prometheus(&s);
         for line in [
+            "# TYPE mh3sp_build_info gauge",
+            "mh3sp_build_info{version=\"9.8.7\"} 1",
             "# TYPE mh3sp_players gauge",
             "mh3sp_players 3",
             "mh3sp_world_server_players{world_server=\"Valor1\"} 3",

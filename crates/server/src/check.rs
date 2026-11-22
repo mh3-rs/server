@@ -1,6 +1,6 @@
 //! `mh3sp check <domain>`: what an operator runs from another machine to learn which port forward or DNS record is
-//! missing (`roadmap/reachability.md`). It reads no configuration: it plays the part of a console, through the names
-//! the patch makes the game look up, on the ports the game calls.
+//! missing (`../docs/history/reachability.md`). It reads no configuration: it plays the part of a console, through the
+//! names the patch makes the game look up, on the ports the game calls.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -171,7 +171,7 @@ pub async fn probe(domain: &str, addresses: &[Option<Ipv4Addr>], ports: &Ports) 
     let names = crate::patch::records(domain);
     let at = |i: usize, port: u16| addresses[i].map(|ip| SocketAddrV4::new(ip, port));
     let probes = [
-        (0, ports.nas, Kind::Http, "GET /patch"),
+        (0, ports.nas, Kind::Http, "Nintendo login"),
         (1, ports.opn, Kind::Tcp, "OPN"),
         (0, ports.lmp, Kind::Tcp, "LMP"),
         (0, ports.fmp, Kind::Tcp, "FMP"),
@@ -231,31 +231,40 @@ async fn tcp(target: SocketAddrV4) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// `GET /patch` must answer 200: the status line is all we read.
+/// The Nintendo login must answer a `login` form (the game's own second call, which changes nothing) with 200 and a
+/// form that has its `returncd`. A proxy's error page, another service on the port, or the guide (which is on the
+/// public port now) fails with what it said.
 async fn http(target: SocketAddrV4, domain: &str) -> Result<(), String> {
+    let form = wire::nas::encode(&[("action", b"login")]);
+    let request = format!(
+        "POST /ac HTTP/1.1\r\nHost: {domain}\r\nContent-Type: application/x-www-form-urlencoded\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{form}",
+        form.len()
+    );
     let mut stream = TcpStream::connect(target)
         .await
         .map_err(|e| e.to_string())?;
     stream
-        .write_all(
-            format!("GET /patch HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n")
-                .as_bytes(),
-        )
+        .write_all(request.as_bytes())
         .await
         .map_err(|e| e.to_string())?;
-    let mut head = Vec::new();
-    let mut buf = [0; 256];
-    while !head.windows(2).any(|w| w == b"\r\n") && head.len() < 1024 {
+    // The answer is a few dozen bytes; what a proxy's page adds is cut.
+    let mut response = Vec::new();
+    let mut buf = [0; 512];
+    while response.len() < 4096 {
         match stream.read(&mut buf).await.map_err(|e| e.to_string())? {
             0 => break,
-            n => head.extend_from_slice(&buf[..n]),
+            n => response.extend_from_slice(&buf[..n]),
         }
     }
-    let line = String::from_utf8_lossy(&head);
-    let line = line.lines().next().unwrap_or_default();
-    match line.split_whitespace().nth(1) {
-        Some("200") => Ok(()),
-        _ => Err(format!("answered {line:?}")),
+    let response = String::from_utf8_lossy(&response);
+    let line = response.lines().next().unwrap_or_default();
+    if line.split_whitespace().nth(1) != Some("200") {
+        return Err(format!("answered {line:?}"));
+    }
+    match response.contains("returncd=") {
+        true => Ok(()),
+        false => Err("answered 200, but not as the Nintendo login does".to_owned()),
     }
 }
 

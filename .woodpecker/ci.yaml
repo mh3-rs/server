@@ -1,0 +1,33 @@
+# The checks, on every push to any branch and on every version tag, when something built or tested changed (Gitea
+# sends no pull requests here); manual runs always. A commit on several refs is tested once per ref: rc.yaml and
+# release.yaml depend on this workflow, and depends_on only links workflows of the same run. Each step is a part of
+# scripts/ci.sh, so a red step says what failed.
+when:
+  - event: push
+    # Nothing built or tested changed: docs, repo housekeeping. (`corpus/` is tested: it stays in.)
+    path:
+      exclude: ["**/*.md", ".claude/**", "LICENSE", ".gitignore", "cliff.toml"]
+  # prod and the version tags, whatever changed: Woodpecker can't reuse a commit's earlier run, and release.yaml waits
+  # on this one.
+  - event: push
+    branch: prod
+  - event: tag
+    ref: refs/tags/[0-9]*
+  - event: manual
+steps:
+  - name: lint
+    image: rust:1.98.0-bookworm
+    environment:
+      # Separate from the developer's target/ when the local runner mounts the working tree.
+      CARGO_TARGET_DIR: target/ci
+    commands:
+      # The dependency audit's tool, pinned (scripts run `cargo deny check`).
+      - curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-$$(uname -m)-unknown-linux-musl.tar.gz | tar xz --strip-components=1 -C /usr/local/cargo/bin --wildcards '*/cargo-deny'
+      - scripts/ci.sh lint
+  - name: test
+    image: rust:1.98.0-bookworm
+    depends_on: [lint]
+    environment:
+      CARGO_TARGET_DIR: target/ci
+    commands:
+      - scripts/ci.sh test

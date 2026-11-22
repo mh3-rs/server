@@ -35,8 +35,7 @@ announcements; quest binaries byte-identical to MH3SP's generator (CI, through i
 - **The hunter profile is validated** (tests), so a crafted one can't crash other consoles. Friend requests and
   messages are stored and delivered later (tests).
 - **Administration** (tests; not yet seen on consoles): chat commands (`/tell` for everyone; `/announce`, `/stop`,
-  `/kick`, `/ban` for admins), bans by console, an API with tokens, an admin CLI (`mh3sp-admin`) and an admin web
-  page (`website`).
+  `/kick`, `/ban` for admins), bans by console and by Wii.
 - **Operations** (tests, consoles): `mh3sp stop 5min` with in-game warnings, `mh3sp announce`, liveness and readiness
   probes, JSON and Prometheus metrics, anonymous logs, one SQLite file.
 
@@ -55,7 +54,7 @@ guide is its page there ([`deploy/README.md`](deploy/README.md) here).
 
 ## Development
 
-`scripts/dev.sh` prepares `mh3sp.toml` and `.env` (sqlx's tools); `scripts/ci-tests.sh` runs what CI runs. Every quest of `CONTENT_DIR` is checked
+`scripts/dev.sh` prepares `mh3sp.toml` and `.env` (sqlx's tools); `scripts/ci.sh` runs what CI runs. Every quest of `CONTENT_DIR` is checked
 byte-identical to MH3SP's own generator, through the hashes in `crates/server/src/content/reference.sha256`; a
 content folder with quests it doesn't know adds them with `tools/reference-hashes.sh <checkout>` (Python 2 in
 Docker).
@@ -77,9 +76,9 @@ This server stands on others' reverse engineering:
 
 ## This repository
 
-The [GitHub repository](https://github.com/mh3-rs/server) is a read-only mirror of `main`, pushed by our CI once
+The [GitHub repository](https://github.com/mh3-rs/server) is a read-only mirror of the last release, pushed by our CI once
 the checks and the image pass. Issues are off: talk to us on [Discord](https://discord.gg/XvUNMytyM7) or at
-[pascal@pband.ch](mailto:pascal@pband.ch). The active plans are in [`roadmap/`](roadmap/).
+[pascal@pband.ch](mailto:pascal@pband.ch).
 
 ## License
 

@@ -14,28 +14,23 @@
 
 mod access;
 mod accounts;
-mod api;
-#[cfg(feature = "bot")]
-mod bots;
 pub mod check;
 pub mod config;
 mod content;
+pub mod control;
 pub mod database;
 mod game;
-pub mod health;
 mod keys;
 mod metrics;
 mod nas;
 mod natneg;
 mod net;
 pub mod patch;
-#[cfg(feature = "bot")]
-mod peer;
+pub mod public;
 mod relay;
 mod stop;
 mod text;
 mod tls;
-pub mod users;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -48,13 +43,18 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub use config::Config;
+
+/// The release running: the workspace's version, bumped by `scripts/release.sh`. `--version`, the startup log line and
+/// the metrics all report it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 use config::Strategy;
 use database::Database;
 use game::players::Players;
 use game::{Role, Session};
 use relay::Relays;
 
-/// How long a session waits for the console's next connection (decision 4).
+/// How long a session waits for the console's next connection (ADR 0004).
 const HANDOFF_TTL: Duration = Duration::from_secs(120);
 /// How long a jump to another world server may take to finish (M5 D13).
 const JUMP_TTL: Duration = Duration::from_secs(60);
@@ -70,9 +70,6 @@ struct Shared {
     nas: nas::Tokens,
     /// Sessions between two connections, by PAT ticket.
     tickets: moka::sync::Cache<String, Session>,
-    /// The quest bots' brain, when connected (`bots.rs`).
-    #[cfg(feature = "bot")]
-    brain: bots::Brain,
     /// With encryption on: the consoles' keys between two connections (`keys.rs`). Secrets: never logged.
     keys: Option<keys::Keys>,
     /// Jumps to another world server under way (M5 D13), by ticket: who, and where to.
@@ -90,11 +87,8 @@ struct Shared {
     /// When the server started (the reference of the game's day/night cycle).
     started: SystemTime,
     metrics: Arc<metrics::Metrics>,
-    /// The relay's port range (M4): relayed pairs, and the quest bots' sockets.
+    /// The relay's port range (M4): relayed pairs.
     relays: Option<Arc<Relays>>,
-    /// Peer IDs: consoles' and the quest bots' (`peer.rs`).
-    #[cfg(feature = "bot")]
-    peers: peer::Peers,
     /// A stop under way (`stop.rs`): cancelling it lifts it.
     stop: std::sync::Mutex<Option<CancellationToken>>,
     /// Stops the whole server.
@@ -140,16 +134,13 @@ pub struct Running {
     pub opn: SocketAddr,
     pub lmp: Option<SocketAddr>,
     pub fmp: Option<SocketAddr>,
-    pub health: SocketAddr,
+    /// The public port.
+    pub public: SocketAddr,
     /// The Nintendo login (HTTP).
     pub nas: SocketAddr,
-    /// Off in maintenance mode.
-    pub api: Option<SocketAddr>,
     /// UDP; off in maintenance mode.
     pub qr: Option<SocketAddr>,
     pub natneg: Option<SocketAddr>,
-    /// Where the bots' brain connects, when set.
-    pub bots: Option<SocketAddr>,
     shutdown: CancellationToken,
     tasks: JoinSet<()>,
     shared: Arc<Shared>,
@@ -219,7 +210,7 @@ pub async fn start(config: &Config) -> Result<Running> {
         }
     }
     let metrics: Arc<metrics::Metrics> = Default::default();
-    // The relay's range (M4), also where quest bots get their sockets (`peer.rs`).
+    // The relay's range (M4).
     let relays = match (
         &config.maintenance,
         config
@@ -252,8 +243,6 @@ pub async fn start(config: &Config) -> Result<Running> {
         tickets: moka::sync::Cache::builder()
             .time_to_live(HANDOFF_TTL)
             .build(),
-        #[cfg(feature = "bot")]
-        brain: Default::default(),
         keys: config.encryption.then(keys::Keys::default),
         jumps: moka::sync::Cache::builder().time_to_live(JUMP_TTL).build(),
         players: Players::default(),
@@ -262,8 +251,6 @@ pub async fn start(config: &Config) -> Result<Running> {
         stop: Default::default(),
         metrics,
         relays,
-        #[cfg(feature = "bot")]
-        peers: Default::default(),
         shutdown: shutdown.clone(),
         connections: net::Connections::new(config.loopback_exempt),
         admission: game::Admission::new(config.loopback_exempt),
@@ -324,62 +311,32 @@ pub async fn start(config: &Config) -> Result<Running> {
         ));
     }
 
-    // The quest bots' brain (localhost only), when set; the `bot` feature.
-    #[cfg(not(feature = "bot"))]
-    let bots = {
-        if config.bot_port.is_some() {
-            tracing::warn!(
-                "bot_port is set, but this server is built without the quest bots (the `bot` feature): ignored"
-            );
-        }
-        None
-    };
-    #[cfg(feature = "bot")]
-    let bots = match (config.bot_port, &config.maintenance) {
-        (Some(port), None) => {
-            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-                .await
-                .with_context(|| format!("bind the bot port {port}"))?;
-            net::announce("bots", &listener)?;
-            let address = listener.local_addr()?;
-            tasks.spawn(bots::serve(listener, shared.clone(), shutdown.clone()));
-            Some(address)
-        }
-        _ => None,
-    };
+    // A key of `mh3sp.toml` that left the server (the quest bots' port, the API's): the configuration keeps starting
+    // the server (no breaking change since the image is public), and the operator is told.
+    for key in &config.ignored {
+        tracing::warn!(
+            key,
+            "this key of mh3sp.toml was removed from the server: ignored"
+        );
+    }
 
-    let listener = TcpListener::bind(config.health)
+    let listener = TcpListener::bind(config.public)
         .await
-        .with_context(|| format!("bind health on {}", config.health))?;
-    net::announce("health", &listener)?;
-    let health = listener.local_addr()?;
-    tasks.spawn(health::serve(listener, shared.clone(), shutdown.clone()));
+        .with_context(|| format!("bind the public port on {}", config.public))?;
+    net::announce("public", &listener)?;
+    let public = listener.local_addr()?;
+    tasks.spawn(public::serve(listener, shared.clone(), shutdown.clone()));
+    control::start(&config.control, &shared, &shutdown, &mut tasks);
 
-    // The API needs the database: off in maintenance mode.
-    let api = match &config.maintenance {
-        None => {
-            let listener = TcpListener::bind(config.api)
-                .await
-                .with_context(|| format!("bind the API on {}", config.api))?;
-            net::announce("api", &listener)?;
-            let address = listener.local_addr()?;
-            tasks.spawn(api::serve(listener, shared.clone(), shutdown.clone()));
-            Some(address)
-        }
-        Some(_) => None,
-    };
-
-    info!("server started");
+    info!(version = VERSION, "server started");
     Ok(Running {
         opn,
         lmp,
         fmp,
-        health,
+        public,
         nas,
-        api,
         qr,
         natneg,
-        bots,
         shutdown,
         tasks,
         shared,

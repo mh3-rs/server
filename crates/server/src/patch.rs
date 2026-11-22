@@ -253,7 +253,7 @@ fn memory(edit: &Edit) -> String {
 }
 
 /// Gecko codes for USB loaders with Ocarina (`codes/<game id>.gct`): one `06` code per edit, which writes its bytes
-/// at the address. Untested on a Wii: whether a loader's hook suits MH3 (`recordings.md`).
+/// at the address. Untested on a Wii: whether a loader's hook suits MH3 (a console run on the Roadmap).
 fn gecko(region: Region, domain: &str, ca: &[u8]) -> Result<Vec<u8>> {
     let mut gct = Vec::new();
     gct.put_u64(0x00D0_C0DE_00D0_C0DE);
@@ -308,7 +308,7 @@ fn html_name(name: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The player guide, with the patch's files (`GET /patch` on the NAS port, the domain's port 80): `patch.html`.
+/// The player guide, with the patch's files (`GET /patch` on the public port): `patch.html`.
 /// The domain is checked already (`config.rs`).
 pub(crate) fn page(name: &str, domain: &str) -> String {
     let name = html_name(name);
@@ -341,7 +341,7 @@ pub(crate) fn page(name: &str, domain: &str) -> String {
 /// 11623, 0x80020001 → 11624, 0x80030031–0x80030044 → 11660 + (n − 0x31) (0x8003003A = 11669, 0x8003003F = 11674),
 /// anything else 11625. The Nintendo login shows −20100 (no answer), −(23000 + HTTP status), −20101 (no return code),
 /// −(20000 + returncd) for returncd ≥ 100 (`DWCi/dwc_nasfunc.c`). MHTrIDA's `server/ERROR.md` differs in places
-/// (0x8000000A, detail 110): the decomp was trusted. "Seen" causes are the lab's (`../docs/recordings.md`,
+/// (0x8000000A, detail 110): the decomp was trusted. "Seen" causes are the lab's (the console sessions in
 /// `../docs/history/`), 11669 and 11682 from the run of 2026-10-11.
 pub(crate) fn errors(name: &str) -> String {
     include_str!("errors.html").replace("{name}", &html_name(name))

@@ -26,9 +26,8 @@ pub struct Config {
     pub opn: SocketAddr,
     pub lmp: SocketAddr,
     pub fmp: SocketAddr,
-    pub health: SocketAddr,
-    /// The API (`api.rs`).
-    pub api: SocketAddr,
+    /// The public port (`public.rs`): the guide, health and metrics. Every interface by default.
+    pub public: SocketAddr,
     /// The Nintendo login (`nas.rs`).
     pub nas: SocketAddr,
     /// UDP.
@@ -43,12 +42,14 @@ pub struct Config {
     pub domain: Option<String>,
     pub secret: Option<Secret>,
     pub content_dir: PathBuf,
-    /// Where the quest bots' brain connects (localhost only); none: no bots.
-    pub bot_port: Option<u16>,
+    /// The removed keys the file still sets: each is ignored, with a warning at startup. They stay accepted so an old
+    /// `mh3sp.toml` keeps starting the server (no breaking change since the image is public): `bot_port` (the quest
+    /// bots, tag `archive/quest-bots`), `api_port` and `api_address` (the API).
+    pub ignored: Vec<&'static str>,
     /// Give consoles an encryption key at login (`../docs/history/packet encryption.md`).
     pub encryption: bool,
-    /// Capcom IDs allowed the admins' chat commands (`game::commands`). ponytail: until the website's users and
-    /// roles (`../docs/schema.md`, S2).
+    /// Capcom IDs allowed the admins' chat commands (`game::commands`). ponytail: until ops are in the database
+    /// (`access_rules`, kind `op`: mh3-rs/server#6).
     pub admins: Vec<String>,
     /// The operator's texts (`text.rs`), each with a one-sentence default.
     pub name: String,
@@ -66,6 +67,9 @@ pub struct Config {
     /// Loopback (this machine: the lab, the tests) is exempt from the per-address limits (not an environment
     /// variable, on in production): off in the test of those limits' wiring.
     pub loopback_exempt: bool,
+    /// The name of the commands' socket (`control.rs`; no key, no environment variable: the commands find it by its
+    /// name alone): the tests run several servers side by side, each on its own.
+    pub control: String,
     /// Maintenance mode (`mh3sp maintenance "<message>"`, not an environment variable): OPN only, every console
     /// refused with this message, no database.
     pub maintenance: Option<String>,
@@ -88,8 +92,11 @@ struct File {
     opn_port: Option<u16>,
     lmp_port: Option<u16>,
     fmp_port: Option<u16>,
-    health_port: Option<u16>,
-    health_address: Option<IpAddr>,
+    // The old names of these two (the port was for health and metrics only, on loopback): still honoured.
+    #[serde(alias = "health_port")]
+    public_port: Option<u16>,
+    #[serde(alias = "health_address")]
+    public_address: Option<IpAddr>,
     api_port: Option<u16>,
     api_address: Option<IpAddr>,
     nas_port: Option<u16>,
@@ -130,7 +137,7 @@ impl Config {
         Self::parse(&text).with_context(|| format!("{}", path.display()))
     }
 
-    fn parse(text: &str) -> Result<Self> {
+    pub fn parse(text: &str) -> Result<Self> {
         // The message and its line, never the line itself: it may hold the secret.
         let f: File = toml::from_str(text).map_err(|e| {
             let line = e
@@ -143,13 +150,9 @@ impl Config {
             opn: listen("opn_port", f.opn_port, 8200)?,
             lmp: listen("lmp_port", f.lmp_port, 8201)?,
             fmp: listen("fmp_port", f.fmp_port, 8202)?,
-            health: SocketAddr::new(
-                f.health_address.unwrap_or(IpAddr::from([127, 0, 0, 1])),
-                listen("health_port", f.health_port, 8280)?.port(),
-            ),
-            api: SocketAddr::new(
-                f.api_address.unwrap_or(IpAddr::from([127, 0, 0, 1])),
-                listen("api_port", f.api_port, 8281)?.port(),
+            public: SocketAddr::new(
+                f.public_address.unwrap_or(IpAddr::from([0, 0, 0, 0])),
+                listen("public_port", f.public_port, 8280)?.port(),
             ),
             nas: listen("nas_port", f.nas_port, 80)?,
             qr: listen("qr_port", f.qr_port, 27900)?,
@@ -164,7 +167,14 @@ impl Config {
             domain: empty(f.domain).map(|d| domain(&d)).transpose()?,
             secret: secret(empty(f.secret), f.secret_file)?,
             content_dir: f.content_dir.unwrap_or_else(|| "content".into()),
-            bot_port: f.bot_port,
+            ignored: [
+                ("bot_port", f.bot_port.is_some()),
+                ("api_port", f.api_port.is_some()),
+                ("api_address", f.api_address.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(key, set)| set.then_some(key))
+            .collect(),
             encryption: f.encryption,
             admins: f.admins,
             name: f.name.unwrap_or_else(|| NAME.into()),
@@ -176,6 +186,7 @@ impl Config {
             clock_offset: 0,
             rate_limits: true,
             loopback_exempt: true,
+            control: crate::control::NAME.to_owned(),
             maintenance: None,
         })
     }
@@ -281,8 +292,34 @@ mod tests {
         assert!(secret(None, Some("/nonexistent".into())).is_err());
     }
 
+    /// Keys that left the server and that it still accepts and ignores (no breaking change since the image is
+    /// public): an operator's old `mh3sp.toml` keeps starting it. They are no longer in the example.
+    const REMOVED_KEYS: [&str; 3] = ["bot_port", "api_port", "api_address"];
+
+    /// Keys that were renamed and still work (serde lists them with the others): the example documents the new names.
+    const OLD_NAMES: [&str; 2] = ["health_port", "health_address"];
+
+    /// A removed key still loads; a key that never existed is still refused, so a typo is never silently ignored.
+    #[test]
+    fn a_removed_key_still_loads() {
+        // What each was set to in an operator's file.
+        let line = |key: &str| match key {
+            "api_address" => format!("{key} = \"127.0.0.1\""),
+            _ => format!("{key} = 8290"),
+        };
+        for key in REMOVED_KEYS {
+            assert!(toml::from_str::<File>(&line(key)).is_ok(), "{key}");
+        }
+        // Each one set is named, so that the server can warn about it; none set, nothing to say.
+        let all = REMOVED_KEYS.map(line).join("\n");
+        assert_eq!(Config::parse(&all).unwrap().ignored, REMOVED_KEYS);
+        assert!(Config::parse("").unwrap().ignored.is_empty());
+        assert!(Config::parse("bot_prot = 8290").is_err());
+    }
+
     /// `deploy/mh3sp.toml.example` is the operators' reference: it names every key, and with each one uncommented
-    /// the server takes it. The keys are serde's own, listed in its refusal of an unknown one.
+    /// the server takes it. The keys are serde's own, listed in its refusal of an unknown one; the removed keys
+    /// ([`REMOVED_KEYS`]) are left out.
     #[test]
     fn the_example_holds_every_key() {
         let example = include_str!("../../../deploy/mh3sp.toml.example");
@@ -297,7 +334,9 @@ mod tests {
         };
         let named: Vec<String> = example.lines().filter_map(key_of).collect();
         // `secret` is named in prose: the example gives its file form, and both at once are refused.
-        for key in keys.into_iter().filter(|&k| k != "secret") {
+        let in_the_example =
+            |k: &&str| *k != "secret" && !REMOVED_KEYS.contains(k) && !OLD_NAMES.contains(k);
+        for key in keys.into_iter().filter(in_the_example) {
             assert!(named.iter().any(|n| n == key), "{key} not in the example");
         }
 
@@ -322,7 +361,11 @@ mod tests {
         let c = Config::parse("").unwrap();
         assert_eq!(c.opn.port(), 8200);
         assert_eq!(c.nas, SocketAddr::from(([0, 0, 0, 0], 80)));
-        assert_eq!(c.health, SocketAddr::from(([127, 0, 0, 1], 8280)));
+        assert_eq!(
+            c.public,
+            SocketAddr::from(([0, 0, 0, 0], 8280)),
+            "every interface"
+        );
         assert_eq!(c.strategy, Strategy::Hybrid);
         assert_eq!(c.relay_ports, 40000..=40099);
         assert!(
@@ -345,6 +388,18 @@ mod tests {
         );
     }
 
+    /// The public port was the health port (loopback, for health and metrics only): its old keys still set it, so an
+    /// operator's file keeps meaning what it said. Both names of the one key at once are an error, never a silent pick.
+    #[test]
+    fn the_public_port_keeps_its_old_keys() {
+        let old = Config::parse("health_address = \"127.0.0.1\"\nhealth_port = 9280").unwrap();
+        assert_eq!(old.public, SocketAddr::from(([127, 0, 0, 1], 9280)));
+        let new = Config::parse("public_address = \"127.0.0.2\"\npublic_port = 9281").unwrap();
+        assert_eq!(new.public, SocketAddr::from(([127, 0, 0, 2], 9281)));
+        assert!(Config::parse("health_port = 1\npublic_port = 2").is_err());
+        assert!(Config::parse("public_port = 0").is_err());
+    }
+
     #[test]
     fn a_file_sets_and_checks_its_keys() {
         let c = Config::parse(
@@ -354,7 +409,7 @@ mod tests {
             secret = "s"
             natneg_strategy = "relay"
             relay_ports = "41000-41010"
-            health_address = "0.0.0.0"
+            public_address = "127.0.0.1"
             lmp_port = 9201
             encryption = true
             admins = ["ABC123"]
@@ -371,7 +426,7 @@ mod tests {
         assert_eq!(c.secret.unwrap().0, b"s");
         assert_eq!(c.strategy, Strategy::Relay);
         assert_eq!(c.relay_ports, 41000..=41010);
-        assert_eq!(c.health, SocketAddr::from(([0, 0, 0, 0], 8280)));
+        assert_eq!(c.public, SocketAddr::from(([127, 0, 0, 1], 8280)));
         assert_eq!(c.lmp.port(), 9201);
         assert!(c.encryption);
         assert_eq!(c.admins, ["ABC123"]);
@@ -381,7 +436,7 @@ mod tests {
             "relay_ports = \"2-1\"",
             "opn_port = 0",
             "opn_port = 70000",
-            "health_address = \"localhost\"",
+            "public_address = \"localhost\"",
             "encryption = \"on\"",
             "domain = \"abcdefghijklmn.example.org\"",
             "domain = \"%s.example.org\"",

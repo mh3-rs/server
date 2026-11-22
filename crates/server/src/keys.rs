@@ -17,7 +17,7 @@ use wire::packets::{AnsConnection, Packet};
 
 pub type Key = [u8; KEY_LEN];
 
-/// How long a key waits for its console's next connection: the ticket hand-off's time (decision 4).
+/// How long a key waits for its console's next connection: the ticket hand-off's time (ADR 0004).
 const IN_TRANSIT: Duration = Duration::from_secs(120);
 
 /// Keys in transit. ponytail: a list scanned per connection; it holds only the consoles switching servers within the

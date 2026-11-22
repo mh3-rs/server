@@ -84,7 +84,7 @@ impl Handler {
         }
     }
 
-    /// A database failure never drops the player (architecture decision 9): a request is refused with a message,
+    /// A database failure never drops the player (ADR 0009): a request is refused with a message,
     /// anything else goes unanswered; everything that lives in memory goes on.
     pub async fn handle(&mut self, shared: &std::sync::Arc<Shared>, req: &Frame) -> Handled {
         let handled = match self {
@@ -159,7 +159,7 @@ pub enum Fault {
     Client(anyhow::Error),
     /// The server is at fault (logged at `error`).
     Server(anyhow::Error),
-    /// The database failed (architecture decision 9): logged at `error`, the request refused with a message, the
+    /// The database failed (ADR 0009): logged at `error`, the request refused with a message, the
     /// player kept (`Handler::handle`).
     Database(anyhow::Error),
 }
@@ -314,9 +314,9 @@ const NEVER_SENT: [u32; 6] = [
     0x6253_0100,
 ];
 
-/// A request the game knows that the server has no type for (review, 2026-10-11, `docs/unk.md`): refused with a
-/// message, which cancels only that request on the console, rather than a dropped connection (M5 D15's rule). The
-/// alert, not status `0xFF`: the console drops itself on that one.
+/// A request the game knows that the server has no type for (review, 2026-10-11, the wiki's "Unknown fields"):
+/// refused with a message, which cancels only that request on the console, rather than a dropped connection (M5 D15's
+/// rule). The alert, not status `0xFF`: the console drops itself on that one.
 fn unsupported(id: PacketId) -> bool {
     id.kind() == Some(Kind::Req)
         && id.entry().is_some()
@@ -398,7 +398,8 @@ pub async fn allowed(_db: &SqlitePool, _support_code: Option<&[u8]>) -> sqlx::Re
 mod tests {
     use super::*;
 
-    /// The 33 untyped requests of the review (`docs/unk.md`): 6 never sent, 4 typed since, 23 refused with the alert.
+    /// The 33 untyped requests of the review (the wiki's "Unknown fields"): 6 never sent, 4 typed since, 23 refused
+    /// with the alert.
     #[test]
     fn unknown_requests_are_refused() {
         let refused: Vec<_> = PacketId::all().filter(|&id| unsupported(id)).collect();

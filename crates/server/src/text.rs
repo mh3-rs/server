@@ -56,7 +56,7 @@ pub enum Text {
     SeatTaken,
     /// A jump to another world server that can't be finished (its ticket unknown or expired).
     JumpFailed,
-    /// The database failed (architecture decision 9): the request is refused, the player stays.
+    /// The database failed (ADR 0009): the request is refused, the player stays.
     Unavailable,
     /// A request the game knows that the server doesn't serve (the unknown requests, review 2026-10-11).
     NotSupported,

@@ -1,4 +1,4 @@
-//! Our own Nintendo login (NAS, architecture decision 13, `../docs/history/nintendo login.md`). Before OPN the game posts `/ac` three
+//! Our own Nintendo login (NAS, ADR 0013, `../docs/history/nintendo login.md`). Before OPN the game posts `/ac` three
 //! times over plain HTTP (MH3SP's patch turns its `https` into `http`): `acctcreate` when its NAND holds no NAS user
 //! id, `login`, then `svcloc`. The `servicetoken` `svcloc` hands out comes back at OPN (`ReqAuthenticationToken`)
 //! and at LMP's first visit (`ReqLoginInfo` item 0x0a): it tells the server which Wii the console is on, its MAC and
@@ -9,18 +9,18 @@
 //! `acctcreate` (written to NAND), the `servicetoken` on `svcloc`. Open in maintenance mode: the console must reach
 //! OPN to read the maintenance text.
 //!
-//! The same port, the domain's port 80, serves the players' patch (`patch.rs`, `../docs/history/patch and CA.md`
-//! D12): a page at `/patch`, each file at `/patch/<path>`, made on each request from the CA and the `domain`.
+//! This port, the domain's port 80, is the game's HTTP port: `/ac` and nothing else. The players' guide and patch, and
+//! everything else people read, are on the public port (`public.rs`).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::post;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -50,9 +50,6 @@ pub fn tokens() -> Tokens {
 pub(crate) async fn serve(listener: TcpListener, shared: Arc<Shared>, shutdown: CancellationToken) {
     let app = Router::new()
         .route("/ac", post(ac))
-        .route("/patch", get(patch_page))
-        .route("/errors", get(errors_page))
-        .route("/patch/{*path}", get(patch_file))
         // A form is a few hundred bytes.
         .layer(DefaultBodyLimit::max(4096))
         .with_state(shared);
@@ -63,50 +60,6 @@ pub(crate) async fn serve(listener: TcpListener, shared: Arc<Shared>, shutdown: 
     {
         error!(error = %e, "NAS stopped");
     }
-}
-
-async fn patch_page(State(shared): State<Arc<Shared>>) -> Response {
-    let Some(domain) = &shared.config.domain else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
-    (html, crate::patch::page(&shared.config.name, domain)).into_response()
-}
-
-async fn errors_page(State(shared): State<Arc<Shared>>) -> Response {
-    let html = [(header::CONTENT_TYPE, "text/html; charset=utf-8")];
-    (html, crate::patch::errors(&shared.config.name)).into_response()
-}
-
-async fn patch_file(State(shared): State<Arc<Shared>>, Path(path): Path<String>) -> Response {
-    let Some(domain) = &shared.config.domain else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let files =
-        crate::tls::ca_der(&shared.config.tls_dir).and_then(|ca| crate::patch::files(domain, &ca));
-    let files = match files {
-        Ok(files) => files,
-        Err(e) => {
-            error!(error = %format!("{e:#}"), "the patch");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-    let Some((path, bytes)) = files.into_iter().find(|(p, _)| *p == path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let kind = match path.ends_with(".xml") {
-        true => "application/xml",
-        false => "application/octet-stream",
-    };
-    let name = path.rsplit('/').next().unwrap_or(&path);
-    let headers = [
-        (header::CONTENT_TYPE, kind.to_owned()),
-        (
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{name}\""),
-        ),
-    ];
-    (headers, bytes).into_response()
 }
 
 async fn ac(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {

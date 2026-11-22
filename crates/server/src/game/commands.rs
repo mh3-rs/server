@@ -1,13 +1,12 @@
 //! Chat commands (the user's notes, 2026-10-11): a town or party chat line starting with `/` is for the server, never
 //! relayed. The answer reaches the sender alone, from "[MH3SP]". Anyone may `/tell`; the rest is for the admins (the
 //! configuration's `admins`, Capcom IDs), and answers "Unknown command" to the others, like a command that doesn't
-//! exist. Each admin command is one function, which the API (`api.rs`) calls too.
+//! exist.
 //!
 //! - `/tell <player> <message>`: to that player alone, as chat from the sender (a player: a Capcom ID, or a name
 //!   when only one player has it); not delivered when the target has the sender on their black list.
 //! - `/announce <text>`, `/stop <delay|cancel>`, `/kick <player>`, `/ban <Capcom ID> <reason>` (the player's
-//!   console, kicked), `/unban <Capcom ID>`, `/bot add` (a bot in my party), `/bot remove
-//!   <bot>`.
+//!   console, kicked), `/unban <Capcom ID>`.
 
 use std::sync::Arc;
 
@@ -58,22 +57,10 @@ pub fn run(shared: &Arc<Shared>, me: &str, name: &Bytes, line: &[u8]) -> Option<
             Err(refusal) => refusal,
         },
         ("ban", true) => match rest.split_once(' ') {
-            Some((who, reason)) => later(shared, me, ban(shared, who, reason.trim(), None), "ban"),
+            Some((who, reason)) => later(shared, me, ban(shared, who, reason.trim(), me), "ban"),
             None => "/ban <player> <reason>".to_owned(),
         },
         ("unban", true) if !rest.is_empty() => later(shared, me, unban(shared, rest), "unban"),
-        #[cfg(feature = "bot")]
-        ("bot", true) => match rest.split_once(' ').unwrap_or((rest, "")) {
-            ("add", "") => match super::fmp::add_bot(shared, me) {
-                Ok(bot) => format!("Bot {bot} joined your party."),
-                Err(refusal) => format!("No bot: {refusal:?}."),
-            },
-            ("remove", bot) => match super::fmp::remove_bot(shared, bot.trim()) {
-                true => format!("Bot {} left.", bot.trim()),
-                false => "No such bot.".to_owned(),
-            },
-            _ => "/bot add, or /bot remove <bot>".to_owned(),
-        },
         _ => "Unknown command.".to_owned(),
     })
 }
@@ -95,19 +82,19 @@ fn later(
     String::new()
 }
 
-/// Bans the console of a player, by Capcom ID only (a name could hit someone else), and kicks them; `by`: the API's
-/// user, `None` for the operator.
+/// Bans the console of a player, by Capcom ID only (a name could hit someone else), and kicks them; `by`: the Capcom
+/// ID of the admin who asked.
 pub fn ban(
     shared: &Arc<Shared>,
     capcom_id: &str,
     reason: &str,
-    by: Option<uuid::Uuid>,
+    by: &str,
 ) -> impl Future<Output = Result<String, String>> + Send + 'static {
     let target = capcom_id.trim().to_ascii_uppercase();
-    let (shared, reason) = (shared.clone(), reason.to_owned());
+    let (shared, reason, by) = (shared.clone(), reason.to_owned(), by.to_owned());
     async move {
         let db = shared.db.pool().ok_or(UNAVAILABLE)?;
-        match crate::access::ban(db, &target, &reason, by).await {
+        match crate::access::ban(db, &target, &reason, &by).await {
             Ok(true) => {
                 shared.players.kick(&target);
                 info!(player = %target, "banned");
@@ -144,7 +131,7 @@ pub fn unban(
     }
 }
 
-/// A refusal for want of the database (the API answers it with 503).
+/// A refusal for want of the database.
 pub const UNAVAILABLE: &str = "Not available right now.";
 
 /// `/tell <player> <message>`: answered once the target's black list is read; a blocked sender is told it was sent
@@ -216,23 +203,7 @@ fn display(shared: &Shared, capcom_id: &str) -> Bytes {
         )
 }
 
-/// Who is online, the earliest arrived first (`GET /api/players`).
-pub fn online(shared: &Shared) -> Vec<shared::Player> {
-    let world = shared.world();
-    world
-        .everyone()
-        .into_iter()
-        .map(|(id, place)| shared::Player {
-            capcom_id: id.to_owned(),
-            name: String::from_utf8_lossy(&place.name).into_owned(),
-            server: super::world::SERVERS
-                .get(place.server as usize - 1)
-                .map_or_else(|| place.server.to_string(), |(name, _)| (*name).to_owned()),
-        })
-        .collect()
-}
-
-/// A message to one player from "[MH3SP]" (`POST /api/tell`).
+/// A message to one player from "[MH3SP]".
 pub fn from_server(shared: &Shared, target: &str, text: &str) {
     for frame in answer(shared, target, text) {
         shared.players.send(target, frame);

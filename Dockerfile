@@ -21,10 +21,10 @@ RUN setcap cap_net_bind_service=+ep /usr/local/bin/mh3sp
 RUN mkdir data && chown mh3sp data
 VOLUME /opt/mh3sp/data
 USER mh3sp
-# TCP: the Nintendo login (HTTP), OPN (TLS), LMP, FMP, health. UDP: the availability check, NAT negotiation, the
+# TCP: the Nintendo login (HTTP), OPN (TLS), LMP, FMP, the public port (the guide, health, metrics). UDP: the availability check, NAT negotiation, the
 # relay (relay_ports). Publish them unchanged: NAT negotiation needs the consoles' real addresses, which rootful Docker
 # on Linux keeps (see deploy/README.md).
 EXPOSE 80 8200 8201 8202 8280 27900/udp 27901/udp 40000-40099/udp
-# Liveness only: a database problem shows on /health/ready, not here (see crates/server/src/health.rs).
+# Liveness only: a database problem shows on /health/ready, not here (see crates/server/src/public.rs).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 CMD ["mh3sp", "healthcheck"]
 ENTRYPOINT ["mh3sp"]

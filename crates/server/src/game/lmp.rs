@@ -6,7 +6,7 @@
 //! - Second visit (`NtcLogin` 2), with the ticket: it plays a slot (its Capcom ID, created for an empty slot), gets
 //!   a new ticket, the world server list and the FMP address.
 //!
-//! The session goes from one visit to the next through the ticket cache (decision 4).
+//! The session goes from one visit to the next through the ticket cache (ADR 0004).
 
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -105,7 +105,7 @@ impl Lmp {
                 reply(seq, &NtcLogin { status })
             }
             (Stage::FirstVisit, ReqLoginInfo::ID) => {
-                // Our Nintendo login's token (decision 13), used up here. Never logged.
+                // Our Nintendo login's token (ADR 0013), used up here. Never logged.
                 let data = ReqLoginInfo::decode(p)?.data;
                 if self.device.is_none()
                     && let Some(Item::Binary(token) | Item::String(token)) = data.get(0x0a)
@@ -123,7 +123,7 @@ impl Lmp {
                     .as_ref()
                     .ok_or_else(|| server("no secret"))?;
                 let region = self.region.expect("set with the first visit");
-                // Kept until the login succeeds: after a database failure the console may ask again (decision 9), and
+                // Kept until the login succeeds: after a database failure the console may ask again (ADR 0009), and
                 // must not be handed a new code in place of its own.
                 let known = match &self.support_code {
                     Some(code) => accounts::known_console(db, secret, code)

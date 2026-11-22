@@ -356,8 +356,8 @@ packets! {
     AnsLayerDetailSearchData = 0x64910200 { unk: u32, count: u32 }
     ReqLayerDetailSearchFoot = 0x64920100 { rest: Rest }
     AnsLayerDetailSearchFoot = 0x64920200 {}
-    // Requests whose sender has no known caller in the decomp (review, 2026-10-11, `docs/unk.md`): answered as the
-    // client expects, so a console that sends one isn't refused. The requests aren't read.
+    // Requests whose sender has no known caller in the decomp (review, 2026-10-11, the wiki's "Unknown fields"):
+    // answered as the client expects, so a console that sends one isn't refused. The requests aren't read.
     /// A city's settings, from its host (`NetworkLayerPat::handleLayerInfoSet`): acknowledged, not stored.
     ReqLayerInfoSet = 0x64200100 { rest: Rest }
     AnsLayerInfoSet = 0x64200200 {}

@@ -2,12 +2,6 @@
 //! `mh3sp healthcheck`  exit 0 if a running server is live (container healthcheck)
 //! `mh3sp announce "<text>"`  an announcement to every player of the running server
 //! `mh3sp stop <delay|cancel>`  stop the running server with warning (`5min`, `1h30m`, `30s`), or not
-//! `mh3sp bot add <Capcom ID>`  a quest bot joins that player's party (needs the brain, `bot_port`; the `bot` feature)
-//! `mh3sp bot remove <bot>`    the bot leaves
-//! `mh3sp user add <email> <admin|player>`  a user of the API, and a token for the CLI (printed once)
-//! `mh3sp user password <email>`  sets that user's password (read from stdin), for the website's sign-in
-//! `mh3sp token add <email>`   another CLI token for that user (printed once)
-//! `mh3sp token revoke <key>`  revokes a token (its key: the part before the dot)
 //! `mh3sp patch <dir>`      the players' patch for this deployment (`domain`, the CA in `tls_dir`, created if
 //!                      missing), and the DNS records it needs
 //! `mh3sp check <domain>`   from another machine: which port forward or DNS record is missing (reads no configuration;
@@ -26,58 +20,21 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let maintenance = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => None,
-        ["healthcheck"] => return server::health::check(Config::load()?.health),
+        // Before anything reads the configuration: it must answer anywhere, with no `mh3sp.toml`.
+        ["--version"] => {
+            println!("mh3sp {}", server::VERSION);
+            return Ok(());
+        }
+        ["healthcheck"] => return server::public::check(Config::load()?.public),
         ["announce", text] => {
             println!(
                 "{}",
-                server::health::announce(Config::load()?.health, text)?
+                server::control::announce(server::control::NAME, text)?
             );
             return Ok(());
         }
         ["stop", delay] => {
-            println!("{}", server::health::stop(Config::load()?.health, delay)?);
-            return Ok(());
-        }
-        #[cfg(feature = "bot")]
-        ["bot", verb @ ("add" | "remove"), who] => {
-            println!(
-                "{}",
-                server::health::bot(Config::load()?.health, verb, who)?
-            );
-            return Ok(());
-        }
-        ["user", "add", email, role] => {
-            let role = server::users::Role::parse(role)
-                .ok_or_else(|| anyhow::anyhow!("role: admin or player"))?;
-            let db = database().await?;
-            server::users::add(&db, email, role).await?;
-            println!("{}", server::users::issue(&db, email, "cli").await?);
-            return Ok(());
-        }
-        ["user", "password", email] => {
-            let mut password = String::new();
-            std::io::stdin().read_line(&mut password)?;
-            let password = password.trim_end_matches(['\n', '\r']);
-            let db = database().await?;
-            anyhow::ensure!(
-                server::users::set_password(&db, email, password).await?,
-                "no user {email}"
-            );
-            println!("password set");
-            return Ok(());
-        }
-        ["token", "add", email] => {
-            println!(
-                "{}",
-                server::users::issue(&database().await?, email, "cli").await?
-            );
-            return Ok(());
-        }
-        ["token", "revoke", key] => {
-            let revoked =
-                server::users::revoke(&database().await?, key, "revoked by the operator").await?;
-            anyhow::ensure!(revoked, "no valid token {key}");
-            println!("revoked");
+            println!("{}", server::control::stop(server::control::NAME, delay)?);
             return Ok(());
         }
         ["patch", dir] => {
@@ -87,7 +44,8 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("domain: unset in the configuration"))?;
             let records = server::patch::write(dir.as_ref(), &domain, &config.tls_dir)?;
             println!(
-                "Written in {dir}: riivolution/ (Dolphin, a Wii booting the disc), wit/ (an image for USB loaders), codes/ (USB loaders with Ocarina). Players can also download them from http://{domain}/patch."
+                "Written in {dir}: riivolution/ (Dolphin, a Wii booting the disc), wit/ (an image for USB loaders), codes/ (USB loaders with Ocarina). Players can also download them from the public port: http://{domain}:{}/patch.",
+                config.public.port()
             );
             println!(
                 "DNS records, each pointing to this server ({}):",
@@ -110,7 +68,7 @@ async fn main() -> Result<()> {
         }
         ["maintenance", message] => Some(message.to_owned()),
         _ => anyhow::bail!(
-            "usage: mh3sp [healthcheck | announce \"<text>\" | stop <delay|cancel> | bot add|remove <id> | user add <email> <role> | user password <email> | token add <email> | token revoke <key> | patch <dir> | check <domain> | maintenance \"<message>\"]"
+            "usage: mh3sp [--version | healthcheck | announce \"<text>\" | stop <delay|cancel> | patch <dir> | check <domain> | maintenance \"<message>\"]"
         ),
     };
 
@@ -140,11 +98,6 @@ async fn main() -> Result<()> {
     tracing::info!("shutting down");
     running.stop().await;
     Ok(())
-}
-
-/// The configuration's database, opened (and migrated) for a command.
-async fn database() -> Result<sqlx::SqlitePool> {
-    server::database::open(&Config::load()?.database_url).await
 }
 
 /// How long a signal's stop warns players (under `docker stop`'s 10 s).
