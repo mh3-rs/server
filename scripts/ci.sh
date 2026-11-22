@@ -24,7 +24,7 @@ run_lint() {
   rustup component add rustfmt clippy >/dev/null 2>&1
   cargo fmt --all --check
   cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-  # The server as shipped (no features): what the `bot` feature gates must leave it clean.
+  # The server as shipped (no features): what the `prometheus` feature gates must leave it clean.
   cargo clippy -p server --all-targets --locked -- -D warnings
   # Known vulnerabilities, licenses, sources (deny.toml).
   command -v cargo-deny >/dev/null || { echo 'cargo-deny missing: cargo install cargo-deny --locked' >&2; exit 1; }
@@ -56,9 +56,8 @@ run_tests() {
   export CONTENT_DIR
 
   cargo test --workspace --locked
-  # The features' own code (the server's unit tests with each; testkit's tests run with `bot` already).
+  # The feature's own code (the server's unit tests with it).
   cargo test -p server --lib --features prometheus --locked
-  cargo test -p server --lib --features bot --locked
 }
 
 # One call per line, never `lint && test`: `set -e` is off on the left of `&&`, which would hide a failing lint.

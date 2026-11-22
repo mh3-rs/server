@@ -308,7 +308,7 @@ fn html_name(name: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// The player guide, with the patch's files (`GET /patch` on the NAS port, the domain's port 80): `patch.html`.
+/// The player guide, with the patch's files (`GET /patch` on the public port): `patch.html`.
 /// The domain is checked already (`config.rs`).
 pub(crate) fn page(name: &str, domain: &str) -> String {
     let name = html_name(name);

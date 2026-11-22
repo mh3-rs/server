@@ -1,8 +1,8 @@
 #!/bin/sh
 # Prepare the dev environment: `.env` with what sqlx's tools read, and `mh3sp.toml` with what the server needs in dev
 # (every other key has a default, see crates/server/src/config.rs). Idempotent: existing files are kept.
-#   scripts/dev.sh --reset   also deletes the dev database (needed after a schema change: before 1.0.0 the schema
-#                            file is rewritten in place, which sqlx refuses on an existing database)
+#   scripts/dev.sh --reset   also deletes the dev database, for a clean start (a schema change is a new migration,
+#                            applied at the next start: never an edit of one that was released)
 set -eu
 cd "$(dirname "$0")/.."
 

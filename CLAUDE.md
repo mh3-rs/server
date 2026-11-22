@@ -7,11 +7,12 @@ data model: the wiki of `mh3-rs/docs`.
 
 ## Rules
 
-- The schema is `migrations/0001_schema.sql` (its reasoning: the wiki's `Project`); `scripts/dev.sh --reset` after
-  changing it. After changing a query or the schema, `scripts/sqlx-prepare.sh`.
-- Don't touch `migrations/0001_schema.sql` for anything but a schema change, a comment included: `sqlx::migrate!` checks
-  the checksum of a migration a database already applied (assumed, not tried), so an existing database, ours included,
-  would refuse to start. Its two old comments citing removed docs wait for the schema review (mh3-rs/server#9).
+- The schema is the migrations in `migrations/` (its reasoning: the wiki's `Project`), forward only: the image is public,
+  so a schema change is a new `NNNN_*.sql`, never an edit of one that was released. `0001_schema.sql` is never touched,
+  a comment included: `sqlx::migrate!` checks the checksum of a migration a database already applied, so an existing
+  database would refuse to start (a test pins its hash: `crates/server/tests/migration.rs`, which also upgrades a
+  database written by the published server). After changing a query or the schema, `scripts/sqlx-prepare.sh`; it
+  needs the `sqlite3` command line tool.
 - A worktree where `scripts/ci.sh --woodpecker` ran keeps root-owned files in `target/ci` (the pipeline runs in Docker):
   `git worktree remove` can't delete it, so remove such a worktree with `sudo`.
 - On the shared server the whole test run is timing-sensitive: under a heavy load (`uptime`) unrelated tests fail

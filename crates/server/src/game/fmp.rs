@@ -858,8 +858,6 @@ impl Fmp {
                 let r = NtcLayerBinary::decode(p)?;
                 let me = capcom_id(session);
                 let body = without_sender(&r.data.0)?;
-                #[cfg(feature = "bot")]
-                bot::peer_message_from(shared, me, body);
                 let mut data = Vec::new();
                 data.put_lp2_string(me.as_bytes())?;
                 data.put_pat_data(&sender(me, &session.name, true))?;
@@ -879,10 +877,6 @@ impl Fmp {
                 let me = capcom_id(session);
                 let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
                 if !shared.world().others(me).contains(&partner) {
-                    return Ok(vec![]);
-                }
-                #[cfg(feature = "bot")]
-                if bot::to_bot(shared, me, &partner, without_sender(&r.data.0)?) {
                     return Ok(vec![]);
                 }
                 let mut data = Vec::new();
@@ -1183,8 +1177,6 @@ impl Fmp {
                 let ntc = circle_binary(seq, me, &session.name, r.circle, body)?;
                 let mut out = Vec::new();
                 notify(shared, me, &others, &ntc, &mut out);
-                #[cfg(feature = "bot")]
-                bot::party_sync(shared, &world, me, &others, (seq, r.circle), body, &mut out)?;
                 Ok(out)
             }
             ReqCircleMatchEnd::ID => {
@@ -1453,11 +1445,6 @@ fn notify(shared: &Shared, me: &str, to: &[String], ntc: &Frame, out: &mut Vec<F
     }
 }
 
-#[cfg(feature = "bot")]
-mod bot;
-#[cfg(feature = "bot")]
-pub use bot::{add_bot, bot_says, remove_bot};
-
 /// A party message as the members get it: the sender's Capcom ID and name in front.
 fn circle_binary(
     seq: u16,
@@ -1507,8 +1494,6 @@ fn enter_city(
     me: &str,
     id: (u32, u16, u16),
 ) -> Result<(), world::CityRefusal> {
-    #[cfg(feature = "bot")]
-    bot::make_room(shared, world, me, id);
     world.join_city(id, me)?;
     info!(gate = id.1, city = id.2, "entered city");
     // Best effort: the player is in.
@@ -1561,8 +1546,6 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     if !world.placed_by(me, conn) {
         return;
     }
-    #[cfg(feature = "bot")]
-    bot::departing(shared, me, conn);
     // Leaving a city (or the game) means leaving its quest first; the requester's own notices are of no use now.
     let mut ignored = Vec::new();
     let in_city = world.city_of(me).is_some();
@@ -1637,10 +1620,6 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
                 shared.players.send(other, ntc.clone());
             }
         }
-    }
-    #[cfg(feature = "bot")]
-    if let Some(id) = city.filter(|_| leaves_city) {
-        bot::left_behind(shared, world, conn, id);
     }
 }
 
@@ -2101,10 +2080,7 @@ fn quit_quest(
         let broken = frame(seq, &NtcCircleBreak { circle: 0 })?;
         notify(shared, requester, &leaving.others, &broken, out);
     }
-    let changed = list_change(shared, world, requester, leaving.id, seq, out);
-    #[cfg(feature = "bot")]
-    bot::partyless(shared, world, requester, leaving.id.0);
-    changed
+    list_change(shared, world, requester, leaving.id, seq, out)
 }
 
 /// A message's sender info: the sender's Capcom ID and name, and an unknown 20; in the order consoles send (and

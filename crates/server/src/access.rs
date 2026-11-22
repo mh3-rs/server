@@ -1,24 +1,24 @@
 //! Bans (`access_rules`, the wiki's "Project", the data model): an admin bans a player's console, all its hunters with
 //! it, and the Wii it last logged in from (`devices`, ADR 0013), so a new save doesn't lift it. A ban is checked
-//! when the console logs in (the Wii at OPN, the console at `game::lmp`) and lifted by revoking it. The whitelist
-//! (rules of kind `allow`) is a question still (the Roadmap: "Moderation, Minecraft-style").
+//! when the console logs in (the Wii at OPN, the console at `game::lmp`) and lifted by revoking it. The table also
+//! holds the whitelist (kind `allow`, on a Wii) and the ops (kind `op`, on a hunter); their commands are a later
+//! sprint (the Roadmap: "Moderation, Minecraft-style").
 
 use anyhow::Result;
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
-/// Bans the console of the hunter with this Capcom ID and its Wii, by the user with public id `by` (`None`: the
-/// operator): `false` if there's no such hunter.
-pub async fn ban(db: &SqlitePool, capcom_id: &str, reason: &str, by: Option<Uuid>) -> Result<bool> {
+/// Bans the console of the hunter with this Capcom ID and its Wii, as the hunter `by` (a Capcom ID: the admin who
+/// typed `/ban`): `false` if there's no such hunter.
+pub async fn ban(db: &SqlitePool, capcom_id: &str, reason: &str, by: &str) -> Result<bool> {
     let public_id = Uuid::now_v7();
     let public_id = public_id.as_bytes().as_slice();
     let device_rule = Uuid::now_v7();
     let device_rule = device_rule.as_bytes().as_slice();
-    let by = by.map(|u| u.as_bytes().to_vec());
     let mut tx = db.begin().await?;
     let done = sqlx::query!(
         "INSERT INTO access_rules (public_id, kind_id, console_id, reason, created_by)
-         SELECT ?1, rule_kinds.id, hunters.console_id, ?3, (SELECT id FROM users WHERE public_id = ?4)
+         SELECT ?1, rule_kinds.id, hunters.console_id, ?3, (SELECT id FROM hunters WHERE capcom_id = ?4)
          FROM hunters, rule_kinds
          WHERE hunters.capcom_id = ?2 AND rule_kinds.name = 'ban'",
         public_id,
@@ -30,7 +30,7 @@ pub async fn ban(db: &SqlitePool, capcom_id: &str, reason: &str, by: Option<Uuid
     .await?;
     sqlx::query!(
         "INSERT INTO access_rules (public_id, kind_id, device_id, reason, created_by)
-         SELECT ?1, rule_kinds.id, consoles.device_id, ?3, (SELECT id FROM users WHERE public_id = ?4)
+         SELECT ?1, rule_kinds.id, consoles.device_id, ?3, (SELECT id FROM hunters WHERE capcom_id = ?4)
          FROM hunters JOIN consoles ON consoles.id = hunters.console_id, rule_kinds
          WHERE hunters.capcom_id = ?2 AND consoles.device_id IS NOT NULL AND rule_kinds.name = 'ban'",
         device_rule,
@@ -75,28 +75,6 @@ pub async fn banned_since(shared: &crate::Shared, console_id: i64) -> bool {
             false
         }
     }
-}
-
-/// The bans in force, the latest first: public id, the console's Capcom IDs (comma-separated, sorted), reason, since.
-pub async fn bans(db: &SqlitePool) -> Result<Vec<(Uuid, String, String, String)>> {
-    let rows = sqlx::query!(
-        r#"SELECT r.public_id,
-                  (SELECT group_concat(capcom_id, ',' ORDER BY capcom_id) FROM hunters
-                   WHERE console_id = r.console_id) AS "ids: String",
-                  r.reason, r.created_at
-           FROM access_rules r JOIN rule_kinds k ON k.id = r.kind_id
-           WHERE k.name = 'ban' AND r.console_id IS NOT NULL AND r.revoked_at IS NULL
-             AND (r.expires_at IS NULL OR r.expires_at > CURRENT_TIMESTAMP)
-           ORDER BY r.id DESC"#
-    )
-    .fetch_all(db)
-    .await?;
-    rows.into_iter()
-        .map(|r| {
-            let id = Uuid::from_slice(&r.public_id)?;
-            Ok((id, r.ids.unwrap_or_default(), r.reason, r.created_at))
-        })
-        .collect()
 }
 
 /// Whether a console, or the Wii it last logged in from, is banned now.

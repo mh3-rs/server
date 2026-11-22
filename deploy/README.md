@@ -69,9 +69,10 @@ deployment has its own: the server creates it in `tls_dir` at its first start (`
 and certificate from it (`server.key`, `server.crt`). **Back `tls_dir` up with the database**: losing the CA means a
 new one, and a new patch for every player.
 
-- **The player guide and the patch**: `http://<domain>/patch` (the Nintendo login's port), a page made from your
-  `name`, `domain` and CA: the files for each disc and way of playing, how to apply them, Dolphin's settings, the
-  support code; and `http://<domain>/errors`, the known errors and error codes. Point your players there. `mh3sp patch <dir>` writes the same files, to publish
+- **The player guide and the patch**: `/patch` on the public port (8280: `http://<domain>:8280/patch`, or behind your
+  proxy, "Port 80" below), a page made from your `name`, `domain` and CA: the files for each disc and way of playing,
+  how to apply them, Dolphin's settings, the support code; and `/errors`, the known errors and error codes. Point your
+  players there. `mh3sp patch <dir>` writes the same files, to publish
   yourself: `riivolution/` (Dolphin, a Wii booting the disc), `wit/` (for `wit dolpatch`, an image for USB loaders),
   `codes/` (Gecko codes for USB loaders with Ocarina, untested on a Wii). PAL and US discs. It holds no game data. A
   new `domain` means a new patch; a new IP doesn't.
@@ -86,7 +87,7 @@ new one, and a new patch for every player.
 The patch points every name the game looks up at your `domain`. Create these records (A, to `external_address`);
 `mh3sp patch` prints them for your domain:
 
-- `<domain>`: the Nintendo login and the player guide, on port 80 (below);
+- `<domain>`: the Nintendo login, on port 80 (below), and the player guide, on the public port;
 - `opn.<domain>`: OPN;
 - `mh3uswii.available.<domain>`: the availability check;
 - `mh3uswii.a.<domain>`, `mh3uswii.b.<domain>`, `mh3uswii.c.<domain>`: NAT negotiation's three servers.
@@ -110,8 +111,7 @@ these numbers. Docker's published ports go around `ufw`'s rules: the router is w
 | 27900 | UDP | the game's availability check |
 | 27901 | UDP | NAT negotiation |
 | 40000–40099 | UDP | the relay (`relay_ports`) |
-| 8281 | TCP | the API: not to open as such, behind a reverse proxy with TLS |
-| 8280 | TCP | not to open: health, metrics and operator commands, on 127.0.0.1 (`health_address`; with `0.0.0.0` for a metrics scraper elsewhere, keep it behind a firewall: its commands have no authentication yet) |
+| 8280 | TCP | the public port (`public_port`, every interface; `public_address` to bind one): the players' guide and patch, health, metrics. Nothing on it changes the server, so it is safe to publish; restrict it with your proxy if you want |
 
 **Check from outside.** The router is where a forward goes missing, and the server's log shows nothing when it does
 (the first outside player of the first deployment got errors 20100, then 11613: port 80 was forwarded, 8200–8202 were
@@ -122,19 +122,20 @@ docker run --rm mh3rs/server check <domain>
 ```
 
 It resolves the names of the patch (the first four must point to the same address; `mh3uswii.b` and `.c` may
-point at a second one), then tries `GET /patch` on port 80, a connection to 8200, 8201 and 8202, and the availability
+point at a second one), then asks the Nintendo login on port 80 (`POST /ac`), tries a connection to 8200, 8201 and 8202, and the availability
 check on 27900. One line each: `ok`, or `FAIL` with what to forward. It exits 1 if any fails. It doesn't check
 27901 (NAT negotiation answers only logged-in consoles: forward it with 27900) nor the relay ports (a relay port
 listens only while it relays a pair).
 
 ## Port 80
 
-The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP. If the host already serves websites on port
-80, let your reverse proxy forward `<domain>` to the server's `nas_port`; only that name goes through it, the others
-aren't HTTP. The server doesn't need the client's address there.
+The patch makes the game call `http://<domain>/ac`: port 80, plain HTTP, the Nintendo login, which answers nothing
+else. If the host already serves websites on port 80, let your reverse proxy forward `<domain>`'s `/ac` to the
+server's `nas_port`; only that name goes through it, the others aren't HTTP. The server doesn't need the client's
+address there. The players' guide and patch are on the public port: route `/patch` and `/errors` of the same name to
+it, for browsers (or let players use `http://<domain>:8280/patch`).
 
 - **Plain HTTP for the game**: no redirect to HTTPS (the game can't follow one), so no HSTS either on that route.
-  Serve the same route on HTTPS too, for browsers opening the player guide (`/patch`).
 - **The patch from this version on**: the game sends its `Host` header twice, which every common proxy refuses (a
   400, the game's error 23400); the patch drops the second. Players with an older patch download it again.
 
@@ -142,15 +143,21 @@ With Traefik (its docker labels; `web` and `websecure` your entrypoints; with th
 `traefik.docker.network=<the one Traefik shares>`):
 
 ```yaml
-- traefik.http.services.mh3sp.loadbalancer.server.port=80   # nas_port
-- traefik.http.routers.mh3sp-http.rule=Host(`mh3.example.org`)
+- traefik.http.services.mh3sp.loadbalancer.server.port=80   # nas_port: the Nintendo login
+- traefik.http.services.mh3sp-public.loadbalancer.server.port=8280   # public_port: the guide, health, metrics
+# The game's call: plain HTTP, `/ac` only.
+- traefik.http.routers.mh3sp-http.rule=Host(`mh3.example.org`) && Path(`/ac`)
 - traefik.http.routers.mh3sp-http.entrypoints=web
 - traefik.http.routers.mh3sp-http.service=mh3sp
-- traefik.http.routers.mh3sp-https.rule=Host(`mh3.example.org`)
-- traefik.http.routers.mh3sp-https.entrypoints=websecure
-- traefik.http.routers.mh3sp-https.tls.certresolver=<yours>
-- traefik.http.routers.mh3sp-https.service=mh3sp
+# The guide, for browsers: HTTPS.
+- traefik.http.routers.mh3sp-guide.rule=Host(`mh3.example.org`) && (PathPrefix(`/patch`) || Path(`/errors`))
+- traefik.http.routers.mh3sp-guide.entrypoints=websecure
+- traefik.http.routers.mh3sp-guide.tls.certresolver=<yours>
+- traefik.http.routers.mh3sp-guide.service=mh3sp-public
 ```
+
+The `/ac` route is the one the game needs (tried on the first deployment); the second service and the guide's route
+are the same labels pointed at the public port (assumed, not tried here).
 
 If `web` redirects everything to HTTPS (`entrypoints.web.http.redirections.entryPoint.to`), that redirect outranks
 every router: lower it with `--entrypoints.web.http.redirections.entryPoint.priority=1`, and check that your other
@@ -167,8 +174,11 @@ behind one carrier-grade NAT share an address).
 
 ## Announcements and stopping
 
-These commands talk to the running server through its health port (8280), on 127.0.0.1 by default: anyone reaching
-it could use them (no authentication yet).
+`mh3sp announce` and `mh3sp stop` talk to the running server through a socket that is on no port and in no file (a
+Linux abstract Unix socket named `mh3sp`, in the server's network namespace): there is nothing to expose, and they
+work from inside the container as the server's user or root, which is what `docker compose exec` gives. Nothing on a
+port can announce or stop the server. They need Linux; elsewhere, use the chat commands below. A second server in the
+same namespace (host networking) finds the name taken and runs without it, with a warning.
 
 - `mh3sp announce "Maintenance tonight at 22:00"` sends a message to every logged-in player, shown in their chat from
   "[MH3SP]" (cut in lines of 30 characters).
@@ -182,32 +192,13 @@ it could use them (no authentication yet).
   online has; not delivered to a player who has the sender on their black list). The Capcom IDs listed in `admins` also have `/announce <text>`, `/stop <delay|cancel>`,
   `/kick <player>`, `/ban <Capcom ID> <reason>` (the player's console, all its hunters; kicked at once, and refused
   at every reconnection; a player can still come back as a new console, with a save that has no support code yet),
-  `/unban <Capcom ID>`, and with the quest bots `/bot add` (in their party) and `/bot remove <bot>`; to anyone else,
-  these are an unknown command.
+  `/unban <Capcom ID>`; to anyone else, these are an unknown command.
 - `docker stop` (or Ctrl-C) gives players a 5-second warning; a second one stops at once. For a planned restart, use
   `mh3sp stop` first.
 
-## The API
-
-The admin CLI and the website talk to the server through its API (JSON on `api_port`, 127.0.0.1:8281 by default;
-put a reverse proxy with TLS in front of it to reach it from elsewhere). Each request carries a token. Make the
-first user, and their token, with the binary itself (it opens the database directly):
-
-```sh
-docker compose exec mh3sp mh3sp user add you@example.org admin   # prints a token, once
-docker compose exec mh3sp mh3sp token add you@example.org        # another one
-docker compose exec mh3sp mh3sp token revoke mh3sp_0123abcd…     # the part before the dot
-docker compose exec -T mh3sp mh3sp user password you@example.org < password.txt   # the website's sign-in
-```
-
-Admins have `GET /api/players` and `/api/bans`, and `POST /api/announce`, `/api/stop`, `/api/kick`, `/api/tell`,
-`/api/ban`, `/api/unban`, with the quest bots `/api/bot/add` and `/api/bot/remove` (the messages: the `shared`
-crate; the admin CLI, `mh3sp-admin`, calls them). Anyone with a token has `GET /api/me`; the website signs in with
-`POST /api/session` (email and password) and out with `POST /api/logout`.
-
 ## Metrics
 
-`GET /metrics` on the health port: the release running (`version`), players (per world server), cities, quests, NAT negotiations (direct, relayed,
+`GET /metrics` on the public port: the release running (`version`), players (per world server), cities, quests, NAT negotiations (direct, relayed,
 reports), the relay (pairs open, bytes), requests (count, latency buckets), as JSON. Counts only, never a player's
 identity. The `-prometheus` images also serve `GET /metrics/prometheus`, the same in Prometheus' format (with `mh3sp_build_info{version="…"}` for the release) (built with
 `--build-arg FEATURES=prometheus`, or `cargo build --features prometheus`).
@@ -223,8 +214,26 @@ Back up `data/mh3sp.db` **and the secret**: one without the other restores nothi
 CA): without it, every player needs a new patch. The database is SQLite in WAL
 mode; copy it live with `sqlite3 data/mh3sp.db ".backup backup.db"`, not with `cp`.
 
-Before 1.0.0 the schema is rewritten in place: an upgrade may need a fresh database (the release notes say so). From
-1.0.0 on, migrations only go forward and run at startup.
+Migrations only go forward and run at startup: an upgrade never needs a fresh database, and a release never edits one
+that was published. After 0.1.0, no upgrade breaks a database, a `mh3sp.toml`, a published port or a command in this
+guide; a key that leaves stays accepted and is ignored with a warning.
+
+### Upgrading from 0.0.0
+
+0.1.0 is the one release that changes what an operator holds (it says so in the changelog), the last to do so. Once:
+
+1. **Back up first** (above). The database is migrated in place at the first start (every console, hunter, friend,
+   message and ban stays); the old image can't open it afterwards (assumed: sqlx refuses a database with a migration
+   it doesn't know), so the backup is the way back.
+2. **Publish the public port.** `/patch` and `/errors` moved from port 80 to the public port (8280, `public_port`,
+   every interface by default): add `"8280:8280/tcp"` to your `compose.yaml` (this one has it), and route them to it if a
+   proxy fronts your domain ("Port 80"). Port 80 answers `/ac` and nothing else, so the guide's links need that route.
+3. **The operator's commands** moved from the health port to a socket: `docker compose exec mh3sp mh3sp stop 5min`
+   works as before; nothing on a port takes them any more (`POST /announce` and `POST /stop` are gone).
+4. **What was removed**: the API (`mh3sp user`, `mh3sp token`, the admin CLI) and the quest bots. Their keys,
+   `api_port`, `api_address` and `bot_port`, are still accepted and ignored with a warning; `health_port` and
+   `health_address` are the public port's old names, and still work (but the port now binds every interface unless you
+   set `health_address`/`public_address`).
 
 ## Sizing
 

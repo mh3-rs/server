@@ -251,8 +251,8 @@ fn natneg_records_reencode() {
 }
 
 /// Every recorded console-to-console datagram that isn't NAT negotiation is GT2's or the game's frames: each decodes
-/// (the frames' CRC checked, their messages read) and re-encodes byte for byte (the quest bots speak it,
-/// `experiment-bots.md`).
+/// (the frames' CRC checked, their messages read) and re-encodes byte for byte (the quest bots spoke it: tag
+/// `archive/quest-bots`).
 #[test]
 fn p2p_datagrams_reencode() {
     use wire::p2p::{Frame, Gt2, Message};

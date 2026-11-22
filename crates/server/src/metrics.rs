@@ -1,4 +1,4 @@
-//! What an operator watches (M5 D5): `GET /metrics` on the health port, a JSON snapshot; `GET /metrics/prometheus`
+//! What an operator watches (M5 D5): `GET /metrics` on the public port, a JSON snapshot; `GET /metrics/prometheus`
 //! the same in Prometheus' text format (the `prometheus` feature). Counts only, never a Capcom ID. Counters live here
 //! (atomics, bumped where things happen); gauges are read from the world when asked. No history: Prometheus keeps it.
 

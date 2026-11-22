@@ -47,13 +47,11 @@ content_dir = "/opt/mh3sp/content"
 
 # --- Operators --------------------------------------------------------------------------------------------------
 
-# Health, metrics and the operator's commands (`mh3sp stop`, `mh3sp announce`). No authentication yet: keep it on
-# 127.0.0.1, or behind a firewall.
-# health_address = "127.0.0.1"
-# health_port = 8280
-# The API (the admin CLI and the website): behind a reverse proxy with TLS to reach it from elsewhere.
-# api_address = "127.0.0.1"
-# api_port = 8281
+# The public port: the players' guide and patch (`/patch`), the error codes (`/errors`), health (`/health/live`,
+# `/health/ready`) and metrics (`/metrics`). All of it is safe to read; restrict it with your own proxy if you want.
+# Before 0.1.0 this was the health port (`health_port`, `health_address`, on 127.0.0.1): those names still work.
+# public_address = "0.0.0.0"
+# public_port = 8280
 # The Capcom IDs allowed the admins' chat commands (/announce, /stop, /kick, /ban, /unban).
 # admins = ["AB12CD34"]
 
@@ -75,5 +73,3 @@ content_dir = "/opt/mh3sp/content"
 
 # The game's packet encryption.
 # encryption = false
-# The quest bots' port, on localhost (a server built with the `bot` feature, and mh3sp-brain). Unset: no bots.
-# bot_port = 8290

@@ -37,7 +37,8 @@ pub fn random_id(len: usize) -> String {
     id
 }
 
-/// A player's Capcom ID: never starting with `0`, which marks the quest bots' (`bot_capcom_id`).
+/// A player's Capcom ID: never starting with `0`, the form the quest bots' had (removed: tag `archive/quest-bots`),
+/// kept out of players' IDs so a second try's bots could come back without a clash.
 fn player_capcom_id() -> String {
     loop {
         let id = random_id(CAPCOM_ID_LEN);
@@ -45,12 +46,6 @@ fn player_capcom_id() -> String {
             return id;
         }
     }
-}
-
-/// A quest bot's Capcom ID (`experiment-bots.md`): `0` then five characters, a form no player gets.
-#[cfg(feature = "bot")]
-pub fn bot_capcom_id() -> String {
-    format!("0{}", random_id(CAPCOM_ID_LEN - 1))
 }
 
 pub(crate) fn hmac(secret: &Secret, code: &str) -> Vec<u8> {

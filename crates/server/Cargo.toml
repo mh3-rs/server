@@ -12,22 +12,21 @@ name = "mh3sp"
 path = "src/main.rs"
 
 [features]
-# `/metrics/prometheus` on the health port (the image `…-prometheus`).
+# `/metrics/prometheus` on the public port (the image `…-prometheus`).
 prometheus = []
-# The quest bots (the wiki's "Quest bots"): an experiment, off by default.
-bot = ["dep:tunnel"]
 
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.6.0"
-# The quest bots' tunnel, shared with mh3sp-brain (the workspace's pin).
-tunnel = { workspace = true, optional = true }
 bytes = "1.12.1"
 dashmap = "6.2.1"
 futures-util = "0.3.34"
 hex = "0.4.3"
 moka = { version = "0.12.16", features = ["sync"] }
 openssl = "0.10.81"
+# The server's own user id and the credentials of the commands' socket's peer, to answer only the server's user and root
+# and to talk only to them (no `unsafe` libc).
+rustix = { version = "1.1.6", default-features = false, features = ["net", "process", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
@@ -39,9 +38,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.27.0", features = ["v7"] }
 wire = { path = "../wire" }
 toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
-# The API's messages, shared with the clients (the workspace's pin).
-shared = { workspace = true }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 
 [dev-dependencies]
 # Paused time in tests.

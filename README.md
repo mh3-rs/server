@@ -35,8 +35,7 @@ announcements; quest binaries byte-identical to MH3SP's generator (CI, through i
 - **The hunter profile is validated** (tests), so a crafted one can't crash other consoles. Friend requests and
   messages are stored and delivered later (tests).
 - **Administration** (tests; not yet seen on consoles): chat commands (`/tell` for everyone; `/announce`, `/stop`,
-  `/kick`, `/ban` for admins), bans by console, an API with tokens, an admin CLI (`mh3sp-admin`) and an admin web
-  page (`website`).
+  `/kick`, `/ban` for admins), bans by console and by Wii.
 - **Operations** (tests, consoles): `mh3sp stop 5min` with in-game warnings, `mh3sp announce`, liveness and readiness
   probes, JSON and Prometheus metrics, anonymous logs, one SQLite file.
 

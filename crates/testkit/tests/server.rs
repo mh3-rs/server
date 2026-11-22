@@ -50,6 +50,9 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// The commands' sockets of the tests' servers, each its own: they run side by side in one network namespace.
+static CONTROL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// A server config on random ports, with its own database file in a temporary folder: tests never share
 /// state (or a schema version), and the folder is deleted when the returned guard is dropped. A real file, not
 /// `:memory:`, so tests run the same SQLite mode as production (WAL, several connections).
@@ -60,9 +63,8 @@ fn config() -> (Config, tempfile::TempDir) {
         opn: any,
         lmp: any,
         fmp: any,
-        health: any,
+        public: any,
         nas: any,
-        api: any,
         qr: any,
         natneg: any,
         strategy: server::config::Strategy::P2p,
@@ -86,7 +88,12 @@ fn config() -> (Config, tempfile::TempDir) {
         terms: "MH3 Server Project - Terms.".into(),
         subterms: "MH3 Server Project - SubTerms.".into(),
         guildmaster: MH3SP_GUILDMASTER.into(),
-        bot_port: None,
+        ignored: Vec::new(),
+        control: format!(
+            "mh3sp-test-{}-{}",
+            std::process::id(),
+            CONTROL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ),
         clock_offset: 0,
         // Replays send faster than any console: `a_chat_flood_is_cut_to_its_rate` turns them on.
         rate_limits: false,
@@ -100,7 +107,7 @@ async fn http_status(addr: SocketAddr, path: &str) -> String {
     http_get(addr, path).await.0
 }
 
-/// A `GET` on the health port: status code and body.
+/// A `GET` on the public port: status code and body.
 async fn http_get(addr: SocketAddr, path: &str) -> (String, String) {
     let (status, body) = http_bytes(addr, path).await;
     (status, String::from_utf8(body).unwrap())
@@ -322,12 +329,12 @@ async fn accepts_wii_tls_and_reports_health() {
     assert_eq!((check.address, check.size), (0x8000_0000, 6));
     Console::connect(running.lmp.unwrap(), false).await.unwrap();
 
-    assert_eq!(http_status(running.health, "/health/live").await, "200");
-    assert_eq!(http_status(running.health, "/health/ready").await, "200");
-    assert_eq!(http_status(running.health, "/elsewhere").await, "404");
+    assert_eq!(http_status(running.public, "/health/live").await, "200");
+    assert_eq!(http_status(running.public, "/health/ready").await, "200");
+    assert_eq!(http_status(running.public, "/elsewhere").await, "404");
     // `mh3sp healthcheck` is blocking (it runs as its own process in the container).
-    let health = running.health;
-    tokio::task::spawn_blocking(move || server::health::check(health))
+    let public = running.public;
+    tokio::task::spawn_blocking(move || server::public::check(public))
         .await
         .unwrap()
         .unwrap();
@@ -615,33 +622,58 @@ async fn check_fails_a_silent_udp_port() {
     running.stop().await;
 }
 
-/// Port 80 answering something else than the patch page (a proxy's error, another service) fails with the status.
+/// Port 80 answering something else than the Nintendo login (a proxy's error, another service) fails with what it said.
 #[tokio::test]
-async fn check_fails_port_80_when_the_patch_page_is_not_served() {
+async fn check_fails_port_80_when_the_login_is_not_served() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    // The health port answers HTTP, but has no `/patch`.
-    assert_eq!(http_status(running.health, "/patch").await, "404");
-    let report = check_report(&running, |p| p.nas = running.health.port()).await;
+    // The public port answers HTTP, but has no `/ac`.
+    let report = check_report(&running, |p| p.nas = running.public.port()).await;
     let failed = check_failures(&report);
     assert_eq!(failed.len(), 1, "{report}");
-    assert!(failed[0].contains("GET /patch"), "{report}");
+    assert!(failed[0].contains("Nintendo login"), "{report}");
     assert!(failed[0].contains("404"), "{report}");
+    assert_eq!(check_passes(&report), 4, "{report}");
+
+    // A service that says 200 to anything isn't the login either.
+    let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = other.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut stream, _)) = other.accept().await {
+            let mut buf = [0; 1024];
+            let _ = stream.read(&mut buf).await;
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nwelcome")
+                .await;
+        }
+    });
+    let report = check_report(&running, |p| p.nas = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(
+        failed[0].contains("not as the Nintendo login does"),
+        "{report}"
+    );
     running.stop().await;
 }
 
-/// Players download the patch from the domain's port 80, the Nintendo login's: each file as `mh3sp patch` writes it.
+/// Players download the patch from the public port: each file as `mh3sp patch` writes it. The game's HTTP port, the
+/// Nintendo login's, serves none of it.
 #[tokio::test]
-async fn the_patch_downloads_from_the_nas_port() {
+async fn the_patch_downloads_from_the_public_port() {
     let (mut config, dir) = config();
     let running = server::start(&config).await.unwrap();
-    let (status, page) = http_get(running.nas, "/patch").await;
+    for gone in ["/patch", "/errors", "/patch/codes/RMHP08.gct"] {
+        assert_eq!(http_status(running.nas, gone).await, "404", "{gone}");
+    }
+    let (status, page) = http_get(running.public, "/patch").await;
     assert_eq!(status, "200");
     assert!(
         page.contains("href=\"/errors\""),
         "the guide links the errors"
     );
-    let (status, errors) = http_get(running.nas, "/errors").await;
+    let (status, errors) = http_get(running.public, "/errors").await;
     assert_eq!(status, "200");
     assert!(
         errors.contains("<td>11669</td>") && errors.contains("Test Server"),
@@ -656,19 +688,19 @@ async fn the_patch_downloads_from_the_nas_port() {
         .collect();
     assert_eq!(paths.len(), 6, "{page}");
     for path in paths {
-        let (status, body) = http_bytes(running.nas, &format!("/patch/{path}")).await;
+        let (status, body) = http_bytes(running.public, &format!("/patch/{path}")).await;
         assert_eq!(status, "200", "{path}");
         assert_eq!(body, std::fs::read(written.join(path)).unwrap(), "{path}");
     }
     assert_eq!(
-        http_status(running.nas, "/patch/codes/RMHJ08.gct").await,
+        http_status(running.public, "/patch/codes/RMHJ08.gct").await,
         "404"
     );
     running.stop().await;
     config.domain = None;
     let running = server::start(&config).await.unwrap();
     assert_eq!(
-        http_status(running.nas, "/patch").await,
+        http_status(running.public, "/patch").await,
         "404",
         "not configured"
     );
@@ -683,8 +715,8 @@ async fn refuses_everyone_when_not_configured() {
     let (status, text) = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(status, 1);
     assert!(text.unwrap().contains("not configured"));
-    assert_eq!(http_status(running.health, "/health/live").await, "200");
-    assert_eq!(http_status(running.health, "/health/ready").await, "503");
+    assert_eq!(http_status(running.public, "/health/live").await, "200");
+    assert_eq!(http_status(running.public, "/health/ready").await, "503");
     running.stop().await;
 }
 
@@ -696,8 +728,8 @@ async fn maintenance_mode_refuses_with_the_message() {
     assert_eq!((running.lmp, running.fmp), (None, None));
     let login = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(login, (1, Some("Back at 18:00 UTC".into())));
-    assert_eq!(http_status(running.health, "/health/live").await, "200");
-    assert_eq!(http_status(running.health, "/health/ready").await, "503");
+    assert_eq!(http_status(running.public, "/health/live").await, "200");
+    assert_eq!(http_status(running.public, "/health/ready").await, "503");
     running.stop().await;
 }
 
@@ -710,21 +742,21 @@ async fn waits_for_the_database_at_startup() {
     let folder = dir.path().join("later");
     config.database_url = format!("sqlite://{}", folder.join("mh3sp.db").display());
     let running = server::start(&config).await.unwrap();
-    assert_eq!(http_status(running.health, "/health/live").await, "503");
+    assert_eq!(http_status(running.public, "/health/live").await, "503");
     let (status, text) = opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await;
     assert_eq!(status, 1);
     assert!(text.unwrap().contains("not ready"));
 
     std::fs::create_dir(&folder).unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while http_status(running.health, "/health/live").await != "200" {
+    while http_status(running.public, "/health/live").await != "200" {
         assert!(
             tokio::time::Instant::now() < deadline,
             "database never opened"
         );
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    assert_eq!(http_status(running.health, "/health/ready").await, "200");
+    assert_eq!(http_status(running.public, "/health/ready").await, "200");
     assert_eq!(
         opn_login(running.opn, b"RMHP08", &NATNEG_HOSTNAMES).await,
         (5, None)
@@ -1161,300 +1193,77 @@ async fn chat_commands() {
     running.stop().await;
 }
 
-/// An API request: status code and body. `auth` is a whole header line (`Authorization: …` or `Cookie: …`).
-async fn api(addr: SocketAddr, method: &str, path: &str, auth: &str, body: &str) -> (u16, String) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-    let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: test\r\n{auth}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    s.write_all(request.as_bytes()).await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    let status = out.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let body = out.split_once("\r\n\r\n").map_or("", |(_, b)| b).to_owned();
-    (status, body)
+/// What a console's chat line gets back: the answers from "[MH3SP]", read for a short while.
+async fn say(console: &mut Console, seq: u16, text: &str) -> Vec<String> {
+    let line = NtcLayerChat {
+        channel: 1,
+        info: PatData::new(),
+        text: text.to_owned().into(),
+    };
+    send(console, seq, line).await;
+    let mut texts = Vec::new();
+    while let Received::Frame(f) = console.recv(Duration::from_millis(300)).await.unwrap() {
+        if f.id == NtcLayerChat::ID {
+            let chat = NtcLayerChat::decode(&f.payload).unwrap();
+            texts.push(String::from_utf8(chat.text.to_vec()).unwrap());
+        }
+    }
+    texts
 }
 
-/// The API (`api.rs`): tokens from `users.rs`, as a Bearer header or the cookie; admin routes refuse players;
-/// a kick through it drops the player.
-#[tokio::test]
-async fn the_api_serves_admins_only() {
-    let (config, _db) = config();
-    let running = server::start(&config).await.unwrap();
-    let addr = running.api.unwrap();
-    let db = server::database::open(&config.database_url).await.unwrap();
-    use server::users::{Role, add, issue, revoke};
-    add(&db, "admin@example.org", Role::Admin).await.unwrap();
-    add(&db, "player@example.org", Role::Player).await.unwrap();
-    let admin = format!(
-        "Authorization: Bearer {}",
-        issue(&db, "admin@example.org", "cli").await.unwrap()
-    );
-    let player = issue(&db, "player@example.org", "session").await.unwrap();
-    let player = format!("Cookie: theme=dark; mh3sp_token={player}");
-
-    let (status, body) = api(addr, "GET", "/api/me", &admin, "").await;
-    assert_eq!(status, 200);
-    let me: shared::Me = serde_json::from_str(&body).unwrap();
-    assert_eq!(me.role, "admin");
-    let (status, body) = api(addr, "GET", "/api/me", &player, "").await;
-    assert_eq!(
-        (
-            status,
-            serde_json::from_str::<shared::Me>(&body).unwrap().role
-        ),
-        (200, "player".into())
-    );
-    assert_eq!(api(addr, "GET", "/api/me", "X-None: 1", "").await.0, 401);
-    assert_eq!(
-        api(
-            addr,
-            "GET",
-            "/api/me",
-            "Authorization: Bearer mh3sp_0.0",
-            ""
-        )
-        .await
-        .0,
-        401
-    );
-    assert_eq!(api(addr, "GET", "/api/players", &player, "").await.0, 403);
-    assert_eq!(api(addr, "GET", "/api/bans", &player, "").await.0, 403);
-    let announce = r#"{"text":"hello"}"#;
-    // Every admin route refuses a player (a body valid for each: unknown fields are ignored).
-    let any = r#"{"text":"x","delay":"1h","player":"X","reason":"r","bot":"X"}"#;
-    for route in [
-        "announce",
-        "stop",
-        "kick",
-        "tell",
-        "ban",
-        "unban",
-        "bot/add",
-        "bot/remove",
-    ] {
-        let path = format!("/api/{route}");
-        assert_eq!(
-            api(addr, "POST", &path, &player, any).await.0,
-            403,
-            "{route}"
-        );
-    }
-    assert_eq!(
-        api(addr, "POST", "/api/announce", &player, announce)
-            .await
-            .0,
-        403
-    );
-
-    let mut console = enter_world(&running).await;
-    let (status, body) = api(addr, "GET", "/api/players", &admin, "").await;
-    assert_eq!(status, 200);
-    let online: Vec<shared::Player> = serde_json::from_str(&body).unwrap();
-    assert_eq!(online.len(), 1);
-    assert_eq!(
-        (online[0].name.as_str(), online[0].server.as_str()),
-        ("Aiko", "Valor1")
-    );
-
-    let (status, body) = api(addr, "POST", "/api/announce", &admin, announce).await;
-    assert_eq!(
-        (status, body.contains("Sent to 1 players.")),
-        (200, true),
-        "{body}"
-    );
-    expect::<NtcLayerChat>(&mut console).await;
-    // A long paste would fill every mailbox (a frame per 30 characters): refused.
-    let long = format!(r#"{{"text":"{}"}}"#, "word ".repeat(61));
-    assert_eq!(
-        api(addr, "POST", "/api/announce", &admin, &long).await.0,
-        400
-    );
-    // The quest bots (this server has them, no brain connected).
-    let bot = format!(r#"{{"player":"{}"}}"#, online[0].capcom_id);
-    let (status, body) = api(addr, "POST", "/api/bot/add", &admin, &bot).await;
-    assert_eq!((status, body.contains("NoBrain")), (409, true), "{body}");
-    let gone = r#"{"bot":"NOBOT1"}"#;
-    assert_eq!(
-        api(addr, "POST", "/api/bot/remove", &admin, gone).await.0,
-        404
-    );
-    let tell = format!(r#"{{"player":"{}","text":"psst"}}"#, online[0].capcom_id);
-    assert_eq!(api(addr, "POST", "/api/tell", &admin, &tell).await.0, 200);
-    assert_eq!(
-        &expect::<NtcLayerChat>(&mut console).await.text[..],
-        b"psst"
-    );
-    assert_eq!(
-        api(addr, "POST", "/api/kick", &admin, r#"{"player":"NOBODY"}"#)
-            .await
-            .0,
-        404
-    );
-    assert_eq!(
-        api(addr, "POST", "/api/stop", &admin, r#"{"delay":"soon"}"#)
-            .await
-            .0,
-        400
-    );
-    assert_eq!(
-        api(addr, "POST", "/api/stop", &admin, r#"{"delay":"cancel"}"#)
-            .await
-            .0,
-        409
-    );
-    let kick = format!(r#"{{"player":"{}"}}"#, online[0].capcom_id);
-    assert_eq!(api(addr, "POST", "/api/kick", &admin, &kick).await.0, 200);
-    assert!(matches!(
-        console.recv(Duration::from_secs(2)).await.unwrap(),
-        Received::Closed
-    ));
-
-    // Sign-in by password: a session token, ended by signing out; five failures for an email, and it waits.
-    server::users::set_password(&db, "player@example.org", "long enough pass")
-        .await
-        .unwrap();
-    let sign_in =
-        |password: &str| format!(r#"{{"email":"Player@example.org","password":"{password}"}}"#);
-    let (status, body) = api(
-        addr,
-        "POST",
-        "/api/session",
-        "X-None: 1",
-        &sign_in("long enough pass"),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
-    let session: shared::Session = serde_json::from_str(&body).unwrap();
-    let bearer = format!("Authorization: Bearer {}", session.token);
-    assert_eq!(api(addr, "GET", "/api/me", &bearer, "").await.0, 200);
-    assert_eq!(api(addr, "POST", "/api/logout", &bearer, "").await.0, 200);
-    assert_eq!(
-        api(addr, "GET", "/api/me", &bearer, "").await.0,
-        401,
-        "signed out"
-    );
-    for _ in 0..5 {
-        assert_eq!(
-            api(addr, "POST", "/api/session", "X-None: 1", &sign_in("wrong"))
-                .await
-                .0,
-            401
-        );
-    }
-    let right = sign_in("long enough pass");
-    assert_eq!(
-        api(addr, "POST", "/api/session", "X-None: 1", &right)
-            .await
-            .0,
-        429,
-        "after five failures"
-    );
-    // In parallel, the count still holds: at most five checked, the rest refused at once.
-    let mut parallel = Vec::new();
-    for _ in 0..20 {
-        let body = r#"{"email":"admin@example.org","password":"guess"}"#;
-        parallel.push(tokio::spawn(async move {
-            api(addr, "POST", "/api/session", "X-None: 1", body).await.0
-        }));
-    }
-    let mut statuses = Vec::new();
-    for p in parallel {
-        statuses.push(p.await.unwrap());
-    }
-    assert_eq!(
-        statuses.iter().filter(|&&s| s == 401).count(),
-        5,
-        "{statuses:?}"
-    );
-    let long = format!(
-        r#"{{"email":"{}@example.org","password":"x"}}"#,
-        "a".repeat(300)
-    );
-    assert_eq!(
-        api(addr, "POST", "/api/session", "X-None: 1", &long)
-            .await
-            .0,
-        400
-    );
-
-    let key = admin
-        .trim_start_matches("Authorization: Bearer ")
-        .split_once('.')
-        .unwrap()
-        .0;
-    assert!(revoke(&db, key, "test").await.unwrap());
-    assert_eq!(
-        api(addr, "GET", "/api/me", &admin, "").await.0,
-        401,
-        "revoked"
-    );
+/// A server with an admin, who is in the first gate and ready to type commands. The admin is a console that has to
+/// exist first, its Capcom ID being known only after its first visit: the server runs once, then again with that ID in
+/// `admins` (the database stays).
+async fn with_admin(config: &mut Config) -> (server::Running, Console, String) {
+    let running = server::start(config).await.unwrap();
+    let lmp = Lmp::of(&running);
+    let (code, _, _) = first_visit(lmp, None).await;
+    login(lmp, &code, 1).await;
+    let id = first_visit(lmp, Some(&code)).await.2[0].0.clone();
     running.stop().await;
+    config.admins = vec![id.clone()];
+    let running = server::start(config).await.unwrap();
+    let mut admin = play(&running, &code).await;
+    let info = PatData::new();
+    send(&mut admin, 10, ReqLayerDown { layer: 1, info }).await;
+    drain(&mut admin, Duration::from_millis(100)).await;
+    (running, admin, id)
 }
 
-/// A ban (`access.rs`): through the API, the player kicked and their console refused at login with a message (an
-/// alert, not a drop); lifted, it logs in again. Unknown players and an empty reason are refused.
+/// A ban (`access.rs`), typed in the chat by an admin: the player kicked and their console refused at login with a
+/// message (an alert, not a drop); lifted, it logs in again. An unknown player is refused, and the ban records the
+/// admin who typed it.
 #[tokio::test]
 async fn a_banned_console_is_refused_until_unbanned() {
-    let (config, _db) = config();
-    let running = server::start(&config).await.unwrap();
-    let (addr, lmp) = (running.api.unwrap(), Lmp::of(&running));
+    let (mut config, _db) = config();
+    let (running, mut admin, admin_id) = with_admin(&mut config).await;
+    let lmp = Lmp::of(&running);
     let db = server::database::open(&config.database_url).await.unwrap();
-    server::users::add(&db, "admin@example.org", server::users::Role::Admin)
-        .await
-        .unwrap();
-    let token = server::users::issue(&db, "admin@example.org", "cli")
-        .await
-        .unwrap();
-    let admin = format!("Authorization: Bearer {token}");
     let (code, _, _) = first_visit(lmp, None).await;
     let mut console = play(&running, &code).await;
     let capcom_id = first_visit(lmp, Some(&code)).await.2[0].0.clone();
 
-    let ban =
-        |player: &str, reason: &str| format!(r#"{{"player":"{player}","reason":"{reason}"}}"#);
     assert_eq!(
-        api(addr, "POST", "/api/ban", &admin, &ban(&capcom_id, " "))
-            .await
-            .0,
-        400
-    );
-    assert_eq!(
-        api(addr, "POST", "/api/ban", &admin, &ban("NOBODY", "x"))
-            .await
-            .0,
-        404
+        say(&mut admin, 20, "/ban NOBODY x").await,
+        ["No Capcom ID NOBODY."]
     );
     // The same console again, between LMP and FMP: its ticket waits, it isn't online to be kicked.
     let ticket = login(lmp, &code, 1).await;
-    let (status, body) = api(
-        addr,
-        "POST",
-        "/api/ban",
-        &admin,
-        &ban(&capcom_id, "cheating"),
-    )
-    .await;
-    assert_eq!(status, 200, "{body}");
-    let by: Option<i64> = sqlx::query_scalar("SELECT created_by FROM access_rules")
+    assert_eq!(
+        say(&mut admin, 21, &format!("/ban {capcom_id} cheating")).await,
+        [format!("{capcom_id} banned.")]
+    );
+    // Two rules (the console, and its Wii), both by the admin who typed the command.
+    let admin_row: i64 = sqlx::query_scalar("SELECT id FROM hunters WHERE capcom_id = ?1")
+        .bind(&admin_id)
         .fetch_one(&db)
         .await
         .unwrap();
-    assert!(by.is_some(), "the ban's author");
-    let (status, body) = api(addr, "GET", "/api/bans", &admin, "").await;
-    let bans: Vec<shared::BanInfo> = serde_json::from_str(&body).unwrap();
-    assert_eq!(status, 200);
-    assert_eq!(
-        (
-            bans.len(),
-            bans[0].capcom_ids.clone(),
-            bans[0].reason.as_str()
-        ),
-        (1, vec![capcom_id.clone()], "cheating")
-    );
+    let by: Vec<Option<i64>> = sqlx::query_scalar("SELECT created_by FROM access_rules")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(by, [Some(admin_row); 2], "the ban's author");
     assert!(matches!(
         console.recv(Duration::from_secs(2)).await.unwrap(),
         Received::Closed
@@ -1475,16 +1284,14 @@ async fn a_banned_console_is_refused_until_unbanned() {
         other => panic!("expected an alert, got {other:?}"),
     }
 
-    let unban = format!(r#"{{"player":"{}"}}"#, capcom_id.to_lowercase());
-    assert_eq!(api(addr, "POST", "/api/unban", &admin, &unban).await.0, 200);
+    let unban = format!("/unban {}", capcom_id.to_lowercase());
     assert_eq!(
-        api(addr, "GET", "/api/bans", &admin, "").await.1,
-        "[]",
-        "lifted"
+        say(&mut admin, 22, &unban).await,
+        [format!("{capcom_id} unbanned.")]
     );
     assert_eq!(
-        api(addr, "POST", "/api/unban", &admin, &unban).await.0,
-        404,
+        say(&mut admin, 23, &unban).await,
+        [format!("{capcom_id} isn't banned.")],
         "twice"
     );
     match login_info(lmp, Some(&code)).await {
@@ -2340,6 +2147,7 @@ async fn profile_notices_reach_their_target() {
 }
 
 /// Tier 3: `mh3sp announce` reaches every logged-in player, wherever they are, from "[MH3SP]".
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn announcements_reach_everyone() {
     let (config, _db) = config();
@@ -2349,9 +2157,10 @@ async fn announcements_reach_everyone() {
     let info = PatData::new();
     send(&mut in_gate, 10, ReqLayerDown { layer: 1, info }).await;
     drain(&mut in_gate, Duration::from_millis(100)).await;
-    let health = running.health;
+    let control = config.control.clone();
+    let name = control.clone();
     let answer = tokio::task::spawn_blocking(move || {
-        server::health::announce(health, "Maintenance tonight")
+        server::control::announce(&name, "Maintenance tonight")
     })
     .await
     .unwrap()
@@ -2362,7 +2171,7 @@ async fn announcements_reach_everyone() {
         assert_eq!(string(chat.info.get(0x04)), "[MH3SP]");
         assert_eq!(&chat.text[..], b"Maintenance tonight");
     }
-    let empty = tokio::task::spawn_blocking(move || server::health::announce(health, " "))
+    let empty = tokio::task::spawn_blocking(move || server::control::announce(&control, " "))
         .await
         .unwrap();
     assert!(empty.is_err());
@@ -2371,13 +2180,14 @@ async fn announcements_reach_everyone() {
 
 /// Tier 3: `mh3sp stop` warns players, refuses nothing meanwhile, reminds them, can be cancelled, and stops the server
 /// at its end.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn stopping_warns_and_can_be_cancelled() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
-    let health = running.health;
     let stop = |delay: &'static str| {
-        tokio::task::spawn_blocking(move || server::health::stop(health, delay))
+        let control = config.control.clone();
+        tokio::task::spawn_blocking(move || server::control::stop(&control, delay))
     };
     let mut c = enter_world(&running).await;
     let said = |chat: NtcLayerChat| String::from_utf8(chat.text.to_vec()).unwrap();
@@ -2421,7 +2231,7 @@ async fn metrics_count_what_happens() {
     let _first = enter_world(&running).await;
     let _second = enter_world(&running).await;
     negotiate(&running, 7, false).await;
-    let (status, body) = http_get(running.health, "/metrics").await;
+    let (status, body) = http_get(running.public, "/metrics").await;
     assert_eq!(status, "200");
     let m: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(m["players"], 2);
@@ -2433,7 +2243,7 @@ async fn metrics_count_what_happens() {
     assert!(!body.contains("capcom"), "{body}");
     // The tests build the server without the `prometheus` feature: no such endpoint.
     assert_eq!(
-        http_status(running.health, "/metrics/prometheus").await,
+        http_status(running.public, "/metrics/prometheus").await,
         "404"
     );
     running.stop().await;
@@ -2441,14 +2251,15 @@ async fn metrics_count_what_happens() {
 
 /// Tier 3, M5 runs 15–16: players in a hunt get announcements as party chat from themselves (town chat doesn't show
 /// there, party chat only from a member), others as town chat; party chat a member sends reaches the others.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn hunters_get_announcements() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
     let (mut a, mut b) = party(&running, 1, true).await;
     let mut in_world = enter_world(&running).await;
-    let health = running.health;
-    tokio::task::spawn_blocking(move || server::health::announce(health, "Hello"))
+    let control = config.control.clone();
+    tokio::task::spawn_blocking(move || server::control::announce(&control, "Hello"))
         .await
         .unwrap()
         .unwrap();
@@ -2999,383 +2810,6 @@ async fn party(running: &server::Running, gate: u16, depart: bool) -> (Console, 
     drain(&mut a, Duration::from_millis(100)).await;
     drain(&mut b, Duration::from_millis(100)).await;
     (a, b)
-}
-
-/// Every frame a console gets within `time`.
-async fn frames(console: &mut Console, time: Duration) -> Vec<Frame> {
-    let mut out = Vec::new();
-    let end = tokio::time::Instant::now() + time;
-    while let Ok(Ok(Received::Frame(f))) =
-        tokio::time::timeout_at(end, console.recv(Duration::from_secs(5))).await
-    {
-        out.push(f);
-    }
-    out
-}
-
-/// Tier 3, quest bots (`experiment-bots.md`, sprint 1): a bot joins a player's party when the brain is connected, as a
-/// member the other consoles see arrive in the city and the party; the brain is told; it leaves when asked, and when
-/// no hunter is left in its city.
-#[tokio::test]
-async fn bots_join_a_party() {
-    use futures_util::{SinkExt, StreamExt};
-    let (mut config, _db) = config();
-    config.bot_port = Some(0);
-    let running = server::start(&config).await.unwrap();
-    let health = running.health;
-    let bot = |verb: &'static str, who: String| {
-        tokio::task::spawn_blocking(move || server::health::bot(health, verb, &who))
-    };
-    let (mut a, mut b) = party(&running, 3, false).await;
-    let player = own_id(&mut a, 30).await;
-    drain(&mut b, Duration::from_millis(100)).await;
-
-    // No brain yet: refused.
-    let refused = bot("add", player.clone()).await.unwrap().unwrap_err();
-    assert!(refused.to_string().contains("NoBrain"), "{refused}");
-    // Nor without a party.
-    let tunnel = tokio::net::TcpStream::connect(running.bots.unwrap())
-        .await
-        .unwrap();
-    let mut brain = tokio_util::codec::Framed::new(tunnel, tunnel::codec());
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(bot("add", "ZZZZZZ".into()).await.unwrap().is_err());
-
-    // Joined: a bot's Capcom ID, the brain told which party, the others see it arrive.
-    let said = bot("add", player.clone()).await.unwrap().unwrap();
-    let id = said.split_whitespace().nth(1).unwrap().to_owned();
-    assert!(id.starts_with('0') && id.len() == 6, "{said}");
-    let created = brain.next().await.unwrap().unwrap();
-    match tunnel::decode::<tunnel::ToBrain>(&created).unwrap() {
-        tunnel::ToBrain::Create { bot, party } => {
-            assert_eq!(
-                (
-                    bot.as_str(),
-                    party.server,
-                    party.gate,
-                    party.city,
-                    party.circle
-                ),
-                (id.as_str(), 1, 3, 1, 1)
-            );
-        }
-        other => panic!("{other:?}"),
-    }
-    let seen = frames(&mut b, Duration::from_millis(300)).await;
-    let names = |id: wire::PacketId| seen.iter().filter(move |f| f.id == id).count();
-    assert_eq!(names(NtcLayerIn::ID), 1);
-    // Ready at once.
-    let ready = seen
-        .iter()
-        .find(|f| f.id == NtcCircleMatchOptionSet::ID)
-        .unwrap();
-    let ready = NtcCircleMatchOptionSet::decode(&ready.payload).unwrap();
-    assert_eq!(ready.options.get(0x03), Some(&Item::Byte(1)));
-    let joined = seen.iter().find(|f| f.id == NtcCircleJoin::ID).unwrap();
-    let joined = NtcCircleJoin::decode(&joined.payload).unwrap();
-    assert_eq!(
-        (
-            String::from_utf8(joined.capcom_id.to_vec()).unwrap(),
-            joined.player
-        ),
-        (id.clone(), 3)
-    );
-    send(&mut b, 31, ReqLayerUserList { fields: vec![] }).await;
-    assert_eq!(expect::<AnsLayerUserList>(&mut b).await.users.len(), 3);
-
-    // A peer of the city's session: its record (kind 6) after its arrival, its port from the relay's range...
-    let peer_record = |body: &mut wire::Reader| {
-        body.u16().unwrap();
-        let record = body.pat_data().unwrap();
-        let field = |f| record.get(f).cloned();
-        (field(0x01), field(0x06))
-    };
-    let announced = seen.iter().find(|f| f.id == NtcLayerBinary::ID).unwrap();
-    let announced = NtcLayerBinary::decode(&announced.payload).unwrap();
-    let mut body = wire::Reader::new(&announced.data.0);
-    assert_eq!(body.lp2_string().unwrap(), id.as_bytes());
-    body.pat_data().unwrap();
-    match peer_record(&mut body) {
-        (Some(Item::Byte(6)), Some(Item::Word(port))) => {
-            assert!(config.relay_ports.contains(&port))
-        }
-        other => panic!("{other:?}"),
-    }
-    // A peer message as a console sends it: an empty sender, a length, the record.
-    let peer_message = |record: &PatData| {
-        let mut encoded = Vec::new();
-        wire::PatWrite::put_pat_data(&mut encoded, record).unwrap();
-        let mut data = Vec::new();
-        wire::PatWrite::put_pat_data(&mut data, &PatData::new()).unwrap();
-        data.put_u16(encoded.len() as u16);
-        data.extend_from_slice(&encoded);
-        Rest(data.into())
-    };
-    // ...and a console's record answered with kind 7, as the consoles do.
-    let record = wire::PatData::new()
-        .with(0x01, Item::Byte(6))
-        .with(0x03, Item::Long(0x1111_2222))
-        .with(0x04, Item::Long(1))
-        .with(0x05, Item::Long(2))
-        .with(0x06, Item::Word(3000));
-    send(
-        &mut b,
-        32,
-        NtcLayerBinary {
-            data: peer_message(&record),
-        },
-    )
-    .await;
-    let answer = expect::<NtcLayerBinary2>(&mut b).await;
-    assert_eq!(answer.capcom_id, id.as_bytes());
-    let mut body = wire::Reader::new(&answer.data.0);
-    body.pat_data().unwrap();
-    assert!(matches!(peer_record(&mut body).0, Some(Item::Byte(7))));
-    // A link's kind 5 to the bot, answered kind 4 as a city's host does.
-    let linked = PatData::new()
-        .with(0x01, Item::Byte(5))
-        .with(0x02, Item::Long(0));
-    send(
-        &mut b,
-        33,
-        NtcLayerBinary2 {
-            capcom_id: Bytes::copy_from_slice(id.as_bytes()),
-            data: peer_message(&linked),
-        },
-    )
-    .await;
-    let answer = expect::<NtcLayerBinary2>(&mut b).await;
-    let mut body = wire::Reader::new(&answer.data.0);
-    body.pat_data().unwrap();
-    assert!(matches!(peer_record(&mut body).0, Some(Item::Byte(4))));
-
-    // The party's messages: the bot's on joining (kind 2), and its own after a departure when the others send theirs
-    // (kind 3: each member waits for everyone's).
-    let circle_kind = |f: &wire::Frame| {
-        let ntc = NtcCircleBinary::decode(&f.payload).unwrap();
-        let mut body = wire::Reader::new(&ntc.data.0);
-        let from = body.lp2_string().unwrap();
-        body.pat_data().unwrap();
-        (from, peer_record(&mut body).0)
-    };
-    let joined = seen.iter().find(|f| f.id == NtcCircleBinary::ID).unwrap();
-    assert_eq!(
-        circle_kind(joined),
-        (Bytes::from(id.clone()), Some(Item::Byte(2)))
-    );
-    let departed = PatData::new()
-        .with(0x01, Item::Byte(3))
-        .with(0x02, Item::Long(3));
-    send(
-        &mut a,
-        35,
-        NtcCircleBinary {
-            circle: 1,
-            data: peer_message(&departed),
-        },
-    )
-    .await;
-    for c in [&mut a, &mut b] {
-        let got = frames(c, Duration::from_millis(200)).await;
-        assert!(
-            got.iter()
-                .filter(|f| f.id == NtcCircleBinary::ID)
-                .any(|f| circle_kind(f) == (Bytes::from(id.clone()), Some(Item::Byte(3))))
-        );
-    }
-
-    // The bot connects as the pair's "to" side, also when the console's pings come before the host's announcement of
-    // the pair (seen in the lab: the pings then end with NAT negotiation, before the bot knows its side).
-    let mut body = wire::Reader::new(&announced.data.0);
-    body.lp2_string().unwrap();
-    body.pat_data().unwrap();
-    body.u16().unwrap();
-    let bot_record = body.pat_data().unwrap();
-    let (Some(Item::Long(bot_peer)), Some(Item::Word(bot_port))) =
-        (bot_record.get(0x03).cloned(), bot_record.get(0x06).cloned())
-    else {
-        panic!("{bot_record:?}")
-    };
-    let console_peer = 0x1111_2222;
-    let game = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let ping = wire::natneg::Record {
-        cookie: console_peer ^ bot_peer,
-        body: wire::natneg::Body::Ping(wire::natneg::Peer {
-            addr: "127.0.0.1:1".parse().unwrap(),
-            got_your_data: 0,
-            finished: 0,
-        }),
-    };
-    game.send_to(&ping.encode(), ("127.0.0.1", bot_port))
-        .await
-        .unwrap();
-    let mut buf = [0u8; 2048];
-    let n = tokio::time::timeout(Duration::from_secs(1), game.recv(&mut buf))
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(buf[..n].starts_with(&wire::natneg::MAGIC));
-    let pair = PatData::new()
-        .with(0x01, Item::Byte(8))
-        .with(0x07, Item::Long(console_peer))
-        .with(0x08, Item::Long(bot_peer))
-        .with(0x09, Item::Byte(2));
-    send(
-        &mut b,
-        34,
-        NtcLayerBinary {
-            data: peer_message(&pair),
-        },
-    )
-    .await;
-    let challenge = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let n = game.recv(&mut buf).await.unwrap();
-            if buf[..n].starts_with(&[0xfe, 0xfe, 0x01]) {
-                return buf[7..n].to_vec();
-            }
-        }
-    })
-    .await
-    .expect("the bot's GT2 challenge");
-    assert!(wire::p2p::gt2_valid_challenge(
-        &challenge[..].try_into().unwrap()
-    ));
-    drain(&mut a, Duration::from_millis(100)).await;
-    drain(&mut b, Duration::from_millis(100)).await;
-    drain(&mut a, Duration::from_millis(100)).await;
-
-    // Asked to leave: gone, the brain told.
-    assert!(bot("remove", id.clone()).await.unwrap().is_ok());
-    let left = brain.next().await.unwrap().unwrap();
-    assert_eq!(
-        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
-        tunnel::ToBrain::Leave { bot: id.clone() }
-    );
-    assert!(bot("remove", id).await.unwrap().is_err());
-
-    // Only the leader departs: B can't.
-    drain(&mut a, Duration::from_millis(100)).await;
-    drain(&mut b, Duration::from_millis(100)).await;
-    send(&mut b, 41, ReqCircleMatchStart {}).await;
-    expect::<AnsCircleMatchStart>(&mut b).await;
-    let seen = frames(&mut a, Duration::from_millis(200)).await;
-    assert!(seen.iter().all(|f| f.id != NtcCircleMatchStart::ID));
-
-    // Its party broken (the leader leaves before departure): it goes.
-    bot("add", player.clone()).await.unwrap().unwrap();
-    brain.next().await.unwrap().unwrap();
-    send(&mut a, 42, ReqCircleLeave { circle: 1 }).await;
-    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
-        tunnel::ToBrain::Leave { .. }
-    ));
-
-    // Its quest departed, then its last hunter left it (a departed quest passes to its next member): it goes.
-    send(
-        &mut a,
-        44,
-        ReqCircleCreate {
-            info: PatData::new().with(0x09, Item::Long(4)),
-            extra: Default::default(),
-        },
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    bot("add", player.clone()).await.unwrap().unwrap();
-    brain.next().await.unwrap().unwrap();
-    send(
-        &mut a,
-        45,
-        ReqCircleMatchOptionSet {
-            options: PatData::new().with(0x03, Item::Byte(1)),
-        },
-    )
-    .await;
-    send(&mut a, 46, ReqCircleMatchStart {}).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    send(&mut a, 47, ReqCircleLeave { circle: 1 }).await;
-    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
-        tunnel::ToBrain::Leave { .. }
-    ));
-
-    // A hunter walking into the city: the bot makes room, out of the city and the party.
-    send(
-        &mut a,
-        48,
-        ReqCircleCreate {
-            info: PatData::new().with(0x09, Item::Long(4)),
-            extra: Default::default(),
-        },
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    bot("add", player.clone()).await.unwrap().unwrap();
-    brain.next().await.unwrap().unwrap();
-    let mut c = enter_world(&running).await;
-    for (seq, layer) in [(10, 3), (11, 1)] {
-        send(
-            &mut c,
-            seq,
-            ReqLayerDown {
-                layer,
-                info: PatData::new(),
-            },
-        )
-        .await;
-    }
-    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(matches!(
-        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
-        tunnel::ToBrain::Leave { .. }
-    ));
-    send(&mut a, 49, ReqCircleLeave { circle: 1 }).await;
-    send(&mut c, 12, ReqLayerUp {}).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Left alone in the city with no hunter: it goes too.
-    send(
-        &mut a,
-        43,
-        ReqCircleCreate {
-            info: PatData::new().with(0x09, Item::Long(4)),
-            extra: Default::default(),
-        },
-    )
-    .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let said = bot("add", player).await.unwrap().unwrap();
-    let id = said.split_whitespace().nth(1).unwrap().to_owned();
-    brain.next().await.unwrap().unwrap();
-    for c in [&mut a, &mut b] {
-        send(c, 40, ReqLayerUp {}).await;
-    }
-    let left = tokio::time::timeout(Duration::from_secs(2), brain.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        tunnel::decode::<tunnel::ToBrain>(&left).unwrap(),
-        tunnel::ToBrain::Leave { bot: id }
-    );
-    let _ = brain.close().await;
-    running.stop().await;
 }
 
 /// The step `step` of two consoles meeting, A leading: 1 the gate, 2 A's city, 3 B in it, 4 A's quest, 5 B in it,
@@ -4172,17 +3606,8 @@ async fn our_nintendo_login() {
 /// unbanned, it plays again.
 #[tokio::test]
 async fn a_ban_holds_on_its_wii() {
-    let (config, _db) = config();
-    let running = server::start(&config).await.unwrap();
-    let addr = running.api.unwrap();
-    let db = server::database::open(&config.database_url).await.unwrap();
-    server::users::add(&db, "admin@example.org", server::users::Role::Admin)
-        .await
-        .unwrap();
-    let token = server::users::issue(&db, "admin@example.org", "cli")
-        .await
-        .unwrap();
-    let admin = format!("Authorization: Bearer {token}");
+    let (mut config, _db) = config();
+    let (running, mut admin, _) = with_admin(&mut config).await;
     let wii = |n| Lmp {
         wii: Some(n),
         ..Lmp::of(&running)
@@ -4190,8 +3615,10 @@ async fn a_ban_holds_on_its_wii() {
     let (code, _, _) = first_visit(wii(900), None).await;
     login(wii(900), &code, 1).await;
     let capcom_id = first_visit(wii(900), Some(&code)).await.2[0].0.clone();
-    let ban = format!(r#"{{"player":"{capcom_id}","reason":"cheating"}}"#);
-    assert_eq!(api(addr, "POST", "/api/ban", &admin, &ban).await.0, 200);
+    assert_eq!(
+        say(&mut admin, 20, &format!("/ban {capcom_id} cheating")).await,
+        [format!("{capcom_id} banned.")]
+    );
 
     // A new save on the banned Wii: refused at OPN, and at LMP should it skip OPN's check.
     let token = testkit::nas::svcloc(running.nas, "0017ab000384", "LEH000000900")
@@ -4216,8 +3643,10 @@ async fn a_ban_holds_on_its_wii() {
     // Another Wii plays.
     first_visit(wii(901), None).await;
 
-    let unban = format!(r#"{{"player":"{capcom_id}"}}"#);
-    assert_eq!(api(addr, "POST", "/api/unban", &admin, &unban).await.0, 200);
+    assert_eq!(
+        say(&mut admin, 21, &format!("/unban {capcom_id}")).await,
+        [format!("{capcom_id} unbanned.")]
+    );
     first_visit(wii(900), None).await;
     running.stop().await;
 }
@@ -4266,5 +3695,288 @@ async fn a_refused_console_is_only_let_go() {
         "{:?}",
         start.elapsed()
     );
+    running.stop().await;
+}
+
+/// What `tracing` events a test's thread writes, as text.
+#[derive(Clone, Default)]
+struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Log {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+}
+
+/// A key that left the server (no breaking change since the image is public) is accepted: the server starts, warns
+/// about it, and listens on nothing there. The quest bots' port (tag `archive/quest-bots`) is the example.
+#[tokio::test]
+async fn a_removed_key_is_ignored_with_a_warning() {
+    let (mut config, _db) = config();
+    // A port nobody listens on, so that "nothing listens there" is a fact the test can check.
+    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = free.local_addr().unwrap().port();
+    drop(free);
+    config.ignored = Config::parse(&format!("bot_port = {port}"))
+        .unwrap()
+        .ignored;
+    let log = Log::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer({
+            let log = log.clone();
+            move || log.clone()
+        })
+        .with_ansi(false)
+        .finish();
+    // Thread-local: this test runs on one thread (the `tokio::test` runtime), so another test's logs stay out.
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let running = server::start(&config).await.unwrap();
+    let text = log.text();
+    assert!(
+        text.contains("WARN") && text.contains("bot_port") && text.contains("ignored"),
+        "{text}"
+    );
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err(),
+        "something listens on the bot port"
+    );
+    // The server is up all the same.
+    assert_eq!(http_status(running.public, "/health/live").await, "200");
+    running.stop().await;
+}
+
+/// A database written by the published server (migration 0001 alone) with a console banned by a user of the old API:
+/// the next release upgrades it in place at its start, and the console is refused at login all the same, while one that
+/// was never banned logs in. The ban's author is gone with the user, the ban is not.
+#[tokio::test]
+async fn a_ban_from_before_the_upgrade_still_refuses() {
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::sign::Signer;
+    use sqlx::migrate::Migrator;
+    use sqlx::sqlite::SqliteConnectOptions;
+
+    let (config, dir) = config();
+    // The support codes' HMAC, as the server keys it: 11 characters of `0-9A-Z` (`accounts.rs`).
+    let secret = config.secret.as_ref().unwrap().0.clone();
+    let hmac = |code: &str| {
+        let key = PKey::hmac(&secret).unwrap();
+        let mut signer = Signer::new(MessageDigest::sha256(), &key).unwrap();
+        signer.update(code.as_bytes()).unwrap();
+        signer.sign_to_vec().unwrap()
+    };
+    let (banned, innocent) = ("BANNED00000", "INNOCENT000");
+
+    // The published server's database: 0001 alone, by sqlx's own migrator over a folder that holds only that file.
+    let only_0001 = dir.path().join("only_0001");
+    std::fs::create_dir(&only_0001).unwrap();
+    std::fs::copy(
+        repo().join("migrations/0001_schema.sql"),
+        only_0001.join("0001_schema.sql"),
+    )
+    .unwrap();
+    let options = config
+        .database_url
+        .parse::<SqliteConnectOptions>()
+        .unwrap()
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let old = sqlx::SqlitePool::connect_with(options).await.unwrap();
+    Migrator::new(only_0001.as_path())
+        .await
+        .unwrap()
+        .run(&old)
+        .await
+        .unwrap();
+    for code in [banned, innocent] {
+        sqlx::query(
+            "INSERT INTO consoles (public_id, support_code_hmac, region) VALUES (randomblob(16), ?1, 'RMHP08')",
+        )
+        .bind(hmac(code))
+        .execute(&old)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO users (public_id, email, role_id) VALUES (randomblob(16), 'admin@example.org', 2)",
+    )
+    .execute(&old)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO access_rules (public_id, kind_id, console_id, reason, created_by)
+         SELECT randomblob(16), rule_kinds.id, consoles.id, 'cheating', 1 FROM rule_kinds, consoles
+         WHERE rule_kinds.name = 'ban' AND consoles.support_code_hmac = ?1",
+    )
+    .bind(hmac(banned))
+    .execute(&old)
+    .await
+    .unwrap();
+    // It was there: a user, and the ban made by that user.
+    let author: Option<i64> = sqlx::query_scalar("SELECT created_by FROM access_rules")
+        .fetch_one(&old)
+        .await
+        .unwrap();
+    assert_eq!(author, Some(1));
+    old.close().await;
+
+    let running = server::start(&config).await.unwrap();
+    let lmp = Lmp::of(&running);
+    match login_info(lmp, Some(banned)).await {
+        Some(Received::Frame(f)) => assert_eq!(f.id.0, AnsLoginInfo::ID.0 | 0x01, "an alert"),
+        other => panic!("expected an alert, got {other:?}"),
+    }
+    match login_info(lmp, Some(innocent)).await {
+        Some(Received::Frame(f)) => assert_eq!(f.id, AnsLoginInfo::ID),
+        other => panic!("expected a login, got {other:?}"),
+    }
+    // The ban is still one, now by no one.
+    let db = server::database::open(&config.database_url).await.unwrap();
+    let by: Option<i64> = sqlx::query_scalar("SELECT created_by FROM access_rules")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(by, None);
+    running.stop().await;
+}
+
+/// A `POST` with a short body: the status code (the body is never what is being tested).
+async fn http_post(addr: SocketAddr, path: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+    s.write_all(format!("POST {path} HTTP/1.0\r\nContent-Length: 5\r\n\r\nhello").as_bytes())
+        .await
+        .unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    out.split_whitespace().nth(1).unwrap_or_default().to_owned()
+}
+
+/// Nothing that changes the server is on a port: `POST /announce` and `POST /stop` are on neither HTTP port (the
+/// operator's commands go through the socket), and the game's own answers nothing but its login.
+#[tokio::test]
+async fn no_command_is_on_a_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = enter_world(&running).await;
+    for addr in [running.public, running.nas] {
+        for path in ["/announce", "/stop"] {
+            assert_eq!(http_post(addr, path).await, "404", "{addr} {path}");
+        }
+    }
+    // Nothing was said to the player, and nothing is stopping.
+    assert!(
+        drain(&mut console, Duration::from_millis(300))
+            .await
+            .is_empty()
+    );
+    assert!(!running.stopping().is_cancelled());
+    running.stop().await;
+}
+
+/// The commands' socket exists by its name alone, while the server runs: an abstract socket, no file (Linux lists
+/// them in `/proc/net/unix` with a leading `@`). It goes with the server.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_commands_socket_is_a_name_and_no_file() {
+    let (config, _db) = config();
+    let listed = |name: &str| {
+        std::fs::read_to_string("/proc/net/unix")
+            .unwrap()
+            .lines()
+            .any(|l| l.ends_with(&format!(" @{name}")))
+    };
+    assert!(!listed(&config.control), "there before the server starts");
+    let running = server::start(&config).await.unwrap();
+    assert!(listed(&config.control), "the server's socket");
+    running.stop().await;
+    assert!(!listed(&config.control), "it goes with the server");
+}
+
+/// A command with no server to receive it says so, naming the socket: it never hangs or answers as if it had worked.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_command_with_no_server_fails_clearly() {
+    let name = format!("mh3sp-test-nobody-{}", std::process::id());
+    for result in [
+        server::control::announce(&name, "hello"),
+        server::control::stop(&name, "5min"),
+    ] {
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("no running server"), "{error}");
+        assert!(error.contains(&name), "{error}");
+    }
+}
+
+/// A second server in the same network namespace finds the socket's name taken: it starts all the same, says so, and
+/// the first keeps its commands.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_taken_socket_name_does_not_stop_the_server() {
+    let (first_config, _first_db) = config();
+    let first = server::start(&first_config).await.unwrap();
+    let (mut config, _db) = config();
+    config.control = first_config.control.clone();
+    let log = Log::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer({
+            let log = log.clone();
+            move || log.clone()
+        })
+        .with_ansi(false)
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let second = server::start(&config).await.unwrap();
+    let text = log.text();
+    assert!(
+        text.contains("WARN") && text.contains("commands' socket is not available"),
+        "{text}"
+    );
+    assert_eq!(http_status(second.public, "/health/live").await, "200");
+    // The name still reaches the first one: its console hears the announcement, the second's none.
+    let mut heard = enter_world(&first).await;
+    let name = config.control.clone();
+    tokio::task::spawn_blocking(move || server::control::announce(&name, "Still here"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        &expect::<NtcLayerChat>(&mut heard).await.text[..],
+        b"Still here"
+    );
+    second.stop().await;
+    first.stop().await;
+}
+
+/// `mh3sp check` with nothing on port 80 fails the login's own line, with what to forward, and only that one.
+#[tokio::test]
+async fn check_fails_a_closed_login_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let report = check_report(&running, |p| p.nas = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(failed[0].contains("(Nintendo login)"), "{report}");
+    assert!(
+        failed[0].contains(&format!("forward TCP {port}")),
+        "{report}"
+    );
+    assert_eq!(check_passes(&report), 4, "{report}");
     running.stop().await;
 }

@@ -64,23 +64,31 @@ impl Database {
         let Some(pool) = self.pool() else {
             return Some("database: not opened yet".to_owned());
         };
-        let reason = match tokio::time::timeout(
+        // What is logged, and what is said to whoever asks (`/health/ready` is on the public port): the database's own
+        // error stays in the log.
+        let (logged, said) = match tokio::time::timeout(
             CHECK_TIMEOUT,
             sqlx::query("SELECT 1").execute(pool),
         )
         .await
         {
-            Ok(Ok(_)) => None,
-            Ok(Err(e)) => Some(format!("database: {e}")),
-            Err(_) => Some("database: timed out".to_owned()),
+            Ok(Ok(_)) => (None, None),
+            Ok(Err(e)) => (
+                Some(format!("database: {e}")),
+                Some("database: not answering".to_owned()),
+            ),
+            Err(_) => {
+                let timed_out = "database: timed out".to_owned();
+                (Some(timed_out.clone()), Some(timed_out))
+            }
         };
-        let was_up = self.up.swap(reason.is_none(), Ordering::Relaxed);
-        match (&reason, was_up) {
+        let was_up = self.up.swap(logged.is_none(), Ordering::Relaxed);
+        match (&logged, was_up) {
             (Some(reason), true) => error!(%reason, "database down"),
             (None, false) => info!("database back"),
             _ => {}
         }
-        reason
+        said
     }
 }
 
@@ -108,6 +116,26 @@ pub async fn open(url: &str) -> Result<SqlitePool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/health/ready` is on the public port: it says that the database doesn't answer, never what sqlx said (a pool
+    /// closed under the server is how a failing `SELECT 1` is made here).
+    #[tokio::test]
+    async fn readiness_does_not_tell_what_the_database_said() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", dir.path().join("ready.db").display());
+        let database = Arc::new(Database::default());
+        database.connect(url, CancellationToken::new()).await;
+        assert_eq!(database.not_ready().await, None);
+        let pool = database.pool().unwrap().clone();
+        pool.close().await;
+        // The failure is real, and carries sqlx's own words.
+        let own = sqlx::query("SELECT 1").execute(&pool).await.unwrap_err();
+        let own = own.to_string();
+        assert!(!own.is_empty());
+        let said = database.not_ready().await.unwrap();
+        assert_eq!(said, "database: not answering");
+        assert!(!said.contains(&own), "{said}");
+    }
 
     /// The constraints the code doesn't check itself: system messages (no sender) are allowed, never as friend
     /// requests; a Japanese console's region is accepted.
