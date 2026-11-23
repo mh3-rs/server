@@ -157,9 +157,11 @@ pub async fn serve(
             capcom_id = tracing::field::Empty
         );
         let tls = tls.clone();
+        let tasks = shared.tasks.clone();
         let shared = shared.clone();
         let shutdown = shutdown.clone();
-        tokio::spawn(
+        // On the shared tracker: stopping the server waits for the connection to close its handler.
+        tasks.spawn(
             async move {
                 let _counted = counted;
                 match connection(tcp, peer.ip(), conn, role, tls, &shared, shutdown).await {

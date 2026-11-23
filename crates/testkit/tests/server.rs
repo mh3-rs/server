@@ -1202,10 +1202,13 @@ async fn say(console: &mut Console, seq: u16, text: &str) -> Vec<String> {
     };
     send(console, seq, line).await;
     let mut texts = Vec::new();
-    while let Received::Frame(f) = console.recv(Duration::from_millis(300)).await.unwrap() {
+    // The first line is waited for (a loaded host answers late); the short window is only for "no more".
+    let mut window = Duration::from_secs(5);
+    while let Received::Frame(f) = console.recv(window).await.unwrap() {
         if f.id == NtcLayerChat::ID {
             let chat = NtcLayerChat::decode(&f.payload).unwrap();
             texts.push(String::from_utf8(chat.text.to_vec()).unwrap());
+            window = Duration::from_millis(300);
         }
     }
     texts
@@ -1297,6 +1300,49 @@ async fn a_banned_console_is_refused_until_unbanned() {
     match login_info(lmp, Some(&code)).await {
         Some(Received::Frame(f)) => assert_eq!(f.id, AnsLoginInfo::ID),
         other => panic!("expected a login, got {other:?}"),
+    }
+    running.stop().await;
+}
+
+/// A ban is lifted whole (mh3-rs/server#61): a banned console that tried from another Wii in the meantime must not
+/// have taken that Wii over, or `/unban` (which finds the Wii through the console's current one) left the ban on the
+/// first, and the console was refused from it for good.
+#[tokio::test]
+async fn an_unban_lifts_the_ban_of_a_console_that_tried_another_wii() {
+    let (mut config, _db) = config();
+    let (running, mut admin, _) = with_admin(&mut config).await;
+    let first = Lmp {
+        wii: Some(900_001),
+        ..Lmp::of(&running)
+    };
+    let second = Lmp {
+        wii: Some(900_002),
+        ..first
+    };
+    let (code, _, _) = first_visit(first, None).await;
+    let _console = play(&running, &code).await;
+    let capcom_id = first_visit(first, Some(&code)).await.2[0].0.clone();
+    assert_eq!(
+        say(&mut admin, 20, &format!("/ban {capcom_id} cheating")).await,
+        [format!("{capcom_id} banned.")]
+    );
+    // From the first Wii and from another: refused both times.
+    for lmp in [first, second] {
+        match login_info(lmp, Some(&code)).await {
+            Some(Received::Frame(f)) => assert_eq!(f.id.0, AnsLoginInfo::ID.0 | 0x01, "an alert"),
+            other => panic!("expected an alert, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        say(&mut admin, 21, &format!("/unban {capcom_id}")).await,
+        [format!("{capcom_id} unbanned.")]
+    );
+    // Both Wiis log in again, the first as well as the one it tried.
+    for lmp in [first, second, first] {
+        match login_info(lmp, Some(&code)).await {
+            Some(Received::Frame(f)) => assert_eq!(f.id, AnsLoginInfo::ID),
+            other => panic!("expected a login, got {other:?}"),
+        }
     }
     running.stop().await;
 }
@@ -1532,6 +1578,88 @@ async fn expect_alert(console: &mut Console, answer: wire::PacketId) -> String {
         }
         other => panic!("expected an alert for {answer}, got {other:?}"),
     }
+}
+
+/// A city is created only by the player in its gate who holds its number (the sprint "A world with no impossible
+/// state", mh3-rs/server#57): a second reservation replaces the first, so the first number can't be created, and
+/// once in a city (with a quest) no other can. A console that sends it anyway is refused and the server keeps
+/// serving: the sequence used to leave the console in a quest of a city it had left, and its next request panicked
+/// under the world's lock, which stops the process.
+#[tokio::test]
+async fn a_city_is_created_only_from_the_reservation_held() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut c = enter_world(&running).await;
+    let info = PatData::new();
+    send(&mut c, 10, ReqLayerDown { layer: 1, info }).await;
+    expect::<AnsLayerDown>(&mut c).await;
+    let set = |number| ReqLayerCreateSet {
+        number,
+        layer: PatData::new(),
+        extra: Default::default(),
+    };
+    // Two numbers reserved one after the other: only the second is held.
+    for number in [1, 2] {
+        send(&mut c, 11, ReqLayerCreateHead { number }).await;
+        expect::<AnsLayerCreateHead>(&mut c).await;
+    }
+    send(&mut c, 12, set(1)).await;
+    let refused = expect_alert(&mut c, AnsLayerCreateSet::ID).await;
+    assert!(refused.contains("no longer exists"), "{refused}");
+    send(&mut c, 13, set(2)).await;
+    expect::<AnsLayerCreateSet>(&mut c).await;
+    send(&mut c, 14, ReqLayerCreateFoot { number: 2, unk: 0 }).await;
+    expect::<AnsLayerCreateFoot>(&mut c).await;
+    let info = PatData::new().with(0x09, Item::Long(4));
+    let extra = Default::default();
+    send(&mut c, 15, ReqCircleCreate { info, extra }).await;
+    expect::<NtcCircleListLayerChange>(&mut c).await;
+    assert_eq!(expect::<AnsCircleCreate>(&mut c).await.circle, 1);
+    // In a city with a quest: a city that doesn't exist, and the one it is in, are both refused.
+    send(&mut c, 16, set(1)).await;
+    let refused = expect_alert(&mut c, AnsLayerCreateSet::ID).await;
+    assert!(refused.contains("no longer exists"), "{refused}");
+    send(&mut c, 17, set(2)).await;
+    let refused = expect_alert(&mut c, AnsLayerCreateSet::ID).await;
+    assert!(refused.contains("already exists"), "{refused}");
+    // Still in its quest: its next request is answered, and the world holds together.
+    let options = PatData::new().with(0x03, Item::Byte(1));
+    send(&mut c, 18, ReqCircleMatchOptionSet { options }).await;
+    expect::<AnsCircleMatchOptionSet>(&mut c).await;
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
+}
+
+/// A reservation ends with the player's stay in the gate (mh3-rs/server#67): one who reserved a city and went back up
+/// leaves it free, where it used to show as full until the player left a city or disconnected.
+#[tokio::test]
+async fn a_reserved_city_is_free_again_once_its_creator_goes_up() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut a = enter_world(&running).await;
+    let mut b = enter_world(&running).await;
+    for c in [&mut a, &mut b] {
+        let info = PatData::new();
+        send(c, 10, ReqLayerDown { layer: 1, info }).await;
+        expect::<AnsLayerDown>(c).await;
+    }
+    // A sees B arrive.
+    drain(&mut a, Duration::from_millis(200)).await;
+    send(&mut a, 11, ReqLayerCreateHead { number: 1 }).await;
+    expect::<AnsLayerCreateHead>(&mut a).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    let cities = children(&mut b, 11, 1, 1).await;
+    assert_eq!(cities[0].0.get(0x10), Some(&Item::Byte(2)), "reserved");
+    send(&mut a, 12, ReqLayerUp {}).await;
+    expect::<AnsLayerUp>(&mut a).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    let cities = children(&mut b, 12, 1, 1).await;
+    assert_eq!(cities[0].0.get(0x10), Some(&Item::Byte(1)), "free again");
+    // And another can take the number.
+    send(&mut b, 13, ReqLayerCreateHead { number: 1 }).await;
+    expect::<AnsLayerCreateHead>(&mut b).await;
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
 }
 
 /// Tier 3, solo: a gate, a city, a quest, as one console sees them.
@@ -1860,6 +1988,49 @@ async fn jumps_to_another_world_server() {
             .await
             .contains("can't go there")
     );
+    running.stop().await;
+}
+
+/// A visit to the server selection places nobody (mh3-rs/server#74): the world server a session picked is spent by
+/// the visit that entered it, so one that left the world and came back to the selection isn't counted on it.
+#[tokio::test]
+async fn a_selection_visit_after_play_places_nobody() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (lmp, fmp) = (Lmp::of(&running), running.fmp.unwrap());
+    // Another console at the server selection, which counts the players of world server 1 when asked.
+    let (other, _, _) = first_visit(lmp, None).await;
+    let other_ticket = login(lmp, &other, 1).await;
+    let mut observer = fmp_login(fmp, &other_ticket).await;
+    let mut population = async |seq| {
+        let list = ReqFmpListData2 { first: 1, count: 1 };
+        send(&mut observer, seq, list).await;
+        long(expect::<AnsFmpListData2>(&mut observer).await.servers[0].get(0x08))
+    };
+    assert_eq!(population(1).await, 0);
+
+    let (code, _, _) = first_visit(lmp, None).await;
+    let ticket = login(lmp, &code, 1).await;
+    let mut selection = fmp_login(fmp, &ticket).await;
+    let pick = ReqFmpInfo2 {
+        index: 1,
+        fields: vec![2, 3],
+    };
+    send(&mut selection, 1, pick).await;
+    expect::<AnsFmpInfo2>(&mut selection).await;
+    send(&mut selection, 2, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut selection).await;
+    // On world server 1: counted there.
+    let mut play = fmp_login(fmp, &ticket).await;
+    assert_eq!(population(2).await, 1, "on world server 1");
+    // Out of the world and back at the selection, on the same ticket: nobody is on world server 1.
+    send(&mut play, 11, ReqLayerEnd {}).await;
+    expect::<AnsLayerEnd>(&mut play).await;
+    send(&mut play, 12, ReqShut { kind: 2 }).await;
+    expect::<AnsShut>(&mut play).await;
+    let _back = fmp_login(fmp, &ticket).await;
+    assert_eq!(population(3).await, 0, "back at the selection");
+    assert_eq!(running.violations(), Vec::<String>::new());
     running.stop().await;
 }
 
@@ -2838,6 +3009,163 @@ async fn party(running: &server::Running, gate: u16, depart: bool) -> (Console, 
     (a, b)
 }
 
+/// A console says whether it is ready to depart, and the answer comes back.
+async fn ready(console: &mut Console, seq: u16, ready: bool) {
+    let options = PatData::new().with(0x03, Item::Byte(u8::from(ready)));
+    send(console, seq, ReqCircleMatchOptionSet { options }).await;
+    expect::<AnsCircleMatchOptionSet>(console).await;
+}
+
+/// A quest is departed by a leader who is ready (mh3-rs/server#65): one whose leader isn't is refused as a member's
+/// departure is, with the party left as it was, where it used to be sent away from its own quest.
+#[tokio::test]
+async fn a_leader_not_ready_cannot_depart() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = party(&running, 1, false).await;
+    ready(&mut b, 30, true).await;
+    drain(&mut a, Duration::from_millis(200)).await;
+    send(&mut a, 31, ReqCircleMatchStart {}).await;
+    expect::<AnsCircleMatchStart>(&mut a).await;
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    assert_eq!(seen, [], "B is told nothing: the quest didn't depart");
+    // Still its quest: once ready, the leader departs it.
+    ready(&mut a, 32, true).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    send(&mut a, 33, ReqCircleMatchStart {}).await;
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    assert!(seen.contains(&NtcCircleMatchStart::ID), "{seen:?}");
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
+}
+
+/// Party data comes from a member of the quest it names (mh3-rs/server#66): a console that is in the city but not in
+/// the quest reaches nobody with it, and stays connected; a member's still reaches the party.
+#[tokio::test]
+async fn party_data_from_outside_the_quest_reaches_nobody() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // A leads quest 1 of city 1, B is in it; C walks into the city and not into the quest.
+    let (mut a, mut b) = party(&running, 1, false).await;
+    let mut c = enter_world(&running).await;
+    for seq in [10, 11] {
+        let info = PatData::new();
+        send(&mut c, seq, ReqLayerDown { layer: 1, info }).await;
+        expect::<AnsLayerDown>(&mut c).await;
+    }
+    drain(&mut c, Duration::from_millis(200)).await;
+    drain(&mut a, Duration::from_millis(200)).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    send(&mut c, 12, ReqLayerUserList { fields: vec![] }).await;
+    let ids: Vec<Bytes> = expect::<AnsLayerUserList>(&mut c)
+        .await
+        .users
+        .iter()
+        .map(|user| match user.get(0x01) {
+            Some(Item::String(id)) => id.clone(),
+            other => panic!("no Capcom ID: {other:?}"),
+        })
+        .collect();
+    assert_eq!(ids.len(), 3);
+    let data = || wire::packets::Rest(vec![0; 8].into());
+    send(
+        &mut c,
+        13,
+        NtcCircleBinary {
+            circle: 1,
+            data: data(),
+        },
+    )
+    .await;
+    for capcom_id in &ids {
+        let packet = NtcCircleBinary2 {
+            circle: 1,
+            capcom_id: capcom_id.clone(),
+            data: data(),
+        };
+        send(&mut c, 14, packet).await;
+    }
+    for (who, console) in [("A", &mut a), ("B", &mut b)] {
+        let seen = drain(console, Duration::from_millis(300)).await;
+        assert!(
+            !seen.contains(&NtcCircleBinary::ID) && !seen.contains(&NtcCircleBinary2::ID),
+            "{who} got party data from a player outside its quest: {seen:?}"
+        );
+    }
+    // A member sends to everyone in the city, the outsider included: the outsider, who isn't in the quest, gets none.
+    for capcom_id in &ids {
+        let packet = NtcCircleBinary2 {
+            circle: 1,
+            capcom_id: capcom_id.clone(),
+            data: data(),
+        };
+        send(&mut b, 17, packet).await;
+    }
+    let seen = drain(&mut c, Duration::from_millis(300)).await;
+    assert!(
+        !seen.contains(&NtcCircleBinary2::ID),
+        "a recipient outside the quest got party data: {seen:?}"
+    );
+    // Still connected, and a member's data still reaches the party.
+    send(&mut c, 15, ReqLayerUserList { fields: vec![] }).await;
+    expect::<AnsLayerUserList>(&mut c).await;
+    send(
+        &mut b,
+        16,
+        NtcCircleBinary {
+            circle: 1,
+            data: data(),
+        },
+    )
+    .await;
+    let seen = drain(&mut a, Duration::from_millis(300)).await;
+    assert!(seen.contains(&NtcCircleBinary::ID), "{seen:?}");
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
+}
+
+/// A member who isn't ready stays behind (mh3-rs/server#71): when the quest departs, it is sent away and the leader is
+/// told it left, so every member of a departed quest went on it.
+#[tokio::test]
+async fn a_member_not_ready_is_sent_away_when_the_quest_departs() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = party(&running, 1, false).await;
+    ready(&mut a, 30, true).await;
+    drain(&mut b, Duration::from_millis(200)).await;
+    send(&mut a, 31, ReqCircleMatchStart {}).await;
+    let sent_away = drain(&mut b, Duration::from_millis(300)).await;
+    assert!(sent_away.contains(&NtcCircleKick::ID), "{sent_away:?}");
+    let told = drain(&mut a, Duration::from_millis(300)).await;
+    assert!(told.contains(&NtcCircleMatchStart::ID), "{told:?}");
+    assert!(told.contains(&NtcCircleLeave::ID), "B's leaving: {told:?}");
+    // It is out of the quest: its party data reaches nobody.
+    let data = wire::packets::Rest(vec![0; 8].into());
+    send(&mut b, 32, NtcCircleBinary { circle: 1, data }).await;
+    let seen = drain(&mut a, Duration::from_millis(300)).await;
+    assert!(!seen.contains(&NtcCircleBinary::ID), "{seen:?}");
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
+}
+
+/// A quest departs once (mh3-rs/server#65): asked again, nothing is sent to its members; and a member's readiness
+/// after departure changes nothing but is still passed on.
+#[tokio::test]
+async fn a_quest_departs_once() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (mut a, mut b) = party(&running, 1, true).await;
+    send(&mut a, 40, ReqCircleMatchStart {}).await;
+    expect::<AnsCircleMatchStart>(&mut a).await;
+    let seen = drain(&mut b, Duration::from_millis(300)).await;
+    assert_eq!(seen, [], "B is told of no second departure");
+    ready(&mut b, 41, false).await;
+    let seen = drain(&mut a, Duration::from_millis(300)).await;
+    assert!(seen.contains(&NtcCircleMatchOptionSet::ID), "{seen:?}");
+    assert_eq!(running.violations(), Vec::<String>::new());
+    running.stop().await;
+}
+
 /// The step `step` of two consoles meeting, A leading: 1 the gate, 2 A's city, 3 B in it, 4 A's quest, 5 B in it,
 /// 6 both ready, 7 departure (0, entering the world, is done by the caller).
 async fn meet(a: &mut Console, b: &mut Console, gate: u16, step: u16) {
@@ -2962,7 +3290,10 @@ async fn nothing_left(running: &server::Running, gate: u16, at: &str) {
 }
 
 /// Tier 3, stress: consoles doing random things (seeded: a failure replays) in two gates, some vanishing and coming
-/// back. Whatever they did, the server stays up and, once they're all gone, nothing is left behind.
+/// back, some doing what a real game never does (a second reservation, a city created from anywhere, a quest departed
+/// twice, a second login of the same hunter). Whatever they did, the server stays up, the world's invariants hold
+/// after every action (`World::check`, through `Running::violations`) and, once they're all gone, nothing is left
+/// behind.
 #[tokio::test]
 async fn random_play_leaves_no_trace() {
     const CONSOLES: u64 = 8;
@@ -2984,6 +3315,11 @@ async fn random_play_leaves_no_trace() {
         .sum();
     eprintln!("{dropped} connections dropped by the server");
     tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        running.violations(),
+        Vec::<String>::new(),
+        "the world's invariants are broken (SEED={seed})"
+    );
     for gate in [1, 2] {
         nothing_left(
             &running,
@@ -3004,11 +3340,14 @@ async fn random_play(running: &server::Running, mut seed: u64, actions: usize) -
         seed ^= seed << 17;
         seed % n
     };
-    let mut c = enter_world(running).await;
+    let (code, _, _) = first_visit(Lmp::of(running), None).await;
+    let mut c = play(running, &code).await;
+    // The connections a second login of the same hunter left behind: kept open to the end.
+    let mut older = Vec::new();
     let mut dropped = 0;
     for seq in 100..100 + actions as u16 {
         let n = random(3) as u16 + 1;
-        let frames: Vec<Frame> = match random(12) {
+        let frames: Vec<Frame> = match random(19) {
             0 => vec![request(
                 seq,
                 ReqLayerDown {
@@ -3065,12 +3404,61 @@ async fn random_play(running: &server::Running, mut seed: u64, actions: usize) -
                 },
             )],
             10 => vec![request(seq, ReqLayerEnd {})],
+            // What a real game never sends: a second reservation while holding one, a city created from wherever the
+            // hunter is, a quest departed twice or by a leader not ready, party data into a quest it isn't in.
+            11 => vec![
+                request(seq, ReqLayerCreateHead { number: n }),
+                request(seq, ReqLayerCreateHead { number: n % 3 + 1 }),
+            ],
+            12 => vec![request(
+                seq,
+                ReqLayerCreateSet {
+                    number: n,
+                    layer: PatData::new(),
+                    extra: Default::default(),
+                },
+            )],
+            13 => vec![
+                request(seq, ReqCircleMatchStart {}),
+                request(seq, ReqCircleMatchStart {}),
+            ],
+            14 => vec![
+                request(
+                    seq,
+                    ReqCircleMatchOptionSet {
+                        options: PatData::new().with(0x03, Item::Byte(0)),
+                    },
+                ),
+                request(seq, ReqCircleMatchStart {}),
+            ],
+            15 => vec![request(
+                seq,
+                NtcCircleBinary {
+                    circle: n.into(),
+                    data: wire::packets::Rest(vec![0; 8].into()),
+                },
+            )],
+            16 => vec![request(
+                seq,
+                NtcCircleBinary2 {
+                    circle: n.into(),
+                    capcom_id: Bytes::from_static(b"AAAAAA"),
+                    data: wire::packets::Rest(vec![0; 8].into()),
+                },
+            )],
+            17 => {
+                // The same hunter logs in again, while the first connection is still open.
+                older.push(std::mem::replace(&mut c, play(running, &code).await));
+                continue;
+            }
             _ => {
-                // Vanishes, comes back.
-                c = enter_world(running).await;
+                // Vanishes, comes back as another console.
+                let (code, _, _) = first_visit(Lmp::of(running), None).await;
+                c = play(running, &code).await;
                 continue;
             }
         };
+        let frame_ids: Vec<u32> = frames.iter().map(|f| f.id.0).collect();
         let mut closed = false;
         for frame in frames {
             closed |= c.send(frame).await.is_err();
@@ -3090,7 +3478,14 @@ async fn random_play(running: &server::Running, mut seed: u64, actions: usize) -
             dropped += 1;
             c = enter_world(running).await;
         }
+        let violations = running.violations();
+        assert!(
+            violations.is_empty(),
+            "the world's invariants are broken after action {} (frames of id {frame_ids:x?}): {violations:#?}",
+            seq - 99
+        );
     }
+    drop(older);
     dropped
 }
 
@@ -3743,6 +4138,45 @@ impl Log {
     fn text(&self) -> String {
         String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
     }
+}
+
+/// Stopping the server waits for the tasks that outlive a request (mh3-rs/server#68): the connections, which close
+/// their handler (a hunter leaves the world), the relays, a stop's countdown, the database's retry. A task of the
+/// test's own on the server's tracker, which ends a moment after the server is told to stop, stands for them: it has
+/// ended when `stop` returns, where `stop` used to return once the listeners had.
+#[tokio::test]
+async fn stop_waits_for_the_tasks_it_runs() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let (stopping, ended) = (
+        running.stopping(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    );
+    running.tasks().spawn({
+        let ended = ended.clone();
+        async move {
+            stopping.cancelled().await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            ended.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    running.stop().await;
+    assert!(
+        ended.load(std::sync::atomic::Ordering::SeqCst),
+        "`stop` returned before a task of the server ended"
+    );
+}
+
+/// A stop under way doesn't keep the server from stopping: its countdown ends with the server (`Running::stop` waits
+/// for it now, with the connections).
+#[tokio::test]
+async fn a_pending_stop_does_not_keep_the_server_from_stopping() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    running.stop_in(Duration::from_secs(3600));
+    tokio::time::timeout(Duration::from_secs(10), running.stop())
+        .await
+        .expect("stop() waits for the countdown of an hour");
 }
 
 /// A key that left the server (no breaking change since the image is public) is accepted: the server starts, warns

@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 
 use crate::metrics::{Metrics, add};
@@ -31,6 +32,8 @@ pub struct Relays {
     free: Mutex<Free>,
     metrics: Arc<Metrics>,
     shutdown: CancellationToken,
+    /// Where each relay's task runs, so that stopping the server waits for it.
+    tasks: TaskTracker,
 }
 
 struct Free {
@@ -45,6 +48,7 @@ impl Relays {
         ports: RangeInclusive<u16>,
         metrics: Arc<Metrics>,
         shutdown: CancellationToken,
+        tasks: TaskTracker,
     ) -> Arc<Self> {
         Arc::new(Relays {
             external,
@@ -54,6 +58,7 @@ impl Relays {
             }),
             metrics,
             shutdown,
+            tasks,
         })
     }
 
@@ -61,7 +66,7 @@ impl Relays {
     /// port is free or a console has too many relayed pairs.
     pub fn open(self: &Arc<Self>, consoles: [SocketAddrV4; 2]) -> Option<SocketAddrV4> {
         let ips = consoles.map(|c| IpAddr::V4(*c.ip()));
-        let socket = {
+        let (socket, port) = {
             let mut free = self.free.lock().unwrap();
             if ips
                 .iter()
@@ -70,34 +75,36 @@ impl Relays {
                 warn!("relay: too many pairs for one address");
                 return None;
             }
-            // A port another program holds is skipped (and given back with the others).
+            // A port another program holds, or one whose socket can't be set up, is skipped (and given back with
+            // the others): nothing is taken until a socket is ready, so a failure leaves the ports and the pair
+            // counts as they were.
             let mut skipped = Vec::new();
-            let socket = loop {
+            let opened = loop {
                 let Some(port) = free.ports.pop() else {
                     break None;
                 };
-                match std::net::UdpSocket::bind(("0.0.0.0", port)) {
-                    Ok(socket) => break Some(socket),
-                    Err(_) => skipped.push(port),
+                match open_socket(port) {
+                    Ok(socket) => break Some((socket, port)),
+                    Err(e) => {
+                        debug!(port, error = %e, "relay: port skipped");
+                        skipped.push(port);
+                    }
                 }
             };
             free.ports.extend(skipped);
-            let socket = socket.or_else(|| {
+            let opened = opened.or_else(|| {
                 warn!("relay: no free port");
                 None
             })?;
             for ip in ips {
                 *free.pairs.entry(ip).or_default() += 1;
             }
-            socket
+            opened
         };
-        let port = socket.local_addr().ok()?.port();
-        socket.set_nonblocking(true).ok()?;
-        let socket = UdpSocket::from_std(socket).ok()?;
         info!(port, "relay opened");
         add(&self.metrics.relay_pairs_open, 1);
         let relays = self.clone();
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             forward(socket, consoles, &relays.metrics, &relays.shutdown).await;
             relays
                 .metrics
@@ -117,6 +124,13 @@ impl Relays {
         });
         Some(SocketAddrV4::new(self.external, port))
     }
+}
+
+/// The relay's socket on `port`, ready for the runtime.
+fn open_socket(port: u16) -> std::io::Result<UdpSocket> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", port))?;
+    socket.set_nonblocking(true)?;
+    UdpSocket::from_std(socket)
 }
 
 /// Forwards between the two consoles until the pair is idle.
@@ -208,6 +222,89 @@ impl Budget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A port nobody holds now, for a relay's range.
+    fn free_port() -> u16 {
+        let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).unwrap();
+        socket.local_addr().unwrap().port()
+    }
+
+    fn pair() -> [SocketAddrV4; 2] {
+        [
+            SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 1000),
+            SocketAddrV4::new(Ipv4Addr::new(2, 2, 2, 2), 2000),
+        ]
+    }
+
+    fn state(relays: &Relays) -> (usize, usize) {
+        let free = relays.free.lock().unwrap();
+        (free.ports.len(), free.pairs.len())
+    }
+
+    #[tokio::test]
+    async fn a_closed_relay_gives_its_port_and_counts_back() {
+        let shutdown = CancellationToken::new();
+        let port = free_port();
+        let metrics = Arc::new(Metrics::default());
+        let tasks = TaskTracker::new();
+        let relays = Relays::new(
+            Ipv4Addr::LOCALHOST,
+            port..=port,
+            metrics,
+            shutdown.clone(),
+            tasks,
+        );
+        assert_eq!(state(&relays), (1, 0));
+        let at = relays.open(pair()).unwrap();
+        assert_eq!(at.port(), port);
+        // Open: its port and one pair for each address are taken.
+        assert_eq!(state(&relays), (0, 2));
+        shutdown.cancel();
+        for _ in 0..100 {
+            if state(&relays) == (1, 0) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("not given back: {:?}", state(&relays));
+    }
+
+    #[tokio::test]
+    async fn a_port_that_cannot_be_opened_is_skipped_and_given_back() {
+        let (held, spare) = (free_port(), free_port());
+        let holder = std::net::UdpSocket::bind(("0.0.0.0", held)).unwrap();
+        let relays = Relays::new(
+            Ipv4Addr::LOCALHOST,
+            held.min(spare)..=held.max(spare),
+            Arc::new(Metrics::default()),
+            CancellationToken::new(),
+            TaskTracker::new(),
+        );
+        // Every port in between is free too, but the one held is never taken, and stays on offer.
+        let ports = relays.free.lock().unwrap().ports.len();
+        let at = relays.open(pair()).unwrap();
+        assert_ne!(at.port(), held);
+        let (left, pairs) = state(&relays);
+        assert_eq!((left, pairs), (ports - 1, 2));
+        drop(holder);
+    }
+
+    #[tokio::test]
+    async fn no_free_port_takes_nothing() {
+        let held = free_port();
+        let holder = std::net::UdpSocket::bind(("0.0.0.0", held)).unwrap();
+        let relays = Relays::new(
+            Ipv4Addr::LOCALHOST,
+            held..=held,
+            Arc::new(Metrics::default()),
+            CancellationToken::new(),
+            TaskTracker::new(),
+        );
+        assert_eq!(relays.open(pair()), None);
+        // The held port is back on offer and no pair was counted.
+        assert_eq!(state(&relays), (1, 0));
+        drop(holder);
+    }
 
     #[test]
     fn consoles_are_recognised_by_address_then_ip() {

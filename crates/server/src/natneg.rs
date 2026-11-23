@@ -204,6 +204,21 @@ fn handle(
                 relayed: false,
                 last: now,
             });
+            // Once the pair was told, only a console of the pair speaks for it: an INIT from another address (a console
+            // that knows the cookie) would put its address among the pair's, and have its REPORT taken.
+            if n.told.is_some()
+                && !n.clients[index]
+                    .sockets()
+                    .iter()
+                    .any(|s| s.ip() == from.ip())
+            {
+                add(&connector.metrics.limited, 1);
+                debug!(
+                    cookie,
+                    "NatNeg INIT from outside the pair after it was told, ignored"
+                );
+                return vec![];
+            }
             n.last = now;
             n.clients[index].0[kind] = Some(from);
             let mut out = vec![(reply(Body::InitAck(port)), from)];
@@ -250,11 +265,25 @@ fn handle(
                 1,
             );
             // A direct pair tells how both NATs fare: a failure sends both to the relay next time (which side
-            // can't punch is unknown), the player's retry going through it (the game never retries by itself).
+            // can't punch is unknown), the player's retry going through it (the game never retries by itself). Only
+            // the report of one of the pair's own addresses counts, once the pair was told where the other is:
+            // another console that knows the cookie would send two others to the relay for good.
             if let Some(n) = negotiations.get(&cookie).filter(|n| !n.relayed) {
-                let nat = if success { Nat::Direct } else { Nat::Relay };
-                for game in n.clients.iter().filter_map(Client::game) {
-                    players.learn(IpAddr::V4(*game.ip()), nat);
+                let of_the_pair = n
+                    .clients
+                    .iter()
+                    .any(|c| c.sockets().iter().any(|s| s.ip() == from.ip()));
+                if n.told.is_none() || !of_the_pair {
+                    add(&m.limited, 1);
+                    debug!(
+                        cookie,
+                        "NatNeg report from outside the pair, or before it was told, ignored"
+                    );
+                } else {
+                    let nat = if success { Nat::Direct } else { Nat::Relay };
+                    for game in n.clients.iter().filter_map(Client::game) {
+                        players.learn(IpAddr::V4(*game.ip()), nat);
+                    }
                 }
             }
             // The report's first bytes echoed, result cleared (GameSpy's servers' answer).
@@ -383,6 +412,91 @@ mod tests {
         assert!(!init(1002, hostile, 0, 0));
     }
 
+    /// What a report says of two consoles' NATs (mh3-rs/server#60): only from one of the pair, once its `CONNECT`
+    /// was sent. A third console's report, or one before, changes nothing.
+    #[tokio::test]
+    async fn a_report_counts_only_from_the_pair_after_it_was_told() {
+        let ips = [1, 2, 3].map(|n| Ipv4Addr::new(10, 0, 0, n));
+        let players = Players::default();
+        let mut mail = Vec::new();
+        for (i, ip) in ips.iter().enumerate() {
+            let (mailbox, rx, _) = Mailbox::new(i as u64, IpAddr::V4(*ip));
+            players.register(&format!("HUNTR{i}"), mailbox);
+            mail.push(rx);
+        }
+        let connector = Connector {
+            strategy: Strategy::P2p,
+            relays: None,
+            metrics: Default::default(),
+            loopback_exempt: true,
+        };
+        let mut negotiations = HashMap::new();
+        // Console `console` sends `body` for the cookie 7, from its game socket (port 1000) or its NatNeg socket.
+        let mut send = |console: usize, port: u16, body: Body| {
+            let record = Record { cookie: 7, body };
+            let from = SocketAddrV4::new(ips[console], port);
+            handle(
+                &connector,
+                &players,
+                &mut negotiations,
+                record,
+                from,
+                Instant::now(),
+            );
+        };
+        // Console `console` as client `index`: its four sockets' INITs (kind 0 the game socket, 1 to 3 NatNeg).
+        let init = |send: &mut dyn FnMut(usize, u16, Body), index: u8, console: usize| {
+            for kind in 0..4 {
+                let port = Port {
+                    kind,
+                    client_index: index,
+                };
+                let body = Body::Init {
+                    port,
+                    use_game_port: 1,
+                    local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+                    game: bytes::Bytes::from_static(b"mh3uswii"),
+                };
+                send(console, if kind == 0 { 1000 } else { 2000 }, body);
+            }
+        };
+        let failure = || Body::Report {
+            port: Port {
+                kind: 1,
+                client_index: 0,
+            },
+            result: 0,
+            nat_type: 0,
+            mapping: 0,
+            game: bytes::Bytes::new(),
+        };
+        let nats = || [0, 1, 2].map(|i| players.nat(IpAddr::V4(ips[i])));
+        // Only console 0 is in: its own failure report, before the pair was told, is ignored.
+        init(&mut send, 0, 0);
+        send(0, 2000, failure());
+        assert_eq!(nats(), [None, None, None]);
+        // The pair is told. A third console's report says nothing of them.
+        init(&mut send, 1, 1);
+        send(2, 2000, failure());
+        assert_eq!(nats(), [None, None, None]);
+        // The third console writes itself into the pair's sockets with an INIT of its own, then reports: ignored too.
+        let init = Body::Init {
+            port: Port {
+                kind: 3,
+                client_index: 0,
+            },
+            use_game_port: 1,
+            local: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0),
+            game: bytes::Bytes::from_static(b"mh3uswii"),
+        };
+        send(2, 2000, init);
+        send(2, 2000, failure());
+        assert_eq!(nats(), [None, None, None]);
+        // One of the pair reports a failure: both go to the relay next time, and not the third.
+        send(1, 2000, failure());
+        assert_eq!(nats(), [Some(Nat::Relay), Some(Nat::Relay), None]);
+    }
+
     /// `hybrid` decides per pair: with three consoles on three addresses and only the second flagged `Relay`, the
     /// pairs with it go through the relay, the other one stays direct.
     #[tokio::test]
@@ -404,6 +518,7 @@ mod tests {
                 42000..=42099,
                 Default::default(),
                 shutdown.clone(),
+                Default::default(),
             )),
             metrics: Default::default(),
             loopback_exempt: true,

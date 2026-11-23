@@ -40,6 +40,7 @@ use anyhow::{Context, Result, bail};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{error, info};
 
 pub use config::Config;
@@ -90,24 +91,79 @@ struct Shared {
     /// The relay's port range (M4): relayed pairs.
     relays: Option<Arc<Relays>>,
     /// A stop under way (`stop.rs`): cancelling it lifts it.
-    stop: std::sync::Mutex<Option<CancellationToken>>,
+    stop: stop::Stop,
+    /// The tasks that outlive their request: `Running::stop` waits for them (each ends when `shutdown` is cancelled).
+    tasks: TaskTracker,
     /// Stops the whole server.
     shutdown: CancellationToken,
     /// The TCP connections open (`net.rs`), for their limits.
     connections: net::Connections,
     /// Who may reach LMP's first visit and create consoles.
     admission: game::Admission,
+    /// What the world's invariants found broken, each once (`invariants` feature).
+    #[cfg(feature = "invariants")]
+    violations: std::sync::Mutex<Vec<String>>,
+}
+
+/// The world, locked.
+#[cfg(not(feature = "invariants"))]
+type WorldGuard<'a> = std::sync::MutexGuard<'a, game::world::World>;
+
+/// The world, locked: with the `invariants` feature, releasing it checks the world and records any violation (logged
+/// in the request that made it, which is the one holding the lock). It never panics: a panic under the lock stops the
+/// whole process, and the test must be able to say what broke.
+#[cfg(feature = "invariants")]
+struct WorldGuard<'a> {
+    guard: std::sync::MutexGuard<'a, game::world::World>,
+    violations: &'a std::sync::Mutex<Vec<String>>,
+}
+
+#[cfg(feature = "invariants")]
+impl std::ops::Deref for WorldGuard<'_> {
+    type Target = game::world::World;
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+#[cfg(feature = "invariants")]
+impl std::ops::DerefMut for WorldGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+#[cfg(feature = "invariants")]
+impl Drop for WorldGuard<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        for violation in self.guard.check() {
+            let mut seen = self.violations.lock().unwrap_or_else(|e| e.into_inner());
+            if !seen.contains(&violation) {
+                error!(%violation, "the world's invariants are broken");
+                seen.push(violation);
+            }
+        }
+    }
 }
 
 impl Shared {
     /// The world, locked. A panic while it was held (a bug) may have left it half-changed: the server stops then (the
     /// container restarts it), rather than serve from it, or answer `/health/live` while FMP is dead. A panic
     /// anywhere else ends only its connection.
-    fn world(&self) -> std::sync::MutexGuard<'_, game::world::World> {
-        self.world.lock().unwrap_or_else(|_| {
+    fn world(&self) -> WorldGuard<'_> {
+        let guard = self.world.lock().unwrap_or_else(|_| {
             error!("the world lock is poisoned by a panic: stopping");
             std::process::abort()
-        })
+        });
+        #[cfg(feature = "invariants")]
+        let guard = WorldGuard {
+            guard,
+            violations: &self.violations,
+        };
+        guard
     }
 
     /// The server's clock (the system's, shifted by `clock_offset`).
@@ -152,15 +208,31 @@ impl Running {
         stop::begin(&self.shared, delay);
     }
 
+    /// What the world's invariants found broken since the start, each once (`World::check`).
+    #[cfg(feature = "invariants")]
+    pub fn violations(&self) -> Vec<String> {
+        self.shared.violations.lock().unwrap().clone()
+    }
+
+    /// Where the server's long-lived tasks run (connections, relays, a stop's countdown, the database's retry):
+    /// `stop` waits for them. A test puts a task of its own there to see that it does.
+    pub fn tasks(&self) -> TaskTracker {
+        self.shared.tasks.clone()
+    }
+
     /// Cancelled when the server stops (a `mh3sp stop` that came to its end).
     pub fn stopping(&self) -> CancellationToken {
         self.shutdown.clone()
     }
 
-    /// Stops accepting, closes connections, and waits for every task.
+    /// Stops accepting, closes connections, and waits for every task: the listeners, then the connections (each one
+    /// closes its handler, so a hunter leaves the world), the relays, a stop's countdown and the database's retry. A
+    /// connection that doesn't read is dropped after `net::WRITE_TIMEOUT` at the latest.
     pub async fn stop(mut self) {
         self.shutdown.cancel();
         while self.tasks.join_next().await.is_some() {}
+        self.shared.tasks.close();
+        self.shared.tasks.wait().await;
     }
 }
 
@@ -200,11 +272,14 @@ pub async fn start(config: &Config) -> Result<Running> {
         bound(Role::Fmp)?,
     );
 
+    // Every task that outlives its request (connections, relays, a stop's countdown, the database's retry) runs on
+    // this, so that `Running::stop` waits for them.
+    let tracker = TaskTracker::new();
     let db = Arc::new(Database::default());
     match &config.maintenance {
         Some(_) => info!("maintenance mode: every console is refused"),
         None => {
-            db.connect(config.database_url.clone(), shutdown.clone())
+            db.connect(config.database_url.clone(), shutdown.clone(), &tracker)
                 .await;
             content::check(&config.content_dir);
         }
@@ -223,6 +298,7 @@ pub async fn start(config: &Config) -> Result<Running> {
             config.relay_ports.clone(),
             metrics.clone(),
             shutdown.clone(),
+            tracker.clone(),
         )),
         (None, _) => {
             if config.strategy != Strategy::P2p {
@@ -249,11 +325,14 @@ pub async fn start(config: &Config) -> Result<Running> {
         world: Default::default(),
         started: SystemTime::now(),
         stop: Default::default(),
+        tasks: tracker,
         metrics,
         relays,
         shutdown: shutdown.clone(),
         connections: net::Connections::new(config.loopback_exempt),
         admission: game::Admission::new(config.loopback_exempt),
+        #[cfg(feature = "invariants")]
+        violations: Default::default(),
     });
     if config.maintenance.is_none() && !shared.configured() {
         error!("not configured: external_address and domain must be set; every console is refused");
@@ -341,4 +420,53 @@ pub async fn start(config: &Config) -> Result<Running> {
         tasks,
         shared,
     })
+}
+
+#[cfg(all(test, feature = "invariants"))]
+mod tests {
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::game::profile::Profile;
+
+    /// A broken world is recorded once, whoever locks it next, and nothing panics: the lock stays usable (a panic
+    /// under it stops the whole process).
+    #[test]
+    fn a_broken_world_is_recorded_once_and_the_lock_stays_usable() {
+        let world = std::sync::Mutex::new(game::world::World::default());
+        let violations = std::sync::Mutex::new(Vec::new());
+        let lock = || WorldGuard {
+            guard: world.lock().unwrap(),
+            violations: &violations,
+        };
+        {
+            let mut world = lock();
+            let entered = world.enter("AAAAAA", 1, 1, Bytes::new(), Profile::default());
+            entered.unwrap();
+            // The one way left to break it: write a layer by hand, for a city nobody created.
+            world.place("AAAAAA").unwrap().at = game::world::Layer::City {
+                gate: 1,
+                city: 1,
+                standing: false,
+                party: Some(game::world::Member {
+                    circle: 1,
+                    number: 1,
+                    slot: 0,
+                    ready: false,
+                }),
+            };
+        }
+        let expected = [
+            "AAAAAA is in city (1, 1, 1), which doesn't exist".to_owned(),
+            "AAAAAA is in quest 1 of (1, 1, 1), which doesn't exist".to_owned(),
+        ];
+        assert_eq!(*violations.lock().unwrap(), expected);
+        // Locked and released again, still broken: not recorded twice.
+        drop(lock());
+        assert_eq!(*violations.lock().unwrap(), expected);
+        // Mended: nothing new, and the world still answers.
+        lock().place("AAAAAA").unwrap().at = game::world::Layer::Root;
+        assert_eq!(*violations.lock().unwrap(), expected);
+        assert_eq!(lock().city_of("AAAAAA"), None);
+    }
 }

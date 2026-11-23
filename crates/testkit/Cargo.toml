@@ -22,7 +22,7 @@ toml = "1.1.7"
 wire = { path = "../wire" }
 
 [dev-dependencies]
-server = { path = "../server" }
+server = { path = "../server", features = ["invariants"] }
 tempfile = "3.27.0"
 # To break a test's database under the running server.
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate"] }

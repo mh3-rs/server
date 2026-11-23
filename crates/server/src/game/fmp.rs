@@ -13,7 +13,7 @@ use wire::{Frame, Item, OptionalFields, PatData, PatWrite, Reader};
 
 use super::commands;
 use super::players::Mailbox;
-use super::world::{CircleId, NewCircle, World};
+use super::world::{CircleId, CircleRefusal, NewCircle, World};
 use super::{Fault, Handled, Session, alert, frame, reply, server_time, unexpected, world};
 use crate::Shared;
 use crate::accounts;
@@ -113,7 +113,7 @@ impl Fmp {
                     return Err(Fault::Client(anyhow!("no version constant")));
                 };
                 self.version = *version;
-                let session = shared
+                let mut session = shared
                     .tickets
                     .remove(&ticket)
                     .ok_or_else(|| Fault::Client(anyhow!("unknown or expired ticket")))?;
@@ -132,16 +132,29 @@ impl Fmp {
                     return Err(Fault::Client(anyhow!("banned console")));
                 }
                 shared.players.register(&capcom_id, self.mailbox.clone());
-                // Back from the server selection with a pick: the player enters that world server.
-                if let Some(server) = session.world_server {
+                // Back from the server selection with a pick: the player enters that world server. The pick is spent
+                // by it: a session that leaves the world and comes back to the selection is placed nowhere until it
+                // picks again (`FmpInfo2`).
+                if let Some(server) = session.world_server.take() {
                     let mut world = shared.world();
-                    world.enter(
-                        &capcom_id,
-                        self.mailbox.conn,
-                        server,
-                        session.name.clone(),
-                        session.profile.clone(),
-                    );
+                    let enter = |world: &mut World| {
+                        world.enter(
+                            &capcom_id,
+                            self.mailbox.conn,
+                            server,
+                            session.name.clone(),
+                            session.profile.clone(),
+                        )
+                    };
+                    // An older login of the same hunter still holds its place (its connection was kicked just now,
+                    // and a kick isn't observed while it writes or awaits): it leaves its city and quest first, with
+                    // every notice.
+                    if let Err(older) = enter(&mut world) {
+                        depart(shared, &mut world, &capcom_id, older, Depart::World);
+                        enter(&mut world).map_err(|_| {
+                            Fault::Server(anyhow!("an older place of the hunter did not leave"))
+                        })?;
+                    }
                     info!(
                         world_server = world::SERVERS[server as usize - 1].0,
                         "entered world server"
@@ -382,11 +395,11 @@ impl Fmp {
                 let names = [
                     world::SERVERS[place.server as usize - 1].0.to_owned(),
                     place
-                        .gate
+                        .gate()
                         .map(|g| text(Text::GateName(g), language).into_owned())
                         .unwrap_or_default(),
                     place
-                        .city
+                        .city()
                         .map(|c| text(Text::CityName(c), language).into_owned())
                         .unwrap_or_default(),
                 ];
@@ -401,8 +414,8 @@ impl Fmp {
                         Item::Binary(Bytes::copy_from_slice(&world::jump_path(
                             self.version,
                             place.server,
-                            place.gate,
-                            place.city,
+                            place.gate(),
+                            place.city(),
                         ))),
                     )
                     .with(0x07, Item::Byte(1))
@@ -786,7 +799,7 @@ impl Fmp {
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
                 let host = world
                     .city_host(city)
-                    .ok_or_else(|| Fault::Client(anyhow!("a city without a host")))?;
+                    .ok_or_else(|| Fault::Server(anyhow!("the player's city has no record")))?;
                 let host_name = world
                     .players_at(city.0, Some(city.1), Some(city.2))
                     .into_iter()
@@ -1015,7 +1028,6 @@ impl Fmp {
                     return reply(seq, &AnsCircleMatchOptionSet {});
                 };
                 world.set_standby(me, matches!(r.options.get(0x03), Some(Item::Byte(1))));
-                let circle = world.circle(id).expect("circle of the player");
                 let options = set(
                     set(
                         set(
@@ -1027,10 +1039,11 @@ impl Fmp {
                         Item::String(session.name.clone()),
                     ),
                     0x04,
-                    Item::Byte(circle.index_of(me).unwrap_or(0)),
+                    Item::Byte(world.index_of(id, me).unwrap_or(0)),
                 );
-                let others: Vec<String> = circle
-                    .members()
+                let others: Vec<String> = world
+                    .members(id)
+                    .into_iter()
                     .filter(|(_, m)| *m != me)
                     .map(|(_, m)| m.to_owned())
                     .collect();
@@ -1070,14 +1083,11 @@ impl Fmp {
                     return reply(seq, &AnsCircleInfoSet { circle: r.circle });
                 }
                 let others: Vec<String> = world
-                    .circle(id)
-                    .map(|c| {
-                        c.members()
-                            .filter(|(_, m)| *m != me)
-                            .map(|(_, m)| m.to_owned())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                    .members(id)
+                    .into_iter()
+                    .filter(|(_, m)| *m != me)
+                    .map(|(_, m)| m.to_owned())
+                    .collect();
                 let ntc = frame(
                     seq,
                     &NtcCircleInfoSet {
@@ -1105,6 +1115,16 @@ impl Fmp {
                     );
                     return reply(seq, &AnsCircleMatchStart {});
                 }
+                // Departed first: the list changes sent with the removals already show the quest closed (MH3SP's
+                // order). A quest that left already, or whose leader isn't ready, doesn't depart (a modified client:
+                // the game offers neither).
+                let Some(ready) = world.depart(id) else {
+                    warn!(
+                        circle = id.1,
+                        "quest departure refused: it left already, or its leader isn't ready"
+                    );
+                    return reply(seq, &AnsCircleMatchStart {});
+                };
                 // Members not ready stay behind: removed from the party (MH3SP's rule, M3 D7).
                 let mut out = Vec::new();
                 let behind: Vec<String> = world
@@ -1113,8 +1133,6 @@ impl Fmp {
                     .filter(|(_, _, _, ready)| !ready)
                     .map(|(_, m, _, _)| m)
                     .collect();
-                // Departed first: the list changes sent with the removals already show the quest closed (MH3SP's order).
-                let ready = world.depart(id);
                 for member in &behind {
                     shared.players.send(
                         member,
@@ -1139,9 +1157,10 @@ impl Fmp {
                     data.put_u16(21);
                 }
                 let members: Vec<String> = world
-                    .circle(id)
-                    .map(|c| c.members().map(|(_, m)| m.to_owned()).collect())
-                    .unwrap_or_default();
+                    .members(id)
+                    .into_iter()
+                    .map(|(_, m)| m.to_owned())
+                    .collect();
                 let ntc = frame(
                     seq,
                     &NtcCircleMatchStart {
@@ -1165,15 +1184,20 @@ impl Fmp {
                 let body = reader.rest();
                 let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
+                // Only a member sends to its party: a modified client names another quest of its city.
+                if world.index_of((city, r.circle), me).is_none() {
+                    warn!(
+                        circle = r.circle,
+                        "party data for a quest the sender isn't in: dropped"
+                    );
+                    return Ok(vec![]);
+                }
                 let others: Vec<String> = world
-                    .circle((city, r.circle))
-                    .map(|c| {
-                        c.members()
-                            .filter(|(_, m)| *m != me)
-                            .map(|(_, m)| m.to_owned())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                    .members((city, r.circle))
+                    .into_iter()
+                    .filter(|(_, m)| *m != me)
+                    .map(|(_, m)| m.to_owned())
+                    .collect();
                 let ntc = circle_binary(seq, me, &session.name, r.circle, body)?;
                 let mut out = Vec::new();
                 notify(shared, me, &others, &ntc, &mut out);
@@ -1246,21 +1270,27 @@ impl Fmp {
                 let partner = String::from_utf8_lossy(&r.capcom_id).into_owned();
                 let world = shared.world();
                 let city = world.city_of(me).ok_or_else(not_in_city)?;
-                let in_party = world
-                    .circle((city, r.circle))
-                    .is_some_and(|c| c.index_of(&partner).is_some());
+                let quest = (city, r.circle);
+                // Both in the quest: a modified client names another quest of its city, or another player's.
+                let in_party = world.index_of(quest, me).is_some()
+                    && world.index_of(quest, &partner).is_some();
                 drop(world);
-                if in_party {
-                    let mut data = Vec::new();
-                    data.put_pat_data(&sender(me, &session.name, false))?;
-                    data.extend_from_slice(without_sender(&r.data.0)?);
-                    let ntc = NtcCircleBinary2 {
-                        circle: r.circle,
-                        capcom_id: Bytes::copy_from_slice(me.as_bytes()),
-                        data: Rest(data.into()),
-                    };
-                    shared.players.send(&partner, frame(seq, &ntc)?);
+                if !in_party {
+                    warn!(
+                        circle = r.circle,
+                        "party data for a quest the sender or its recipient isn't in: dropped"
+                    );
+                    return Ok(vec![]);
                 }
+                let mut data = Vec::new();
+                data.put_pat_data(&sender(me, &session.name, false))?;
+                data.extend_from_slice(without_sender(&r.data.0)?);
+                let ntc = NtcCircleBinary2 {
+                    circle: r.circle,
+                    capcom_id: Bytes::copy_from_slice(me.as_bytes()),
+                    data: Rest(data.into()),
+                };
+                shared.players.send(&partner, frame(seq, &ntc)?);
                 Ok(vec![])
             }
             NtcLayerChat::ID => {
@@ -1476,8 +1506,7 @@ fn circle_binary(
 
 /// The player enters gate `gate` of its world server, from the server's root: those there see it arrive.
 fn enter_gate(shared: &Shared, world: &mut World, me: &str, gate: u16, seq: u16) {
-    world.place(me).expect("located").gate = Some(gate);
-    world.arrive(me);
+    world.enter_gate(me, gate);
     info!(gate, "entered gate");
     if let Ok(ntc) = layer_in(world, me, seq) {
         for other in world.others(me) {
@@ -1512,7 +1541,7 @@ fn jump(
     seq: u16,
 ) -> Result<(), world::CityRefusal> {
     let place = world.place(me).expect("located");
-    let (server, here) = (place.server, (place.gate, place.city));
+    let (server, here) = (place.server, (place.gate(), place.city()));
     if let Some(city) = city {
         world.can_join((server, gate, city))?;
     }
@@ -1522,11 +1551,11 @@ fn jump(
     if here.0.is_some_and(|g| g != gate) {
         depart(shared, world, me, conn, Depart::Up);
     }
-    if world.place(me).expect("located").gate.is_none() {
+    if world.place(me).expect("located").gate().is_none() {
         enter_gate(shared, world, me, gate, seq);
     }
     match city {
-        Some(city) if world.place(me).expect("located").city != Some(city) => {
+        Some(city) if world.place(me).expect("located").city() != Some(city) => {
             enter_city(shared, world, me, (server, gate, city))
         }
         _ => Ok(()),
@@ -1550,7 +1579,7 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
     let mut ignored = Vec::new();
     let in_city = world.city_of(me).is_some();
     let leaves_city =
-        matches!(how, Depart::World) || world.place(me).is_some_and(|p| p.city.is_some());
+        matches!(how, Depart::World) || world.place(me).is_some_and(|p| p.city().is_some());
     if in_city && leaves_city {
         let _ = quit_quest(shared, world, me, me, 0, &mut ignored);
     }
@@ -1570,15 +1599,7 @@ fn depart(shared: &Shared, world: &mut World, me: &str, conn: u64, how: Depart) 
         }
     }
     match how {
-        Depart::Up => {
-            let place = world.place(me).expect("placed");
-            if place.city.is_some() {
-                world.leave_city(me);
-            } else {
-                place.gate = None;
-                world.arrive(me);
-            }
-        }
+        Depart::Up => world.up(me),
         Depart::World => world.leave(me, conn),
     }
     if let Ok(out) = frame(
@@ -1782,8 +1803,8 @@ fn found_users(shared: &Shared, found: &[String], stats: bool) -> Vec<(PatData, 
             let place = world.place(id)?;
             let path = Item::Binary(Bytes::copy_from_slice(&world::path(
                 place.server,
-                place.gate,
-                place.city,
+                place.gate(),
+                place.city(),
             )));
             let record = PatData::new()
                 .with(0x01, Item::String(Bytes::copy_from_slice(id.as_bytes())))
@@ -1889,7 +1910,7 @@ fn location(shared: &Shared, session: &Session) -> Result<(u32, Option<u16>, Opt
     let place = world
         .place(capcom_id(session))
         .ok_or_else(|| Fault::Client(anyhow!("not in a world server")))?;
-    Ok((place.server, place.gate, place.city))
+    Ok((place.server, place.gate(), place.city()))
 }
 
 /// Content binary `kind`, built now.
@@ -1955,9 +1976,17 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
         }
         ReqCircleJoin::ID => {
             let r = ReqCircleJoin::decode(p)?;
-            let city = shared.world().city_of(me).ok_or_else(not_in_city)?;
-            let id = (city, r.circle);
-            let hash = shared.world().circle_password(id);
+            // The quest as it is now, in one look: the password check below leaves the world unlocked (it is slow, by
+            // design), so the join must be of this quest and from this city still, which `join_circle` checks again.
+            let (id, number, hash) = {
+                let world = shared.world();
+                let city = world.city_of(me).ok_or_else(not_in_city)?;
+                let id = (city, r.circle);
+                match world.circle_lock(id) {
+                    Some((number, hash)) => (id, number, hash),
+                    None => return alert(AnsCircleJoin::ID, seq, CircleRefusal::Missing.text()),
+                }
+            };
             if let Some(hash) = hash {
                 let typed = match r.info.get(0x04) {
                     Some(Item::String(s)) => s.clone(),
@@ -1968,7 +1997,7 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                 }
             }
             let mut world = shared.world();
-            let index = match world.join_circle(me, id) {
+            let index = match world.join_circle(me, id, number) {
                 Ok(index) => index,
                 Err(refusal) => return alert(AnsCircleJoin::ID, seq, refusal.text()),
             };
@@ -1984,17 +2013,10 @@ async fn quests(shared: &Shared, session: &Session, req: &Frame) -> Handled {
                 state: 0,
             };
             let ntc = frame(seq, &ntc)?;
-            for (_, other) in world
-                .circle(id)
-                .map(|c| {
-                    c.members()
-                        .filter(|(_, m)| *m != me)
-                        .map(|(i, m)| (i, m.to_owned()))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-            {
-                shared.players.send(&other, ntc.clone());
+            for (_, other) in world.members(id) {
+                if other != me {
+                    shared.players.send(other, ntc.clone());
+                }
             }
             reply(
                 seq,
@@ -2160,13 +2182,7 @@ async fn deliver_mail(
         return Ok(out);
     }
     let me = capcom_id(session);
-    let in_city = match shared.world().place(me) {
-        Some(place) if place.city.is_some() => {
-            place.standing = true;
-            true
-        }
-        _ => false,
-    };
+    let in_city = shared.world().stand(me);
     if !in_city || !mailbox.take_mail() {
         return Ok(out);
     }
@@ -2247,7 +2263,7 @@ async fn post(
         warn!("recipient's inbox full, message dropped");
         return Ok(());
     }
-    let standing = shared.world().place(to).is_some_and(|p| p.standing);
+    let standing = shared.world().place(to).is_some_and(|p| p.standing());
     if !standing {
         shared.players.mail(to);
         return Ok(());

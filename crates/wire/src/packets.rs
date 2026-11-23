@@ -240,7 +240,8 @@ packets! {
         /// Support code (0x01), PAT ticket (0x02), media version (0x07), country and language codes, …
         data: PatData,
     }
-    /// Which server the console is talking to: OPN 5, LMP 1 or 2, FMP 3; 2 on OPN makes it ask `ReqMaintenance`.
+    /// Which server the console is talking to: OPN 5, LMP 1 or 2, FMP 3. On OPN, 1 is a refusal that ends the login
+    /// after its text and 2 goes on to the terms, which a refused console never gets (the server's `game/opn.rs`).
     NtcLogin = 0x60211000 { status: u8 }
     /// Reads `size` bytes at `address` of the console's memory (the disc's NAT negotiation hostname).
     ReqMemoryCheck = 0x60810100 { data: PatData, address: u32, size: u32 }

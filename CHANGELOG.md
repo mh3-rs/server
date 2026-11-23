@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.1] - 2026-11-23
+
+### Fixes
+
+- **world**: The world keeps each fact once, so no packet sequence from one console stops the server or leaves a state behind
+
+### Documentation
+
+- **claude**: A check is designed from every writer of the data it guards
+
 ## [0.1.0] - 2026-11-22
 
 ### Features
