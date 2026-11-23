@@ -26,6 +26,9 @@ data model: the wiki of `mh3-rs/docs`.
   `World::check()` whenever the world's lock is released, and `Running::violations()` is what a test asserts on. A change
   to the world's types (`Layer`, `Member`, `Circle`, `City`) updates `World::check` in the same step, and a test that
   breaks one invariant by hand needs `Place.at`, which is `pub(crate)` for that.
+- A check on data that a message can write (a NAT negotiation's sockets, a world field) is designed by listing every
+  writer of that data, not only its reader: the report check of `natneg.rs` was bypassable through an INIT that
+  wrote the same sockets, and only the review saw it.
 - A test must not prove that something happened by reading the log through a thread-local subscriber (`Log`): it lost
   every event in 5 of 8 runs when other tests ran in parallel. Observe the effect (a task of the test's own on
   `Running::tasks()`, a frame, the world) and keep the log for what can't be seen otherwise.
