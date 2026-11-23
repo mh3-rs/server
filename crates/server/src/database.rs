@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use tracing::{error, info};
 
 const RETRY_EVERY: Duration = Duration::from_secs(2);
@@ -27,13 +28,18 @@ pub struct Database {
 
 impl Database {
     /// Opens the database, or keeps retrying in the background until it opens or `shutdown`.
-    pub async fn connect(self: &Arc<Self>, url: String, shutdown: CancellationToken) {
+    pub async fn connect(
+        self: &Arc<Self>,
+        url: String,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) {
         match open(&url).await {
             Ok(pool) => self.set(pool),
             Err(e) => {
                 error!(error = %format!("{e:#}"), "database unavailable, retrying");
                 let this = self.clone();
-                tokio::spawn(async move {
+                tasks.spawn(async move {
                     loop {
                         tokio::select! {
                             _ = shutdown.cancelled() => return,
@@ -124,7 +130,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let url = format!("sqlite://{}", dir.path().join("ready.db").display());
         let database = Arc::new(Database::default());
-        database.connect(url, CancellationToken::new()).await;
+        let tasks = TaskTracker::new();
+        database
+            .connect(url, CancellationToken::new(), &tasks)
+            .await;
         assert_eq!(database.not_ready().await, None);
         let pool = database.pool().unwrap().clone();
         pool.close().await;

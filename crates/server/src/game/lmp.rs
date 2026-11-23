@@ -157,16 +157,24 @@ impl Lmp {
                     }
                 };
                 Span::current().record("console", tracing::field::display(console.public_id));
-                accounts::link_device(db, &console, &device)
+                // Banned before the Wii is linked: a banned console that tries from another Wii must not take it
+                // over, or its ban stays on the first one and `/unban`, which finds the Wii through the console's
+                // current one, never lifts it. So it is the console and the Wii it is linked to now, and the Wii it
+                // comes from (a new save on a banned Wii is refused, ADR 0013).
+                let console_banned = crate::access::banned(db, console.id)
                     .await
                     .map_err(Fault::Database)?;
-                if crate::access::banned(db, console.id)
-                    .await
-                    .map_err(Fault::Database)?
+                if console_banned
+                    || crate::access::device_banned(db, &device)
+                        .await
+                        .map_err(Fault::Database)?
                 {
                     info!("banned console refused");
                     return alert(AnsLoginInfo::ID, seq, crate::text::Text::Banned);
                 }
+                accounts::link_device(db, &console, &device)
+                    .await
+                    .map_err(Fault::Database)?;
                 info!(region, "logged in");
                 self.session = Some(Session::new(console));
                 reply(

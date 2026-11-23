@@ -259,6 +259,13 @@ async fn replay_console(
             extras: Vec::new(),
             aborted: Some(format!("{e:#}")),
         });
+        // None of its frames will be sent: their turns are over, or every other console waits for them for ever.
+        shared.turns.finish(
+            turn_of
+                .iter()
+                .filter(|((console, _, _), _)| *console == ci)
+                .map(|(_, &turn)| turn),
+        );
         return reports;
     }
     for (n, c) in rec.connections.iter().enumerate() {
@@ -673,6 +680,60 @@ mod tests {
         assert_eq!(report.mismatches.len(), 1);
         assert_eq!(report.mismatches[0].expected.name, "AnsServerTime");
         assert!(report.aborted.is_none());
+    }
+
+    /// A console whose Nintendo login fails sends nothing, and the others don't wait for it (mh3-rs/server#62).
+    #[tokio::test]
+    async fn a_console_whose_nintendo_login_fails_releases_its_turns() {
+        // Where its login would go: nothing listens.
+        let nas = {
+            let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            socket.local_addr().unwrap()
+        };
+        let mut token = Vec::new();
+        ReqAuthenticationToken {
+            token: Bytes::from_static(b"recorded token"),
+        }
+        .encode(&mut token)
+        .unwrap();
+        let opn = crate::corpus::Connection {
+            role: "opn",
+            client_port: 0,
+            frames: vec![
+                record(
+                    Dir::C2s,
+                    ReqAuthenticationToken::ID.0,
+                    1,
+                    &hex::encode(token),
+                ),
+                record(Dir::C2s, 0x6002_0100, 2, "0000002b"),
+            ],
+            streams: [Vec::new(), Vec::new()],
+        };
+        let console = ConsoleRecording {
+            console: "dev1".into(),
+            connections: vec![opn],
+            datagrams: Vec::new(),
+        };
+        // Turn 0 is that console's last frame; turn 1 belongs to another console, which waits for it.
+        let turn_of = HashMap::from([((0, 0, 1), 0)]);
+        let targets = Targets {
+            nas: Some(nas),
+            ..Targets::host(nas.ip())
+        };
+        let masks = Masks::default();
+        let shared = Shared {
+            scenario: String::new(),
+            targets: &targets,
+            masks: &masks,
+            bindings: Mutex::new(Bindings::default()),
+            turns: Turns::new(2),
+        };
+        let reports = replay_console(0, &console, &turn_of, &[], &shared).await;
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].aborted.is_some(), "its login failed");
+        let released = tokio::time::timeout(Duration::from_secs(2), shared.turns.wait(1)).await;
+        assert!(released.is_ok(), "the other consoles still wait for turn 0");
     }
 
     #[tokio::test]

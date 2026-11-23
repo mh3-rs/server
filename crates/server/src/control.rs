@@ -174,8 +174,8 @@ mod serve {
     async fn stop(State(shared): State<Arc<Shared>>, body: String) -> Response {
         match body.trim() {
             "cancel" => match crate::stop::cancel(&shared) {
-                true => text(StatusCode::OK, "stop cancelled\n"),
-                false => text(StatusCode::CONFLICT, "no stop to cancel\n"),
+                crate::stop::Cancelled::Lifted => text(StatusCode::OK, "stop cancelled\n"),
+                refused => text(StatusCode::CONFLICT, format!("{}\n", refused.said())),
             },
             delay => match crate::stop::parse(delay) {
                 Some(delay) => {

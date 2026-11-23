@@ -14,6 +14,9 @@ path = "src/main.rs"
 [features]
 # `/metrics/prometheus` on the public port (the image `…-prometheus`).
 prometheus = []
+# The world checks its invariants whenever its lock is released and records what it finds (`Running::violations`):
+# for `testkit`'s random play, never in the image.
+invariants = []
 
 [dependencies]
 anyhow = "1.0.104"

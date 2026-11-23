@@ -22,5 +22,12 @@ data model: the wiki of `mh3-rs/docs`.
   (`drain`, `mail`: 200 ms) is only for "nothing arrives": on a loaded host a late frame fails the first kind, and
   `a_database_failure_keeps_the_player` and `messages_wait_for_their_recipient` did until that was fixed. The tests
   that go through the commands' socket (`mh3sp announce`, `stop`) are Linux only.
+- The world checks itself in the tests: the `invariants` feature (on for `testkit` only, never in the image) runs
+  `World::check()` whenever the world's lock is released, and `Running::violations()` is what a test asserts on. A change
+  to the world's types (`Layer`, `Member`, `Circle`, `City`) updates `World::check` in the same step, and a test that
+  breaks one invariant by hand needs `Place.at`, which is `pub(crate)` for that.
+- A test must not prove that something happened by reading the log through a thread-local subscriber (`Log`): it lost
+  every event in 5 of 8 runs when other tests ran in parallel. Observe the effect (a task of the test's own on
+  `Running::tasks()`, a frame, the world) and keep the log for what can't be seen otherwise.
 - `mh3sp check <domain>` is for a machine outside the server's network: from inside, a split-horizon DNS or the
   router's loopback gives answers a console would never see (the homelab resolves `pband.ch` to `192.168.1.50`).

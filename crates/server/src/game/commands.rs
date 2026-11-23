@@ -36,10 +36,11 @@ pub fn run(shared: &Arc<Shared>, me: &str, name: &Bytes, line: &[u8]) -> Option<
             info!(admin = me, players, "announcement");
             format!("Sent to {players} players.")
         }
-        ("stop", true) if rest == "cancel" => match crate::stop::cancel(shared) {
-            true => "Stop cancelled.".to_owned(),
-            false => "No stop to cancel.".to_owned(),
-        },
+        ("stop", true) if rest == "cancel" => {
+            let said = crate::stop::cancel(shared).said();
+            let (first, rest) = said.split_at(1);
+            format!("{}{rest}.", first.to_uppercase())
+        }
         ("stop", true) => match crate::stop::parse(rest) {
             Some(delay) => {
                 info!(admin = me, "stop asked");
@@ -74,7 +75,7 @@ fn later(
     name: &'static str,
 ) -> String {
     let (shared, me) = (shared.clone(), me.to_owned());
-    tokio::spawn(async move {
+    shared.clone().tasks.spawn(async move {
         let answer = command.await.unwrap_or_else(|refusal| refusal);
         info!(player = %me, command = name, "done");
         from_server(&shared, &me, &answer);
