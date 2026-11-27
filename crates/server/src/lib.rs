@@ -14,6 +14,7 @@
 
 mod access;
 mod accounts;
+pub mod address;
 pub mod check;
 pub mod config;
 mod content;
@@ -32,7 +33,7 @@ mod stop;
 mod text;
 mod tls;
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -286,25 +287,41 @@ pub async fn start(config: &Config) -> Result<Running> {
     }
     let metrics: Arc<metrics::Metrics> = Default::default();
     // The relay's range (M4).
-    let relays = match (
-        &config.maintenance,
-        config
-            .external_address
-            .as_deref()
-            .map(str::parse::<Ipv4Addr>),
-    ) {
-        (None, Some(Ok(external))) => Some(Relays::new(
+    let external = config
+        .external_address
+        .as_deref()
+        .map(|value| (value, config::External::parse(value)));
+    let relays = match (&config.maintenance, external) {
+        (None, Some((_, config::External::Ipv4(external)))) => Some(Relays::new(
             external,
             config.relay_ports.clone(),
             metrics.clone(),
             shutdown.clone(),
             tracker.clone(),
         )),
-        (None, _) => {
+        // Looked up now (`address::LOOKUP_CAP` at most), before any console is served; and again when a pair needs the relay.
+        (None, Some((_, config::External::Domain(name)))) if config.strategy != Strategy::P2p => {
+            Some(
+                Relays::resolving(
+                    address::Domain::new(name, config.test_roots.clone()),
+                    config.relay_ports.clone(),
+                    metrics.clone(),
+                    shutdown.clone(),
+                    tracker.clone(),
+                )
+                .await,
+            )
+        }
+        (None, external) => {
             if config.strategy != Strategy::P2p {
-                error!(
-                    "the relay needs external_address as an IPv4 address: consoles connect directly"
-                );
+                match external {
+                    Some((value, config::External::Other)) => error!(
+                        "external_address {value:?} is neither an IPv4 address nor a domain name: the relay is off, consoles connect directly"
+                    ),
+                    _ => error!(
+                        "the relay needs external_address as an IPv4 address or a domain: consoles connect directly"
+                    ),
+                }
             }
             None
         }

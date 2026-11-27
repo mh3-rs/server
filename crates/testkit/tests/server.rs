@@ -99,6 +99,7 @@ fn config() -> (Config, tempfile::TempDir) {
         rate_limits: false,
         loopback_exempt: true,
         maintenance: None,
+        test_roots: None,
     };
     (config, dir)
 }
@@ -4716,4 +4717,385 @@ async fn check_fails_a_closed_login_port() {
     );
     assert_eq!(check_passes(&report), 5, "{report}");
     running.stop().await;
+}
+
+/// An `external_address` that is neither an IPv4 address nor a domain name (an IPv6 address, a typo) doesn't stop the
+/// server, so an operator's file keeps starting it (ADR 0016): the relay is off, and a pair that `relay` would send
+/// through it connects directly. With an IPv4 address the same pair is relayed.
+#[tokio::test]
+async fn an_external_address_that_is_neither_an_ipv4_nor_a_domain_turns_the_relay_off() {
+    let relayed = |told: &[SocketAddr]| told[0] == told[1];
+    for (address, expected) in [("127.0.0.1", true), ("2001:db8::1", false), ("a b", false)] {
+        let (mut config, _db) = config();
+        config.strategy = server::config::Strategy::Relay;
+        config.external_address = Some(address.into());
+        let running = server::start(&config).await.unwrap();
+        let _logged_in = enter_world(&running).await;
+        let (_, told) = negotiate(&running, 1, false).await;
+        assert_eq!(relayed(&told), expected, "external_address {address:?}");
+        running.stop().await;
+    }
+}
+
+/// A DNS server of a test's own, standing in for the root servers and the domain's own at once (the recursor asks
+/// it everything, and it answers every A query the same way). Each on its own loopback address, port 53: tests run
+/// side by side in one network namespace. Binding port 53 without root works where `ip_unprivileged_port_start` is 0
+/// (Docker's default; assumed on the CI runner). Linux only, like the commands' socket.
+#[cfg(target_os = "linux")]
+mod dns {
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use hickory_proto::op::{Message, ResponseCode};
+    use hickory_proto::rr::rdata::{A, CNAME};
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+    /// How it answers an A query.
+    #[derive(Clone, Copy)]
+    pub enum Mode {
+        Answer(Ipv4Addr),
+        /// The name exists and has no A record.
+        NoRecord,
+        /// Every name is an alias of `target.example.org`, which has the A record: a chain the lookup follows, as the
+        /// deployment's `mh3.pband.ch` is one of `pband.ch`.
+        Cname(Ipv4Addr),
+        /// Never, so that the lookup's own limit ends it.
+        Silent,
+    }
+
+    pub struct Dns {
+        pub address: IpAddr,
+        queries: Arc<AtomicUsize>,
+        mode: Arc<Mutex<Mode>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    /// A loopback address no other test's server has, and nothing listens on until [`Dns::start_at`]. In `127.0.1.0/24`,
+    /// never `127.0.0.11`: in a Docker container that is the embedded resolver, which takes the port 53 of that address
+    /// for itself and answers "no such name" without the test's server ever seeing the query.
+    pub fn unused_address() -> IpAddr {
+        static NEXT: AtomicU8 = AtomicU8::new(1);
+        IpAddr::V4(Ipv4Addr::new(
+            127,
+            0,
+            1,
+            NEXT.fetch_add(1, Ordering::SeqCst),
+        ))
+    }
+
+    impl Dns {
+        pub async fn start(mode: Mode) -> Dns {
+            Dns::start_at(unused_address(), mode).await
+        }
+
+        pub async fn start_at(address: IpAddr, mode: Mode) -> Dns {
+            let socket = tokio::net::UdpSocket::bind((address, 53))
+                .await
+                .expect("a test DNS server needs port 53 on loopback (see `dns`)");
+            let queries = Arc::new(AtomicUsize::new(0));
+            let mode = Arc::new(Mutex::new(mode));
+            let task = tokio::spawn({
+                let (queries, mode) = (queries.clone(), mode.clone());
+                async move {
+                    let mut buf = [0u8; 1500];
+                    loop {
+                        let Ok((n, from)) = socket.recv_from(&mut buf).await else {
+                            return;
+                        };
+                        let Ok(request) = Message::from_vec(&buf[..n]) else {
+                            continue;
+                        };
+                        let Some(query) = request.queries.first().cloned() else {
+                            continue;
+                        };
+                        queries.fetch_add(1, Ordering::SeqCst);
+                        let mode = *mode.lock().unwrap();
+                        if matches!(mode, Mode::Silent) {
+                            continue;
+                        }
+                        let mut response =
+                            Message::response(request.metadata.id, request.metadata.op_code);
+                        response.metadata.authoritative = true;
+                        response.metadata.response_code = ResponseCode::NoError;
+                        response.add_query(query.clone());
+                        let answer = |rdata| Record::from_rdata(query.name().clone(), 300, rdata);
+                        match (mode, query.query_type()) {
+                            (Mode::Answer(ip), RecordType::A) => {
+                                response.add_answer(answer(RData::A(A(ip))));
+                            }
+                            (Mode::Cname(ip), RecordType::A) => {
+                                let target = Name::from_ascii("target.example.org.").unwrap();
+                                let rdata = match *query.name() == target {
+                                    true => RData::A(A(ip)),
+                                    false => RData::CNAME(CNAME(target)),
+                                };
+                                response.add_answer(answer(rdata));
+                            }
+                            _ => {}
+                        }
+                        let _ = socket.send_to(&response.to_vec().unwrap(), from).await;
+                    }
+                }
+            });
+            Dns {
+                address,
+                queries,
+                mode,
+                task,
+            }
+        }
+
+        /// Every query received so far, of any kind (the recursor asks for the zone's servers on the way).
+        pub fn queries(&self) -> usize {
+            self.queries.load(Ordering::SeqCst)
+        }
+
+        pub fn set(&self, mode: Mode) {
+            *self.mode.lock().unwrap() = mode;
+        }
+    }
+
+    impl Drop for Dns {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+}
+
+/// A server whose `external_address` is a domain, looked up at `dns` (and `relay` as its strategy: a pair is always
+/// relayed, or connects directly when the relay has no address).
+#[cfg(target_os = "linux")]
+fn resolving_config(
+    external_address: &str,
+    roots: Vec<std::net::IpAddr>,
+) -> (Config, tempfile::TempDir) {
+    let (mut config, db) = config();
+    config.strategy = server::config::Strategy::Relay;
+    config.external_address = Some(external_address.into());
+    config.test_roots = Some(roots);
+    (config, db)
+}
+
+/// A domain `external_address` is looked up when the server starts, before any console is served, and a relayed pair
+/// is told that address, not the domain; a second pair within 5 minutes sends no query.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_domain_external_address_is_resolved_at_start_and_a_relayed_pair_is_told_it() {
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+    let dns = dns::Dns::start(dns::Mode::Answer(ip)).await;
+    let (config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let at_start = dns.queries();
+    assert!(at_start > 0, "looked up at the start");
+    let _logged_in = enter_world(&running).await;
+    for cookie in [1, 2] {
+        let (_, told) = negotiate(&running, cookie, false).await;
+        assert_eq!(told[0], told[1], "relayed");
+        assert_eq!(told[0].ip(), ip, "the address the domain resolves to");
+    }
+    assert_eq!(
+        dns.queries(),
+        at_start,
+        "known for 5 minutes: nothing asked"
+    );
+    running.stop().await;
+}
+
+/// An IPv4 `external_address` is used as it stands: no DNS query, even with a DNS server to ask.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_ipv4_external_address_sends_no_dns_query() {
+    let dns = dns::Dns::start(dns::Mode::Answer([203, 0, 113, 7].into())).await;
+    let (config, _db) = resolving_config("127.0.0.1", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_eq!(told[0], told[1], "relayed");
+    assert!(told[0].ip().is_loopback());
+    assert_eq!(dns.queries(), 0);
+    running.stop().await;
+}
+
+/// With `p2p` the relay is never used: a domain is not looked up (and a server doesn't wait for a lookup it doesn't
+/// need).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_p2p_strategy_never_looks_the_domain_up() {
+    let dns = dns::Dns::start(dns::Mode::Answer([203, 0, 113, 7].into())).await;
+    let (mut config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    config.strategy = server::config::Strategy::P2p;
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_ne!(told[0], told[1], "direct");
+    assert_eq!(dns.queries(), 0);
+    running.stop().await;
+}
+
+/// A lookup that fails at the start doesn't stop the server: with no address known for the relay, the pair connects
+/// directly, and the start waits no longer than the lookup's limit (8 s) for it.
+#[cfg(target_os = "linux")]
+async fn a_failed_start_connects_directly(roots: std::net::IpAddr) {
+    let (config, _db) = resolving_config("mh3.example.org", vec![roots]);
+    let started = std::time::Instant::now();
+    let running = server::start(&config).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the lookup is capped at 8 s, took {:?}",
+        started.elapsed()
+    );
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_ne!(told[0], told[1], "direct");
+    running.stop().await;
+}
+
+/// Nothing listens at the root servers' address.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_lookup_that_nothing_answers_at_start_still_starts_the_server() {
+    a_failed_start_connects_directly(dns::unused_address()).await;
+}
+
+/// The name has no A record.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_name_with_no_a_record_at_start_still_starts_the_server() {
+    let dns = dns::Dns::start(dns::Mode::NoRecord).await;
+    a_failed_start_connects_directly(dns.address).await;
+    assert!(dns.queries() > 0, "it was asked");
+}
+
+/// The answer never comes: the lookup's own limit ends it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_lookup_with_no_answer_in_time_at_start_still_starts_the_server() {
+    let dns = dns::Dns::start(dns::Mode::Silent).await;
+    a_failed_start_connects_directly(dns.address).await;
+    assert!(dns.queries() > 0, "it was asked");
+}
+
+/// A name that is an alias (the deployment's is) is followed to its address, and a relayed pair is told that one.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_alias_is_followed_to_its_address() {
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 9);
+    let dns = dns::Dns::start(dns::Mode::Cname(ip)).await;
+    let (config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_eq!(told[0], told[1], "relayed");
+    assert_eq!(told[0].ip(), ip);
+    running.stop().await;
+}
+
+/// The relay's address through a domain, as the clock moves (`Domain::ip_at`, no waiting): a lookup is due after 5
+/// minutes and replaces the address; a failed one keeps the last, and none is tried for 30 seconds; with nothing
+/// known, the first one to succeed after those 30 seconds is used. Each asserts on the DNS server's own count.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_address_is_looked_up_every_five_minutes_and_a_failure_waits_thirty_seconds() {
+    use dns::Mode::{Answer, NoRecord};
+    let (a, b, c) = (
+        std::net::Ipv4Addr::new(203, 0, 113, 1),
+        std::net::Ipv4Addr::new(203, 0, 113, 2),
+        std::net::Ipv4Addr::new(203, 0, 113, 3),
+    );
+    let at = |t: std::time::Instant, secs| t + Duration::from_secs(secs);
+    let t = std::time::Instant::now();
+
+    let dns = dns::Dns::start(Answer(a)).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, Some(a));
+    let asked = dns.queries();
+    assert!(asked > 0);
+
+    dns.set(Answer(b));
+    assert_eq!(
+        domain.ip_at(at(t, 299)).await,
+        Some(a),
+        "fresh for 5 minutes"
+    );
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(
+        domain.ip_at(at(t, 300)).await,
+        Some(b),
+        "then looked up again"
+    );
+    assert!(dns.queries() > asked);
+
+    dns.set(NoRecord);
+    let asked = dns.queries();
+    assert_eq!(
+        domain.ip_at(at(t, 600)).await,
+        Some(b),
+        "a failure keeps the last"
+    );
+    assert!(dns.queries() > asked, "the failing lookup was made");
+    let asked = dns.queries();
+    dns.set(Answer(c));
+    assert_eq!(
+        domain.ip_at(at(t, 629)).await,
+        Some(b),
+        "no new lookup for 30 s"
+    );
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(
+        domain.ip_at(at(t, 630)).await,
+        Some(c),
+        "then it is tried again"
+    );
+
+    // Nothing known: no address for 30 s after the failure, then the first answer.
+    let dns = dns::Dns::start(NoRecord).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, None);
+    let asked = dns.queries();
+    assert!(asked > 0, "the first lookup was made");
+    dns.set(Answer(a));
+    assert_eq!(domain.ip_at(at(t, 29)).await, None);
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(domain.ip_at(at(t, 30)).await, Some(a));
+}
+
+/// An answer that no console on the internet can be sent to (a dynamic DNS client publishing the LAN address, a zone
+/// with `127.0.0.1`) is a failed lookup: the last address is kept, and with none known the pair goes direct.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_private_answer_is_a_failed_lookup() {
+    use dns::Mode::Answer;
+    let public = std::net::Ipv4Addr::new(203, 0, 113, 1);
+    let at = |t: std::time::Instant, secs| t + Duration::from_secs(secs);
+    let t = std::time::Instant::now();
+    let dns = dns::Dns::start(Answer(public)).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, Some(public));
+    for (i, private) in [
+        [192, 168, 1, 50],
+        [127, 0, 0, 1],
+        [0, 0, 0, 0],
+        [100, 64, 0, 1],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        dns.set(Answer(private.into()));
+        let asked = dns.queries();
+        let later = at(t, 400 * (i as u64 + 1));
+        assert_eq!(
+            domain.ip_at(later).await,
+            Some(public),
+            "{private:?}: not used"
+        );
+        assert!(dns.queries() > asked, "{private:?}: it was looked up");
+    }
+
+    // Nothing known: no address, until the zone answers with a public one.
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    dns.set(Answer([192, 168, 1, 50].into()));
+    assert_eq!(domain.ip_at(t).await, None);
+    dns.set(Answer(public));
+    assert_eq!(domain.ip_at(at(t, 30)).await, Some(public));
 }

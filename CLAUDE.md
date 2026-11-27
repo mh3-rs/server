@@ -41,3 +41,11 @@ data model: the wiki of `mh3-rs/docs`.
   a frame sent in the pause leaves it at 250 ms.
 - Code the server and `testkit` both need (the Wii's TLS client, ids, records) goes in `wire`: `testkit` has `server` as a
   dev-dependency only, and `server::tls` is private.
+- The tests that look a domain up run a DNS server of their own on loopback port 53 (`dns` in
+  `crates/testkit/tests/server.rs`, Linux only; binding it unprivileged needs `ip_unprivileged_port_start=0`, which
+  Docker sets). Never on `127.0.0.11`: in a Docker container it is the embedded resolver, which answers "no such name"
+  before the test's server sees the query (the tests use `127.0.1.N`). A test with such a server asserts it was asked,
+  so a lookup that never reached it can't pass for one that failed.
+- A limit set around a library's call (the lookup's 8 s in `address.rs`) is set after reading the library's own timeouts:
+  hickory's recursor asks one nameserver at a time and gives each 5 s, which made the first limit, 3 s, fail the whole
+  lookup whenever the first nameserver tried was dead.

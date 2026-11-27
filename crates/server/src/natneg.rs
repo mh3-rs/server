@@ -56,7 +56,7 @@ pub async fn serve_qr(socket: UdpSocket, shutdown: CancellationToken) {
 /// How pairs are connected.
 pub struct Connector {
     pub strategy: Strategy,
-    /// `None` without an IPv4 `external_address`: direct only.
+    /// `None` without an IPv4 or domain `external_address`, or with `p2p`: direct only.
     pub relays: Option<Arc<Relays>>,
     pub metrics: Arc<Metrics>,
     /// `Config::loopback_exempt`.
@@ -120,7 +120,9 @@ pub async fn serve(
             record,
             from,
             now,
-        ) {
+        )
+        .await
+        {
             send(&socket, &datagram, to.into()).await;
         }
     }
@@ -179,7 +181,7 @@ impl Client {
 }
 
 /// What to send, and to whom, for a record from `from`.
-fn handle(
+async fn handle(
     connector: &Connector,
     players: &Players,
     negotiations: &mut HashMap<u32, Negotiation>,
@@ -241,7 +243,8 @@ fn handle(
             match n.told {
                 Some(told) => out.push((reply(Body::Connect(peer(told[index]))), from)),
                 None => {
-                    let (told, relayed) = connect(n.clients, [first, second], connector, players);
+                    let (told, relayed) =
+                        connect(n.clients, [first, second], connector, players).await;
                     n.told = Some(told);
                     n.relayed = relayed;
                     for (client, told) in n.clients.iter().zip(told) {
@@ -312,7 +315,7 @@ fn handle(
 
 /// Where each of a pair's consoles (their game sockets) is told its peer is: each other, or the relay; and whether
 /// relayed. `hybrid` relays a pair when either console can't punch: a symmetric NAT seen now, or a failure before.
-fn connect(
+async fn connect(
     clients: [Client; 2],
     consoles: [SocketAddrV4; 2],
     connector: &Connector,
@@ -333,7 +336,10 @@ fn connect(
         }
     };
     let relay = match needs_relay {
-        true => connector.relays.as_ref().and_then(|r| r.open(consoles)),
+        true => match connector.relays.as_ref() {
+            Some(relays) => relays.open(consoles).await,
+            None => None,
+        },
         false => None,
     };
     debug!(relayed = relay.is_some(), "NatNeg pair complete");
@@ -372,6 +378,8 @@ mod tests {
 
     use wire::natneg::Port;
 
+    use futures_util::FutureExt;
+
     use super::*;
     use crate::game::players::Mailbox;
 
@@ -404,7 +412,9 @@ mod tests {
                 record,
                 from,
                 Instant::now(),
-            );
+            )
+            .now_or_never()
+            .unwrap();
             !out.is_empty()
         };
         let (hostile, other) = (Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 2));
@@ -453,7 +463,9 @@ mod tests {
                 record,
                 from,
                 Instant::now(),
-            );
+            )
+            .now_or_never()
+            .unwrap();
         };
         // Console `console` as client `index`: its four sockets' INITs (kind 0 the game socket, 1 to 3 NatNeg).
         let init = |send: &mut dyn FnMut(usize, u16, Body), index: u8, console: usize| {
@@ -561,7 +573,10 @@ mod tests {
                         init,
                         from,
                         Instant::now(),
-                    ) {
+                    )
+                    .now_or_never()
+                    .unwrap()
+                    {
                         if let Body::Connect(p) = Record::decode(&datagram).unwrap().body {
                             connects.push(p.addr);
                         }
