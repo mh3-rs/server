@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-11-27
+
+### Features
+
+- **check**: Mh3sp check gets a real healthcheck answer from OPN, LMP, FMP and UDP 27901
+- **relay**: External_address takes a domain, so a dynamic DNS name works
+
 ## [0.1.1] - 2026-11-23
 
 ### Fixes

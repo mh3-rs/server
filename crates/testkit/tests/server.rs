@@ -99,6 +99,7 @@ fn config() -> (Config, tempfile::TempDir) {
         rate_limits: false,
         loopback_exempt: true,
         maintenance: None,
+        test_roots: None,
     };
     (config, dir)
 }
@@ -543,6 +544,7 @@ async fn check_report(
         lmp: running.lmp.unwrap().port(),
         fmp: running.fmp.unwrap().port(),
         qr: running.qr.unwrap().port(),
+        natneg: running.natneg.unwrap().port(),
     };
     change(&mut ports);
     let here = Some(std::net::Ipv4Addr::LOCALHOST);
@@ -566,9 +568,149 @@ async fn check_passes_against_a_reachable_server() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
     let report = check_report(&running, |_| {}).await;
-    assert_eq!(check_passes(&report), 5, "{report}");
+    assert_eq!(check_passes(&report), 6, "{report}");
     assert!(!report.contains("FAIL"), "{report}");
+    assert!(!report.contains("older server"), "{report}");
+    assert!(
+        report.contains(&format!("UDP {} ", running.natneg.unwrap().port())),
+        "NAT negotiation has its line: {report}"
+    );
+    assert!(!report.contains("not checked (NAT"), "{report}");
     assert!(report.ends_with("passed=true"), "{report}");
+    running.stop().await;
+}
+
+/// A fake TCP service for the check: what it does with a connection.
+async fn fake_tcp(mut behaviour: impl FnMut(tokio::net::TcpStream) + Send + 'static) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            behaviour(stream);
+        }
+    });
+    port
+}
+
+/// A server older than the check opens with its own first frame instead of answering: the port is reached, so the
+/// line passes, and says what it couldn't do.
+#[tokio::test]
+async fn check_passes_an_older_server_that_cannot_answer_a_healthcheck() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let port = fake_tcp(|stream| {
+        tokio::spawn(async move {
+            use futures_util::SinkExt;
+            let mut framed = tokio_util::codec::Framed::new(stream, wire::FrameCodec);
+            let mut payload = Vec::new();
+            ReqConnection { unk: 0 }.encode(&mut payload).unwrap();
+            let opening = Frame {
+                seq: 0,
+                id: ReqConnection::ID,
+                payload: payload.into(),
+            };
+            let _ = framed.send(opening).await;
+            // Then it reads and says nothing, as it does of a packet it doesn't know.
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        });
+    })
+    .await;
+    let report = check_report(&running, |p| p.lmp = port).await;
+    assert!(!report.contains("FAIL"), "{report}");
+    let line = report
+        .lines()
+        .find(|l| l.contains(&format!("TCP {port} ")))
+        .unwrap();
+    assert!(line.starts_with("ok    "), "{report}");
+    assert!(line.contains("older server: no healthcheck"), "{report}");
+    assert_eq!(check_passes(&report), 6, "{report}");
+    running.stop().await;
+}
+
+/// A port that accepts and closes (a proxy with nothing behind it) is not our server: it fails, and says so.
+#[tokio::test]
+async fn check_fails_a_tcp_port_that_closes_without_an_answer() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // It reads the request first: closing with it unread would reset the connection instead.
+    let port = fake_tcp(|mut stream| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let _ = stream.read(&mut [0; 64]).await;
+        });
+    })
+    .await;
+    let report = check_report(&running, |p| p.fmp = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(
+        failed[0].contains(&format!("TCP {port} {DOMAIN} (FMP)")),
+        "{report}"
+    );
+    assert!(failed[0].contains("closed without an answer"), "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
+    running.stop().await;
+}
+
+/// NAT negotiation where nothing answers fails after its timeout, naming the port and what to forward.
+#[tokio::test]
+async fn check_fails_a_silent_natneg_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let report = check_report(&running, |p| p.natneg = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(failed[0].contains(&format!("UDP {port}")), "{report}");
+    assert!(failed[0].contains("forward UDP"), "{report}");
+    assert!(failed[0].contains("no answer"), "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
+    drop(silent);
+    running.stop().await;
+}
+
+/// Only the answer to its own healthcheck counts: another cookie, or the right one from another address, is not it.
+#[tokio::test]
+async fn check_does_not_take_another_answer_for_natneg_s() {
+    use wire::natneg::{Body, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    for from_another_socket in [false, true] {
+        let asked = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = asked.local_addr().unwrap().port();
+        let other = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        // The fake's wrong answers actually sent: without them "no answer" proves nothing.
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = sent.clone();
+        let fake = tokio::spawn(async move {
+            let mut buf = [0; 1500];
+            while let Ok((n, from)) = asked.recv_from(&mut buf).await {
+                let cookie = Record::decode(&buf[..n]).unwrap().cookie;
+                let (cookie, socket) = match from_another_socket {
+                    false => (cookie ^ 1, &asked),
+                    true => (cookie, &other),
+                };
+                let answer = Record {
+                    cookie,
+                    body: Body::HealthcheckAnswer,
+                };
+                if socket.send_to(&answer.encode(), from).await.is_ok() {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+        let report = check_report(&running, |p| p.natneg = port).await;
+        let failed = check_failures(&report);
+        assert_eq!(failed.len(), 1, "{from_another_socket}: {report}");
+        assert!(failed[0].contains("no answer"), "{report}");
+        assert!(
+            sent.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "{from_another_socket}: the fake never answered"
+        );
+        fake.abort();
+    }
     running.stop().await;
 }
 
@@ -598,7 +740,7 @@ async fn check_fails_a_closed_tcp_port() {
         failed[0].contains(&format!("forward TCP {port}")),
         "{report}"
     );
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     assert!(report.ends_with("passed=false"), "{report}");
     running.stop().await;
 }
@@ -617,7 +759,7 @@ async fn check_fails_a_silent_udp_port() {
     assert!(failed[0].contains(&format!("UDP {port}")), "{report}");
     assert!(failed[0].contains("forward UDP"), "{report}");
     assert!(failed[0].contains("no answer"), "{report}");
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     drop(silent);
     running.stop().await;
 }
@@ -633,7 +775,7 @@ async fn check_fails_port_80_when_the_login_is_not_served() {
     assert_eq!(failed.len(), 1, "{report}");
     assert!(failed[0].contains("Nintendo login"), "{report}");
     assert!(failed[0].contains("404"), "{report}");
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
 
     // A service that says 200 to anything isn't the login either.
     let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1521,6 +1663,104 @@ async fn malformed_packets_drop_the_connection() {
         console.recv(Duration::from_secs(5)).await.unwrap(),
         Received::Closed
     ));
+    running.stop().await;
+}
+
+/// The healthcheck of `mh3sp check`: a frame of no payload as the connection's first, which the server answers with
+/// the same `seq`, then closes, with no opening and no session.
+fn healthcheck_request(seq: u16) -> Frame {
+    Frame {
+        seq,
+        id: wire::healthcheck::REQUEST,
+        payload: Bytes::new(),
+    }
+}
+
+async fn assert_healthcheck_answered(addr: SocketAddr, tls: bool) {
+    let mut console = Console::connect(addr, tls).await.unwrap();
+    console.send(healthcheck_request(7)).await.unwrap();
+    match console.recv(Duration::from_secs(5)).await.unwrap() {
+        Received::Frame(f) => {
+            assert_eq!((f.id, f.seq), (wire::healthcheck::ANSWER, 7));
+            assert!(f.payload.is_empty());
+        }
+        other => panic!("expected the answer first, got {other:?}"),
+    }
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+}
+
+/// OPN (TLS), LMP and FMP answer it, with encryption on and off (the answer comes before any key is needed).
+#[tokio::test]
+async fn the_pat_roles_answer_a_healthcheck() {
+    for encryption in [false, true] {
+        let (mut config, _db) = config();
+        config.encryption = encryption;
+        let running = server::start(&config).await.unwrap();
+        assert_healthcheck_answered(running.opn, true).await;
+        assert_healthcheck_answered(running.lmp.unwrap(), false).await;
+        assert_healthcheck_answered(running.fmp.unwrap(), false).await;
+        running.stop().await;
+    }
+}
+
+/// A healthcheck is a connection that is counted while it lasts and not after (the limit is 16 open at once).
+#[tokio::test]
+async fn a_healthcheck_leaves_no_connection_counted() {
+    let (mut config, _db) = config();
+    config.loopback_exempt = false;
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    for _ in 0..20 {
+        assert_healthcheck_answered(lmp, false).await;
+    }
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    running.stop().await;
+}
+
+/// The healthcheck is recognised as a connection's first frame only: later, it is an unknown packet, as for the
+/// game's handlers (the connection is dropped).
+#[tokio::test]
+async fn a_healthcheck_after_the_openings_first_frame_is_an_unknown_packet() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    console.send(healthcheck_request(1)).await.unwrap();
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
+/// Any other frame sent during the pause is read as it always was, after the server's opening.
+#[tokio::test]
+async fn another_first_frame_sent_during_the_pause_is_handled_as_always() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let start = std::time::Instant::now();
+    let mut console = Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(None, None),
+        },
+    )
+    .await;
+    expect::<ReqConnection>(&mut console).await;
+    // The frame didn't shorten the pause: a console resets a connection whose first message comes too early
+    // (error 11613), and the pause is 250 ms (`net::PAUSE`). A lower bound only, so a loaded host can't fail it.
+    assert!(
+        start.elapsed() >= Duration::from_millis(250),
+        "the opening came after {:?}",
+        start.elapsed()
+    );
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
     running.stop().await;
 }
 
@@ -3511,6 +3751,44 @@ async fn natneg_received(socket: &tokio::net::UdpSocket) -> Vec<wire::natneg::Re
     records
 }
 
+/// `mh3sp check`'s healthcheck on UDP 27901 is answered to anyone, a console logged in or not, with its cookie and
+/// nothing more, and a damaged one is not.
+#[tokio::test]
+async fn natneg_answers_a_healthcheck_from_any_address() {
+    use wire::natneg::{Body, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let natneg = SocketAddr::from(([127, 0, 0, 1], running.natneg.unwrap().port()));
+    let healthcheck = Record {
+        cookie: 0x1234_5678,
+        body: Body::Healthcheck,
+    }
+    .encode();
+    assert_eq!(healthcheck.len(), 12);
+
+    // Nobody is logged in: any other record from this address is ignored, the healthcheck is not.
+    let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    stranger.send_to(&healthcheck, natneg).await.unwrap();
+    let answers = natneg_received(&stranger).await;
+    assert_eq!(
+        answers,
+        [Record {
+            cookie: 0x1234_5678,
+            body: Body::HealthcheckAnswer,
+        }]
+    );
+    assert_eq!(answers[0].encode().len(), healthcheck.len());
+
+    // Cut short, it is not a record: no answer.
+    stranger
+        .send_to(&healthcheck[..healthcheck.len() - 1], natneg)
+        .await
+        .unwrap();
+    assert!(natneg_received(&stranger).await.is_empty());
+    running.stop().await;
+}
+
 /// Two fake consoles (a game socket and a NatNeg socket each) negotiate a pair through the server: their sockets,
 /// and the address each was told its peer is at (`CONNECT`). With `symmetric`, the first console's natneg2 `INIT`
 /// comes from another port (a NAT mapping each destination apart).
@@ -4437,6 +4715,387 @@ async fn check_fails_a_closed_login_port() {
         failed[0].contains(&format!("forward TCP {port}")),
         "{report}"
     );
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     running.stop().await;
+}
+
+/// An `external_address` that is neither an IPv4 address nor a domain name (an IPv6 address, a typo) doesn't stop the
+/// server, so an operator's file keeps starting it (ADR 0016): the relay is off, and a pair that `relay` would send
+/// through it connects directly. With an IPv4 address the same pair is relayed.
+#[tokio::test]
+async fn an_external_address_that_is_neither_an_ipv4_nor_a_domain_turns_the_relay_off() {
+    let relayed = |told: &[SocketAddr]| told[0] == told[1];
+    for (address, expected) in [("127.0.0.1", true), ("2001:db8::1", false), ("a b", false)] {
+        let (mut config, _db) = config();
+        config.strategy = server::config::Strategy::Relay;
+        config.external_address = Some(address.into());
+        let running = server::start(&config).await.unwrap();
+        let _logged_in = enter_world(&running).await;
+        let (_, told) = negotiate(&running, 1, false).await;
+        assert_eq!(relayed(&told), expected, "external_address {address:?}");
+        running.stop().await;
+    }
+}
+
+/// A DNS server of a test's own, standing in for the root servers and the domain's own at once (the recursor asks
+/// it everything, and it answers every A query the same way). Each on its own loopback address, port 53: tests run
+/// side by side in one network namespace. Binding port 53 without root works where `ip_unprivileged_port_start` is 0
+/// (Docker's default; assumed on the CI runner). Linux only, like the commands' socket.
+#[cfg(target_os = "linux")]
+mod dns {
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use hickory_proto::op::{Message, ResponseCode};
+    use hickory_proto::rr::rdata::{A, CNAME};
+    use hickory_proto::rr::{Name, RData, Record, RecordType};
+
+    /// How it answers an A query.
+    #[derive(Clone, Copy)]
+    pub enum Mode {
+        Answer(Ipv4Addr),
+        /// The name exists and has no A record.
+        NoRecord,
+        /// Every name is an alias of `target.example.org`, which has the A record: a chain the lookup follows, as the
+        /// deployment's `mh3.pband.ch` is one of `pband.ch`.
+        Cname(Ipv4Addr),
+        /// Never, so that the lookup's own limit ends it.
+        Silent,
+    }
+
+    pub struct Dns {
+        pub address: IpAddr,
+        queries: Arc<AtomicUsize>,
+        mode: Arc<Mutex<Mode>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    /// A loopback address no other test's server has, and nothing listens on until [`Dns::start_at`]. In `127.0.1.0/24`,
+    /// never `127.0.0.11`: in a Docker container that is the embedded resolver, which takes the port 53 of that address
+    /// for itself and answers "no such name" without the test's server ever seeing the query.
+    pub fn unused_address() -> IpAddr {
+        static NEXT: AtomicU8 = AtomicU8::new(1);
+        IpAddr::V4(Ipv4Addr::new(
+            127,
+            0,
+            1,
+            NEXT.fetch_add(1, Ordering::SeqCst),
+        ))
+    }
+
+    impl Dns {
+        pub async fn start(mode: Mode) -> Dns {
+            Dns::start_at(unused_address(), mode).await
+        }
+
+        pub async fn start_at(address: IpAddr, mode: Mode) -> Dns {
+            let socket = tokio::net::UdpSocket::bind((address, 53))
+                .await
+                .expect("a test DNS server needs port 53 on loopback (see `dns`)");
+            let queries = Arc::new(AtomicUsize::new(0));
+            let mode = Arc::new(Mutex::new(mode));
+            let task = tokio::spawn({
+                let (queries, mode) = (queries.clone(), mode.clone());
+                async move {
+                    let mut buf = [0u8; 1500];
+                    loop {
+                        let Ok((n, from)) = socket.recv_from(&mut buf).await else {
+                            return;
+                        };
+                        let Ok(request) = Message::from_vec(&buf[..n]) else {
+                            continue;
+                        };
+                        let Some(query) = request.queries.first().cloned() else {
+                            continue;
+                        };
+                        queries.fetch_add(1, Ordering::SeqCst);
+                        let mode = *mode.lock().unwrap();
+                        if matches!(mode, Mode::Silent) {
+                            continue;
+                        }
+                        let mut response =
+                            Message::response(request.metadata.id, request.metadata.op_code);
+                        response.metadata.authoritative = true;
+                        response.metadata.response_code = ResponseCode::NoError;
+                        response.add_query(query.clone());
+                        let answer = |rdata| Record::from_rdata(query.name().clone(), 300, rdata);
+                        match (mode, query.query_type()) {
+                            (Mode::Answer(ip), RecordType::A) => {
+                                response.add_answer(answer(RData::A(A(ip))));
+                            }
+                            (Mode::Cname(ip), RecordType::A) => {
+                                let target = Name::from_ascii("target.example.org.").unwrap();
+                                let rdata = match *query.name() == target {
+                                    true => RData::A(A(ip)),
+                                    false => RData::CNAME(CNAME(target)),
+                                };
+                                response.add_answer(answer(rdata));
+                            }
+                            _ => {}
+                        }
+                        let _ = socket.send_to(&response.to_vec().unwrap(), from).await;
+                    }
+                }
+            });
+            Dns {
+                address,
+                queries,
+                mode,
+                task,
+            }
+        }
+
+        /// Every query received so far, of any kind (the recursor asks for the zone's servers on the way).
+        pub fn queries(&self) -> usize {
+            self.queries.load(Ordering::SeqCst)
+        }
+
+        pub fn set(&self, mode: Mode) {
+            *self.mode.lock().unwrap() = mode;
+        }
+    }
+
+    impl Drop for Dns {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+}
+
+/// A server whose `external_address` is a domain, looked up at `dns` (and `relay` as its strategy: a pair is always
+/// relayed, or connects directly when the relay has no address).
+#[cfg(target_os = "linux")]
+fn resolving_config(
+    external_address: &str,
+    roots: Vec<std::net::IpAddr>,
+) -> (Config, tempfile::TempDir) {
+    let (mut config, db) = config();
+    config.strategy = server::config::Strategy::Relay;
+    config.external_address = Some(external_address.into());
+    config.test_roots = Some(roots);
+    (config, db)
+}
+
+/// A domain `external_address` is looked up when the server starts, before any console is served, and a relayed pair
+/// is told that address, not the domain; a second pair within 5 minutes sends no query.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_domain_external_address_is_resolved_at_start_and_a_relayed_pair_is_told_it() {
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 7);
+    let dns = dns::Dns::start(dns::Mode::Answer(ip)).await;
+    let (config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let at_start = dns.queries();
+    assert!(at_start > 0, "looked up at the start");
+    let _logged_in = enter_world(&running).await;
+    for cookie in [1, 2] {
+        let (_, told) = negotiate(&running, cookie, false).await;
+        assert_eq!(told[0], told[1], "relayed");
+        assert_eq!(told[0].ip(), ip, "the address the domain resolves to");
+    }
+    assert_eq!(
+        dns.queries(),
+        at_start,
+        "known for 5 minutes: nothing asked"
+    );
+    running.stop().await;
+}
+
+/// An IPv4 `external_address` is used as it stands: no DNS query, even with a DNS server to ask.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_ipv4_external_address_sends_no_dns_query() {
+    let dns = dns::Dns::start(dns::Mode::Answer([203, 0, 113, 7].into())).await;
+    let (config, _db) = resolving_config("127.0.0.1", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_eq!(told[0], told[1], "relayed");
+    assert!(told[0].ip().is_loopback());
+    assert_eq!(dns.queries(), 0);
+    running.stop().await;
+}
+
+/// With `p2p` the relay is never used: a domain is not looked up (and a server doesn't wait for a lookup it doesn't
+/// need).
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn the_p2p_strategy_never_looks_the_domain_up() {
+    let dns = dns::Dns::start(dns::Mode::Answer([203, 0, 113, 7].into())).await;
+    let (mut config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    config.strategy = server::config::Strategy::P2p;
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_ne!(told[0], told[1], "direct");
+    assert_eq!(dns.queries(), 0);
+    running.stop().await;
+}
+
+/// A lookup that fails at the start doesn't stop the server: with no address known for the relay, the pair connects
+/// directly, and the start waits no longer than the lookup's limit (8 s) for it.
+#[cfg(target_os = "linux")]
+async fn a_failed_start_connects_directly(roots: std::net::IpAddr) {
+    let (config, _db) = resolving_config("mh3.example.org", vec![roots]);
+    let started = std::time::Instant::now();
+    let running = server::start(&config).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the lookup is capped at 8 s, took {:?}",
+        started.elapsed()
+    );
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_ne!(told[0], told[1], "direct");
+    running.stop().await;
+}
+
+/// Nothing listens at the root servers' address.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_lookup_that_nothing_answers_at_start_still_starts_the_server() {
+    a_failed_start_connects_directly(dns::unused_address()).await;
+}
+
+/// The name has no A record.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_name_with_no_a_record_at_start_still_starts_the_server() {
+    let dns = dns::Dns::start(dns::Mode::NoRecord).await;
+    a_failed_start_connects_directly(dns.address).await;
+    assert!(dns.queries() > 0, "it was asked");
+}
+
+/// The answer never comes: the lookup's own limit ends it.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_lookup_with_no_answer_in_time_at_start_still_starts_the_server() {
+    let dns = dns::Dns::start(dns::Mode::Silent).await;
+    a_failed_start_connects_directly(dns.address).await;
+    assert!(dns.queries() > 0, "it was asked");
+}
+
+/// A name that is an alias (the deployment's is) is followed to its address, and a relayed pair is told that one.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_alias_is_followed_to_its_address() {
+    let ip = std::net::Ipv4Addr::new(203, 0, 113, 9);
+    let dns = dns::Dns::start(dns::Mode::Cname(ip)).await;
+    let (config, _db) = resolving_config("mh3.example.org", vec![dns.address]);
+    let running = server::start(&config).await.unwrap();
+    let _logged_in = enter_world(&running).await;
+    let (_, told) = negotiate(&running, 1, false).await;
+    assert_eq!(told[0], told[1], "relayed");
+    assert_eq!(told[0].ip(), ip);
+    running.stop().await;
+}
+
+/// The relay's address through a domain, as the clock moves (`Domain::ip_at`, no waiting): a lookup is due after 5
+/// minutes and replaces the address; a failed one keeps the last, and none is tried for 30 seconds; with nothing
+/// known, the first one to succeed after those 30 seconds is used. Each asserts on the DNS server's own count.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn an_address_is_looked_up_every_five_minutes_and_a_failure_waits_thirty_seconds() {
+    use dns::Mode::{Answer, NoRecord};
+    let (a, b, c) = (
+        std::net::Ipv4Addr::new(203, 0, 113, 1),
+        std::net::Ipv4Addr::new(203, 0, 113, 2),
+        std::net::Ipv4Addr::new(203, 0, 113, 3),
+    );
+    let at = |t: std::time::Instant, secs| t + Duration::from_secs(secs);
+    let t = std::time::Instant::now();
+
+    let dns = dns::Dns::start(Answer(a)).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, Some(a));
+    let asked = dns.queries();
+    assert!(asked > 0);
+
+    dns.set(Answer(b));
+    assert_eq!(
+        domain.ip_at(at(t, 299)).await,
+        Some(a),
+        "fresh for 5 minutes"
+    );
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(
+        domain.ip_at(at(t, 300)).await,
+        Some(b),
+        "then looked up again"
+    );
+    assert!(dns.queries() > asked);
+
+    dns.set(NoRecord);
+    let asked = dns.queries();
+    assert_eq!(
+        domain.ip_at(at(t, 600)).await,
+        Some(b),
+        "a failure keeps the last"
+    );
+    assert!(dns.queries() > asked, "the failing lookup was made");
+    let asked = dns.queries();
+    dns.set(Answer(c));
+    assert_eq!(
+        domain.ip_at(at(t, 629)).await,
+        Some(b),
+        "no new lookup for 30 s"
+    );
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(
+        domain.ip_at(at(t, 630)).await,
+        Some(c),
+        "then it is tried again"
+    );
+
+    // Nothing known: no address for 30 s after the failure, then the first answer.
+    let dns = dns::Dns::start(NoRecord).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, None);
+    let asked = dns.queries();
+    assert!(asked > 0, "the first lookup was made");
+    dns.set(Answer(a));
+    assert_eq!(domain.ip_at(at(t, 29)).await, None);
+    assert_eq!(dns.queries(), asked);
+    assert_eq!(domain.ip_at(at(t, 30)).await, Some(a));
+}
+
+/// An answer that no console on the internet can be sent to (a dynamic DNS client publishing the LAN address, a zone
+/// with `127.0.0.1`) is a failed lookup: the last address is kept, and with none known the pair goes direct.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_private_answer_is_a_failed_lookup() {
+    use dns::Mode::Answer;
+    let public = std::net::Ipv4Addr::new(203, 0, 113, 1);
+    let at = |t: std::time::Instant, secs| t + Duration::from_secs(secs);
+    let t = std::time::Instant::now();
+    let dns = dns::Dns::start(Answer(public)).await;
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    assert_eq!(domain.ip_at(t).await, Some(public));
+    for (i, private) in [
+        [192, 168, 1, 50],
+        [127, 0, 0, 1],
+        [0, 0, 0, 0],
+        [100, 64, 0, 1],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        dns.set(Answer(private.into()));
+        let asked = dns.queries();
+        let later = at(t, 400 * (i as u64 + 1));
+        assert_eq!(
+            domain.ip_at(later).await,
+            Some(public),
+            "{private:?}: not used"
+        );
+        assert!(dns.queries() > asked, "{private:?}: it was looked up");
+    }
+
+    // Nothing known: no address, until the zone answers with a public one.
+    let domain = server::address::Domain::new("mh3.example.org".into(), Some(vec![dns.address]));
+    dns.set(Answer([192, 168, 1, 50].into()));
+    assert_eq!(domain.ip_at(t).await, None);
+    dns.set(Answer(public));
+    assert_eq!(domain.ip_at(at(t, 30)).await, Some(public));
 }

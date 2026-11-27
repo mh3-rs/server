@@ -78,11 +78,18 @@ pub enum Body {
     },
     /// The report's first bytes echoed, result cleared (unknown trailing bytes).
     ReportAck(Port, [u8; 7]),
+    /// Not GameSpy's: `mh3sp check`'s, answered by anyone (record types 0x70 and 0x71, which GameSpy's stop well
+    /// below). Nothing after the cookie.
+    Healthcheck,
+    /// The answer, with the request's cookie.
+    HealthcheckAnswer,
 }
 
 impl Body {
     fn kind(&self) -> u8 {
         match self {
+            Body::Healthcheck => 0x70,
+            Body::HealthcheckAnswer => 0x71,
             Body::Init { .. } => 0x00,
             Body::InitAck(_) => 0x01,
             Body::Connect(_) => 0x05,
@@ -169,6 +176,8 @@ impl Record {
                 }
             }
             0x0e => Body::ReportAck(port(&mut r)?, tail(&mut r)?),
+            0x70 => Body::Healthcheck,
+            0x71 => Body::HealthcheckAnswer,
             other => return Err(NatNegError::Type(other)),
         };
         r.finish()?;
@@ -207,6 +216,7 @@ impl Record {
                 put_addr(&mut b, &peer.addr);
                 b.put_slice(&[peer.got_your_data, peer.finished]);
             }
+            Body::Healthcheck | Body::HealthcheckAnswer => {}
             Body::ConnectAck(port, tail) | Body::ReportAck(port, tail) => {
                 put_port(&mut b, port);
                 b.put_slice(tail);
@@ -260,6 +270,26 @@ mod tests {
             assert_eq!(&record.encode()[..], &datagram[..], "{hex}");
         }
         assert_eq!(Record::decode(b"hello"), Err(NatNegError::Magic));
+    }
+
+    #[test]
+    fn a_healthcheck_is_the_header_and_a_cookie() {
+        for (hex, body) in [
+            ("fdfc1e666ab203705a8f90df", Body::Healthcheck),
+            ("fdfc1e666ab203715a8f90df", Body::HealthcheckAnswer),
+        ] {
+            let datagram = hex::decode(hex).unwrap();
+            let record = Record::decode(&datagram).unwrap();
+            assert_eq!((record.cookie, &record.body), (0x5a8f_90df, &body));
+            assert_eq!(&record.encode()[..], &datagram[..], "{hex}");
+            // Truncated, or with anything after the cookie, it is not a record.
+            assert!(Record::decode(&datagram[..datagram.len() - 1]).is_err());
+            assert!(Record::decode(&[&datagram[..], &[0]].concat()).is_err());
+        }
+    }
+
+    #[test]
+    fn the_qr_availability_request_is_recognised() {
         assert!(
             availability_request(&hex::decode("09000000006d6833757377696900").unwrap())
                 == Some(&b"mh3uswii"[..])

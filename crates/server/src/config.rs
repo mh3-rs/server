@@ -13,7 +13,7 @@
 //! consoles have registered: none of them would be recognised.
 
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
@@ -73,6 +73,9 @@ pub struct Config {
     /// Maintenance mode (`mh3sp maintenance "<message>"`, not an environment variable): OPN only, every console
     /// refused with this message, no database.
     pub maintenance: Option<String>,
+    /// DNS servers standing in for the root servers when a domain `external_address` is looked up (`address.rs`; no
+    /// key, no environment variable, `None` in production: the real root servers). Tests run one of their own.
+    pub test_roots: Option<Vec<IpAddr>>,
 }
 
 /// A secret value: its `Debug` never shows it.
@@ -188,6 +191,7 @@ impl Config {
             loopback_exempt: true,
             control: crate::control::NAME.to_owned(),
             maintenance: None,
+            test_roots: None,
         })
     }
 }
@@ -202,16 +206,55 @@ pub fn domain(value: &str) -> Result<String> {
             value.len()
         );
     }
+    if !labels(&value) {
+        bail!("domain: {value:?} is not a domain name");
+    }
+    Ok(value)
+}
+
+/// Every label of `value` (split at `.`) is letters, digits and inner `-`s, not empty, and at most 63 bytes (DNS's own
+/// limit: a longer one can't be asked for).
+fn labels(value: &str) -> bool {
     let label = |l: &str| {
         !l.is_empty()
+            && l.len() <= 63
             && !l.starts_with('-')
             && !l.ends_with('-')
             && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
     };
-    if !value.split('.').all(label) {
-        bail!("domain: {value:?} is not a domain name");
+    value.split('.').all(label)
+}
+
+/// What `external_address` holds, told apart when the server starts. The key itself stays a string, which consoles are
+/// handed as it is: only the relay needs the number.
+#[derive(Debug, PartialEq, Eq)]
+pub enum External {
+    /// Used as it is, never looked up.
+    Ipv4(Ipv4Addr),
+    /// Lowercase; resolved at its authoritative nameservers (`address.rs`). Unlike `domain`, it has no 25-character
+    /// limit: that one is the patch's, which this key doesn't feed.
+    Domain(String),
+    /// Neither (an IPv6 address, a typo): not an error, so that an operator's file keeps starting the server
+    /// (ADR 0016); the relay is off.
+    Other,
+}
+
+impl External {
+    pub fn parse(value: &str) -> Self {
+        if let Ok(ip) = value.parse() {
+            return Self::Ipv4(ip);
+        }
+        let name = value.to_ascii_lowercase();
+        // A last label of digits only is a malformed IPv4 address ("300.1.1.1"), never a host name (RFC 3696, 2).
+        let numeric = name
+            .rsplit('.')
+            .next()
+            .is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()));
+        match name.len() <= 253 && labels(&name) && !numeric {
+            true => Self::Domain(name),
+            false => Self::Other,
+        }
     }
-    Ok(value)
 }
 
 /// The texts' defaults: a sentence each, the operator's to replace.
@@ -354,6 +397,52 @@ mod tests {
             .replace("\"/run/secrets/mh3sp\"", &format!("{secret:?}"));
         let c = Config::parse(&uncommented).unwrap();
         assert_eq!(c.domain.as_deref(), Some("mh3.example.org"));
+    }
+
+    #[test]
+    fn the_external_address_is_an_ipv4_or_a_domain() {
+        use External::{Domain, Ipv4, Other};
+        let domain = |d: &str| Domain(d.to_owned());
+        assert_eq!(
+            External::parse("203.0.113.10"),
+            Ipv4([203, 0, 113, 10].into())
+        );
+        assert_eq!(
+            External::parse("Home.Example.ORG"),
+            domain("home.example.org")
+        );
+        // Past the 25 characters the patch fits: this key doesn't feed the patch.
+        let long = "a-very-long-dynamic-dns-name.example.org";
+        assert!(long.len() > crate::patch::DOMAIN_MAX);
+        assert_eq!(External::parse(long), domain(long));
+        assert_eq!(External::parse("localhost"), domain("localhost"));
+        for neither in [
+            "2001:db8::1",
+            "300.1.1.1",
+            "203.0.113",
+            "not a domain",
+            "-bad.example.org",
+            "example..org",
+            "example.org.",
+            "mh3.example.org:8201",
+            "",
+        ] {
+            assert_eq!(External::parse(neither), Other, "{neither:?}");
+        }
+        assert_eq!(External::parse(&format!("{}.org", "a".repeat(250))), Other);
+        // A label is 63 characters at most.
+        let label = |n: usize| format!("{}.example.org", "a".repeat(n));
+        assert_eq!(External::parse(&label(63)), domain(&label(63)));
+        assert_eq!(External::parse(&label(64)), Other);
+    }
+
+    /// An operator's file keeps starting the server whatever `external_address` holds (ADR 0016).
+    #[test]
+    fn any_external_address_is_accepted_by_the_file() {
+        for value in ["203.0.113.10", "home.example.org", "2001:db8::1", "a b"] {
+            let c = Config::parse(&format!("external_address = {value:?}")).unwrap();
+            assert_eq!(c.external_address.as_deref(), Some(value));
+        }
     }
 
     #[test]

@@ -50,10 +50,20 @@ commented out has the default shown. An unknown key stops the server, so a typo 
 are required (`external_address`, `domain`, the secret); the texts (`name`, the welcome, the terms, the
 Guildmaster's notice) are yours to write.
 
-Logs: the `RUST_LOG` environment variable, `info,sqlx=warn` by default. They are anonymous: IDs, never names or
-addresses; never a secret.
+Logs: the `RUST_LOG` environment variable, `info,sqlx=warn` by default. They are anonymous: IDs, never a player's name or
+address (the server's own `external_address` and the IP it resolves to are logged); never a secret.
 
 Without `external_address` or `domain` the server runs but refuses every console ("not configured").
+
+**A dynamic IP.** `external_address` is an IPv4 address or a domain, so a dynamic DNS name works when your connection's
+address changes. Consoles are handed it as written and look it up themselves; the relay needs the number, so the
+server looks a domain up from the root servers down to its own nameservers: never your resolver, whose answer can be
+a private address (a home network's DNS, pi-hole), nor a public one. It does so when it starts and again when a pair
+needs the relay and the last answer is 5 minutes old; a failed lookup keeps the last address (the log says so, as it
+does for each new address), and with none known the pair connects directly. The server needs outbound UDP and TCP
+port 53 to the internet for that. A value that is neither an IPv4 address nor a domain (an IPv6 address) doesn't stop
+the server: the relay is off, with an `ERROR` in the log. `mh3sp check` runs outside your network, so it uses that
+machine's own resolver.
 
 ## The secret
 
@@ -84,7 +94,8 @@ new one, and a new patch for every player.
 
 ## Hostnames
 
-The patch points every name the game looks up at your `domain`. Create these records (A, to `external_address`);
+The patch points every name the game looks up at your `domain`. Create these records (A, to the IPv4 address, or CNAME,
+to the domain when `external_address` is one);
 `mh3sp patch` prints them for your domain:
 
 - `<domain>`: the Nintendo login, on port 80 (below), and the player guide, on the public port;
@@ -122,10 +133,14 @@ docker run --rm mh3rs/server check <domain>
 ```
 
 It resolves the names of the patch (the first four must point to the same address; `mh3uswii.b` and `.c` may
-point at a second one), then asks the Nintendo login on port 80 (`POST /ac`), tries a connection to 8200, 8201 and 8202, and the availability
-check on 27900. One line each: `ok`, or `FAIL` with what to forward. It exits 1 if any fails. It doesn't check
-27901 (NAT negotiation answers only logged-in consoles: forward it with 27900) nor the relay ports (a relay port
-listens only while it relays a pair).
+point at a second one), then asks the Nintendo login on port 80 (`POST /ac`), sends a healthcheck to 8200, 8201 and
+8202 (a frame of the game's protocol that only the server answers, before any player's session: nothing in the log
+above `debug`) and to 27901 (NAT negotiation, answered to anyone), and the availability check on 27900. One line each:
+`ok`, or `FAIL` with what to forward. It exits 1 if any fails, and during a maintenance (only OPN listens). A server
+older than the check, which doesn't know the healthcheck, passes on 8200–8202 with "older server" (the port is
+reached) and fails on 27901. The server reads the healthcheck during the quarter second before its own first frame:
+from a machine more than 250 ms away (round trip), most visible on 8200 where the TLS handshake comes first, the
+check may miss it and see "older server" from a current one, with a `WARN` in the log. It doesn't check the relay ports (a relay port listens only while it relays a pair).
 
 ## Port 80
 

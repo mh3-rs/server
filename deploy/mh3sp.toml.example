@@ -5,7 +5,12 @@
 
 # --- Required ---------------------------------------------------------------------------------------------------
 
-# The IPv4 address consoles reach this server at, handed out for LMP, FMP and the relay. Never guessed.
+# Where consoles reach this server, handed out for LMP and FMP as written: an IPv4 address, or a domain (a dynamic DNS
+# name works: the IP of a home connection changes). The relay needs the number, so a domain is looked up from the root
+# servers down to its own nameservers, never your resolver (a home network's answers the private address): when the
+# server starts, then when a pair needs the relay and the last answer is 5 minutes old. A failed lookup keeps the last
+# address, and with none known pairs connect directly. A domain needs outbound UDP and TCP port 53 to the internet.
+# Never guessed.
 external_address = "203.0.113.10"
 # The domain the players' patch points the game at, at most 25 characters; `mh3sp patch` lists its DNS records. A new
 # domain means a new patch for every player.

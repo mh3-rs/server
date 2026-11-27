@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::anyhow;
+use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt};
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -18,11 +19,11 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, interval_at};
 use tokio_openssl::SslStream;
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Encoder, Framed};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, debug, error, info, warn};
 use wire::packets::{AnsLineCheck, AnsShut, Packet, ReqLineCheck, ReqShut};
-use wire::{Frame, FrameCodec, crypt};
+use wire::{Frame, FrameCodec, crypt, healthcheck};
 
 use crate::Shared;
 use crate::game::players::Mailbox;
@@ -204,9 +205,47 @@ async fn connection(
     debug!("connected");
     let mut framed = Framed::new(io, FrameCodec);
 
-    tokio::select! {
+    // The pause is also where `mh3sp check` speaks first: a healthcheck is answered here, before any handler, key or
+    // session, so that the check leaves a clean disconnect instead of a dropped connection (a WARN).
+    let pause = tokio::time::sleep(PAUSE);
+    tokio::pin!(pause);
+    let early = tokio::select! {
         _ = shutdown.cancelled() => return Ok(()),
-        _ = tokio::time::sleep(PAUSE) => {}
+        _ = &mut pause => None,
+        received = framed.next() => Some(received),
+    };
+    if let Some(received) = early {
+        match received {
+            Some(Ok(frame)) if frame.id == healthcheck::REQUEST => {
+                let answer = Frame {
+                    seq: frame.seq,
+                    id: healthcheck::ANSWER,
+                    payload: Bytes::new(),
+                };
+                // The same write as every answer: its timeout, and a lost connection logged at `debug`.
+                send(&mut framed, None, vec![answer]).await?;
+                debug!("healthcheck answered");
+                return Ok(());
+            }
+            // Any other frame is read as ever, after the opening: put back, byte for byte, in front of what follows.
+            Some(Ok(frame)) => {
+                let mut buffer = BytesMut::new();
+                FrameCodec
+                    .encode(frame, &mut buffer)
+                    .map_err(|e| server(e.into()))?;
+                buffer.extend_from_slice(framed.read_buffer());
+                *framed.read_buffer_mut() = buffer;
+                tokio::select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    _ = &mut pause => {}
+                }
+            }
+            Some(Err(e)) => {
+                debug!(error = %e, "connection lost");
+                return Ok(());
+            }
+            None => return Ok(()),
+        }
     }
     let (mailbox, mut mail, kicked) = Mailbox::new(conn, ip);
     // With encryption on, every LMP and FMP payload is encrypted with the console's key (OPN has TLS).

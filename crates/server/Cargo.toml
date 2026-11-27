@@ -25,6 +25,9 @@ bytes = "1.12.1"
 dashmap = "6.2.1"
 futures-util = "0.3.34"
 hex = "0.4.3"
+# The recursor looks `external_address` up from the root servers to the domain's own nameservers (`address.rs`); no
+# system resolver, no TLS or DoH, the plain UDP and TCP lookup only.
+hickory-resolver = { version = "0.26.4", default-features = false, features = ["tokio", "recursor"] }
 moka = { version = "0.12.16", features = ["sync"] }
 openssl = "0.10.81"
 # The server's own user id and the credentials of the commands' socket's peer, to answer only the server's user and root

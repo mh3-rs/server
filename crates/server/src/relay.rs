@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, info, warn};
 
+use crate::address::Domain;
 use crate::metrics::{Metrics, add};
 
 /// A pair silent for this long is closed and its port freed (the game itself drops a peer after 20 s).
@@ -28,12 +29,18 @@ const PAIRS_PER_ADDRESS: usize = 8;
 
 pub struct Relays {
     /// The address consoles reach the relay at.
-    external: Ipv4Addr,
+    external: Source,
     free: Mutex<Free>,
     metrics: Arc<Metrics>,
     shutdown: CancellationToken,
     /// Where each relay's task runs, so that stopping the server waits for it.
     tasks: TaskTracker,
+}
+
+/// What `external_address` is: an address as it stands, or a domain looked up when a pair needs the relay.
+enum Source {
+    Ipv4(Ipv4Addr),
+    Domain(Domain),
 }
 
 struct Free {
@@ -45,6 +52,29 @@ struct Free {
 impl Relays {
     pub fn new(
         external: Ipv4Addr,
+        ports: RangeInclusive<u16>,
+        metrics: Arc<Metrics>,
+        shutdown: CancellationToken,
+        tasks: TaskTracker,
+    ) -> Arc<Self> {
+        Self::with(Source::Ipv4(external), ports, metrics, shutdown, tasks)
+    }
+
+    /// The relay of a server whose `external_address` is a domain: its address is looked up (`address.rs`) now, so that
+    /// the first pair doesn't wait for it, and again when a pair needs the relay and the last answer is old.
+    pub async fn resolving(
+        domain: Domain,
+        ports: RangeInclusive<u16>,
+        metrics: Arc<Metrics>,
+        shutdown: CancellationToken,
+        tasks: TaskTracker,
+    ) -> Arc<Self> {
+        domain.ip().await;
+        Self::with(Source::Domain(domain), ports, metrics, shutdown, tasks)
+    }
+
+    fn with(
+        external: Source,
         ports: RangeInclusive<u16>,
         metrics: Arc<Metrics>,
         shutdown: CancellationToken,
@@ -63,8 +93,13 @@ impl Relays {
     }
 
     /// Opens a relay between two consoles' game sockets: the address each must be told its peer is at. `None` if no
-    /// port is free or a console has too many relayed pairs.
-    pub fn open(self: &Arc<Self>, consoles: [SocketAddrV4; 2]) -> Option<SocketAddrV4> {
+    /// port is free or a console has too many relayed pairs, or the relay's own address is unknown (a domain that
+    /// doesn't resolve): the pair then connects directly.
+    pub async fn open(self: &Arc<Self>, consoles: [SocketAddrV4; 2]) -> Option<SocketAddrV4> {
+        let external = match &self.external {
+            Source::Ipv4(ip) => *ip,
+            Source::Domain(domain) => domain.ip().await?,
+        };
         let ips = consoles.map(|c| IpAddr::V4(*c.ip()));
         let (socket, port) = {
             let mut free = self.free.lock().unwrap();
@@ -122,7 +157,7 @@ impl Relays {
             }
             info!(port, "relay closed");
         });
-        Some(SocketAddrV4::new(self.external, port))
+        Some(SocketAddrV4::new(external, port))
     }
 }
 
@@ -255,7 +290,7 @@ mod tests {
             tasks,
         );
         assert_eq!(state(&relays), (1, 0));
-        let at = relays.open(pair()).unwrap();
+        let at = relays.open(pair()).await.unwrap();
         assert_eq!(at.port(), port);
         // Open: its port and one pair for each address are taken.
         assert_eq!(state(&relays), (0, 2));
@@ -282,7 +317,7 @@ mod tests {
         );
         // Every port in between is free too, but the one held is never taken, and stays on offer.
         let ports = relays.free.lock().unwrap().ports.len();
-        let at = relays.open(pair()).unwrap();
+        let at = relays.open(pair()).await.unwrap();
         assert_ne!(at.port(), held);
         let (left, pairs) = state(&relays);
         assert_eq!((left, pairs), (ports - 1, 2));
@@ -300,7 +335,7 @@ mod tests {
             CancellationToken::new(),
             TaskTracker::new(),
         );
-        assert_eq!(relays.open(pair()), None);
+        assert_eq!(relays.open(pair()).await, None);
         // The held port is back on offer and no pair was counted.
         assert_eq!(state(&relays), (1, 0));
         drop(holder);
