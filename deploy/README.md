@@ -122,10 +122,14 @@ docker run --rm mh3rs/server check <domain>
 ```
 
 It resolves the names of the patch (the first four must point to the same address; `mh3uswii.b` and `.c` may
-point at a second one), then asks the Nintendo login on port 80 (`POST /ac`), tries a connection to 8200, 8201 and 8202, and the availability
-check on 27900. One line each: `ok`, or `FAIL` with what to forward. It exits 1 if any fails. It doesn't check
-27901 (NAT negotiation answers only logged-in consoles: forward it with 27900) nor the relay ports (a relay port
-listens only while it relays a pair).
+point at a second one), then asks the Nintendo login on port 80 (`POST /ac`), sends a healthcheck to 8200, 8201 and
+8202 (a frame of the game's protocol that only the server answers, before any player's session: nothing in the log
+above `debug`) and to 27901 (NAT negotiation, answered to anyone), and the availability check on 27900. One line each:
+`ok`, or `FAIL` with what to forward. It exits 1 if any fails, and during a maintenance (only OPN listens). A server
+older than the check, which doesn't know the healthcheck, passes on 8200–8202 with "older server" (the port is
+reached) and fails on 27901. The server reads the healthcheck during the quarter second before its own first frame:
+from a machine more than 250 ms away (round trip), most visible on 8200 where the TLS handshake comes first, the
+check may miss it and see "older server" from a current one, with a `WARN` in the log. It doesn't check the relay ports (a relay port listens only while it relays a pair).
 
 ## Port 80
 

@@ -6,12 +6,14 @@
 mod catalogue;
 pub mod crypt;
 mod frame;
+pub mod healthcheck;
 mod id;
 pub mod nas;
 pub mod natneg;
 pub mod p2p;
 pub mod packets;
 mod pat;
+pub mod tls;
 
 pub use frame::{Frame, FrameCodec, FrameError, HEADER_LEN};
 pub use id::{Category, Entry, Kind, PacketId};

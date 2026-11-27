@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
@@ -29,16 +28,6 @@ pub enum Received {
     Timeout,
 }
 
-/// TLS as the Wii speaks it: at most TLS 1.0, its cipher suites, and no certificate checks
-/// (the patched game trusts our CA; here we only care about what goes through).
-fn wii_tls() -> Result<SslConnector> {
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    builder.set_verify(SslVerifyMode::NONE);
-    builder.set_max_proto_version(Some(SslVersion::TLS1))?;
-    builder.set_cipher_list("AES128-SHA:AES256-SHA:@SECLEVEL=0")?;
-    Ok(builder.build())
-}
-
 impl Console {
     pub async fn connect(addr: SocketAddr, tls: bool) -> Result<Self> {
         let tcp = TcpStream::connect(addr)
@@ -46,7 +35,9 @@ impl Console {
             .with_context(|| format!("connect {addr}"))?;
         tcp.set_nodelay(true)?;
         let io: Box<dyn Io> = if tls {
-            let ssl = wii_tls()?.configure()?.into_ssl("mh.capcom.co.jp")?;
+            let ssl = wire::tls::wii_client()?
+                .configure()?
+                .into_ssl("mh.capcom.co.jp")?;
             let mut stream = SslStream::new(ssl, tcp)?;
             Pin::new(&mut stream)
                 .connect()

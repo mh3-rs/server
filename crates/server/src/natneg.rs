@@ -4,7 +4,8 @@
 //! each gets a `CONNECT` with the other's game socket address, then they punch through their NATs by pinging each
 //! other, and `REPORT` how it went. The game socket's address is the source of its port type 0 `INIT` (the only one
 //! sent from it). A relayed pair is told the relay's address instead (`relay.rs`). Only consoles logged in to FMP are
-//! answered. The negotiations are this task's alone: no lock.
+//! answered, but for `mh3sp check`'s healthcheck, which anyone gets answered. The negotiations are this task's alone:
+//! no lock.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -93,6 +94,16 @@ pub async fn serve(
                 continue;
             }
         };
+        // `mh3sp check`'s: answered to anyone, with the same cookie, no bigger than the request (no amplification),
+        // before anything that keeps a state (the logged-in check, the table of negotiations).
+        if record.body == Body::Healthcheck {
+            let answer = Record {
+                cookie: record.cookie,
+                body: Body::HealthcheckAnswer,
+            };
+            send(&socket, &answer.encode(), from.into()).await;
+            continue;
+        }
         if !shared.players.online((*from.ip()).into()) {
             debug!("NatNeg from an address with no logged-in console, ignored");
             continue;

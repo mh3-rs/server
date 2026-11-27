@@ -543,6 +543,7 @@ async fn check_report(
         lmp: running.lmp.unwrap().port(),
         fmp: running.fmp.unwrap().port(),
         qr: running.qr.unwrap().port(),
+        natneg: running.natneg.unwrap().port(),
     };
     change(&mut ports);
     let here = Some(std::net::Ipv4Addr::LOCALHOST);
@@ -566,9 +567,149 @@ async fn check_passes_against_a_reachable_server() {
     let (config, _db) = config();
     let running = server::start(&config).await.unwrap();
     let report = check_report(&running, |_| {}).await;
-    assert_eq!(check_passes(&report), 5, "{report}");
+    assert_eq!(check_passes(&report), 6, "{report}");
     assert!(!report.contains("FAIL"), "{report}");
+    assert!(!report.contains("older server"), "{report}");
+    assert!(
+        report.contains(&format!("UDP {} ", running.natneg.unwrap().port())),
+        "NAT negotiation has its line: {report}"
+    );
+    assert!(!report.contains("not checked (NAT"), "{report}");
     assert!(report.ends_with("passed=true"), "{report}");
+    running.stop().await;
+}
+
+/// A fake TCP service for the check: what it does with a connection.
+async fn fake_tcp(mut behaviour: impl FnMut(tokio::net::TcpStream) + Send + 'static) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            behaviour(stream);
+        }
+    });
+    port
+}
+
+/// A server older than the check opens with its own first frame instead of answering: the port is reached, so the
+/// line passes, and says what it couldn't do.
+#[tokio::test]
+async fn check_passes_an_older_server_that_cannot_answer_a_healthcheck() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let port = fake_tcp(|stream| {
+        tokio::spawn(async move {
+            use futures_util::SinkExt;
+            let mut framed = tokio_util::codec::Framed::new(stream, wire::FrameCodec);
+            let mut payload = Vec::new();
+            ReqConnection { unk: 0 }.encode(&mut payload).unwrap();
+            let opening = Frame {
+                seq: 0,
+                id: ReqConnection::ID,
+                payload: payload.into(),
+            };
+            let _ = framed.send(opening).await;
+            // Then it reads and says nothing, as it does of a packet it doesn't know.
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        });
+    })
+    .await;
+    let report = check_report(&running, |p| p.lmp = port).await;
+    assert!(!report.contains("FAIL"), "{report}");
+    let line = report
+        .lines()
+        .find(|l| l.contains(&format!("TCP {port} ")))
+        .unwrap();
+    assert!(line.starts_with("ok    "), "{report}");
+    assert!(line.contains("older server: no healthcheck"), "{report}");
+    assert_eq!(check_passes(&report), 6, "{report}");
+    running.stop().await;
+}
+
+/// A port that accepts and closes (a proxy with nothing behind it) is not our server: it fails, and says so.
+#[tokio::test]
+async fn check_fails_a_tcp_port_that_closes_without_an_answer() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    // It reads the request first: closing with it unread would reset the connection instead.
+    let port = fake_tcp(|mut stream| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let _ = stream.read(&mut [0; 64]).await;
+        });
+    })
+    .await;
+    let report = check_report(&running, |p| p.fmp = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(
+        failed[0].contains(&format!("TCP {port} {DOMAIN} (FMP)")),
+        "{report}"
+    );
+    assert!(failed[0].contains("closed without an answer"), "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
+    running.stop().await;
+}
+
+/// NAT negotiation where nothing answers fails after its timeout, naming the port and what to forward.
+#[tokio::test]
+async fn check_fails_a_silent_natneg_port() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let silent = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = silent.local_addr().unwrap().port();
+    let report = check_report(&running, |p| p.natneg = port).await;
+    let failed = check_failures(&report);
+    assert_eq!(failed.len(), 1, "{report}");
+    assert!(failed[0].contains(&format!("UDP {port}")), "{report}");
+    assert!(failed[0].contains("forward UDP"), "{report}");
+    assert!(failed[0].contains("no answer"), "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
+    drop(silent);
+    running.stop().await;
+}
+
+/// Only the answer to its own healthcheck counts: another cookie, or the right one from another address, is not it.
+#[tokio::test]
+async fn check_does_not_take_another_answer_for_natneg_s() {
+    use wire::natneg::{Body, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    for from_another_socket in [false, true] {
+        let asked = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = asked.local_addr().unwrap().port();
+        let other = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        // The fake's wrong answers actually sent: without them "no answer" proves nothing.
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = sent.clone();
+        let fake = tokio::spawn(async move {
+            let mut buf = [0; 1500];
+            while let Ok((n, from)) = asked.recv_from(&mut buf).await {
+                let cookie = Record::decode(&buf[..n]).unwrap().cookie;
+                let (cookie, socket) = match from_another_socket {
+                    false => (cookie ^ 1, &asked),
+                    true => (cookie, &other),
+                };
+                let answer = Record {
+                    cookie,
+                    body: Body::HealthcheckAnswer,
+                };
+                if socket.send_to(&answer.encode(), from).await.is_ok() {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+        let report = check_report(&running, |p| p.natneg = port).await;
+        let failed = check_failures(&report);
+        assert_eq!(failed.len(), 1, "{from_another_socket}: {report}");
+        assert!(failed[0].contains("no answer"), "{report}");
+        assert!(
+            sent.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+            "{from_another_socket}: the fake never answered"
+        );
+        fake.abort();
+    }
     running.stop().await;
 }
 
@@ -598,7 +739,7 @@ async fn check_fails_a_closed_tcp_port() {
         failed[0].contains(&format!("forward TCP {port}")),
         "{report}"
     );
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     assert!(report.ends_with("passed=false"), "{report}");
     running.stop().await;
 }
@@ -617,7 +758,7 @@ async fn check_fails_a_silent_udp_port() {
     assert!(failed[0].contains(&format!("UDP {port}")), "{report}");
     assert!(failed[0].contains("forward UDP"), "{report}");
     assert!(failed[0].contains("no answer"), "{report}");
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     drop(silent);
     running.stop().await;
 }
@@ -633,7 +774,7 @@ async fn check_fails_port_80_when_the_login_is_not_served() {
     assert_eq!(failed.len(), 1, "{report}");
     assert!(failed[0].contains("Nintendo login"), "{report}");
     assert!(failed[0].contains("404"), "{report}");
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
 
     // A service that says 200 to anything isn't the login either.
     let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1521,6 +1662,104 @@ async fn malformed_packets_drop_the_connection() {
         console.recv(Duration::from_secs(5)).await.unwrap(),
         Received::Closed
     ));
+    running.stop().await;
+}
+
+/// The healthcheck of `mh3sp check`: a frame of no payload as the connection's first, which the server answers with
+/// the same `seq`, then closes, with no opening and no session.
+fn healthcheck_request(seq: u16) -> Frame {
+    Frame {
+        seq,
+        id: wire::healthcheck::REQUEST,
+        payload: Bytes::new(),
+    }
+}
+
+async fn assert_healthcheck_answered(addr: SocketAddr, tls: bool) {
+    let mut console = Console::connect(addr, tls).await.unwrap();
+    console.send(healthcheck_request(7)).await.unwrap();
+    match console.recv(Duration::from_secs(5)).await.unwrap() {
+        Received::Frame(f) => {
+            assert_eq!((f.id, f.seq), (wire::healthcheck::ANSWER, 7));
+            assert!(f.payload.is_empty());
+        }
+        other => panic!("expected the answer first, got {other:?}"),
+    }
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+}
+
+/// OPN (TLS), LMP and FMP answer it, with encryption on and off (the answer comes before any key is needed).
+#[tokio::test]
+async fn the_pat_roles_answer_a_healthcheck() {
+    for encryption in [false, true] {
+        let (mut config, _db) = config();
+        config.encryption = encryption;
+        let running = server::start(&config).await.unwrap();
+        assert_healthcheck_answered(running.opn, true).await;
+        assert_healthcheck_answered(running.lmp.unwrap(), false).await;
+        assert_healthcheck_answered(running.fmp.unwrap(), false).await;
+        running.stop().await;
+    }
+}
+
+/// A healthcheck is a connection that is counted while it lasts and not after (the limit is 16 open at once).
+#[tokio::test]
+async fn a_healthcheck_leaves_no_connection_counted() {
+    let (mut config, _db) = config();
+    config.loopback_exempt = false;
+    let running = server::start(&config).await.unwrap();
+    let lmp = running.lmp.unwrap();
+    for _ in 0..20 {
+        assert_healthcheck_answered(lmp, false).await;
+    }
+    let mut console = Console::connect(lmp, false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    running.stop().await;
+}
+
+/// The healthcheck is recognised as a connection's first frame only: later, it is an unknown packet, as for the
+/// game's handlers (the connection is dropped).
+#[tokio::test]
+async fn a_healthcheck_after_the_openings_first_frame_is_an_unknown_packet() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let mut console = Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    expect::<ReqConnection>(&mut console).await;
+    console.send(healthcheck_request(1)).await.unwrap();
+    assert!(matches!(
+        console.recv(Duration::from_secs(5)).await.unwrap(),
+        Received::Closed
+    ));
+    running.stop().await;
+}
+
+/// Any other frame sent during the pause is read as it always was, after the server's opening.
+#[tokio::test]
+async fn another_first_frame_sent_during_the_pause_is_handled_as_always() {
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let start = std::time::Instant::now();
+    let mut console = Console::connect(running.lmp.unwrap(), false).await.unwrap();
+    send(
+        &mut console,
+        0,
+        AnsConnection {
+            data: connection_data(None, None),
+        },
+    )
+    .await;
+    expect::<ReqConnection>(&mut console).await;
+    // The frame didn't shorten the pause: a console resets a connection whose first message comes too early
+    // (error 11613), and the pause is 250 ms (`net::PAUSE`). A lower bound only, so a loaded host can't fail it.
+    assert!(
+        start.elapsed() >= Duration::from_millis(250),
+        "the opening came after {:?}",
+        start.elapsed()
+    );
+    assert_eq!(expect::<NtcLogin>(&mut console).await.status, 1);
     running.stop().await;
 }
 
@@ -3511,6 +3750,44 @@ async fn natneg_received(socket: &tokio::net::UdpSocket) -> Vec<wire::natneg::Re
     records
 }
 
+/// `mh3sp check`'s healthcheck on UDP 27901 is answered to anyone, a console logged in or not, with its cookie and
+/// nothing more, and a damaged one is not.
+#[tokio::test]
+async fn natneg_answers_a_healthcheck_from_any_address() {
+    use wire::natneg::{Body, Record};
+
+    let (config, _db) = config();
+    let running = server::start(&config).await.unwrap();
+    let natneg = SocketAddr::from(([127, 0, 0, 1], running.natneg.unwrap().port()));
+    let healthcheck = Record {
+        cookie: 0x1234_5678,
+        body: Body::Healthcheck,
+    }
+    .encode();
+    assert_eq!(healthcheck.len(), 12);
+
+    // Nobody is logged in: any other record from this address is ignored, the healthcheck is not.
+    let stranger = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    stranger.send_to(&healthcheck, natneg).await.unwrap();
+    let answers = natneg_received(&stranger).await;
+    assert_eq!(
+        answers,
+        [Record {
+            cookie: 0x1234_5678,
+            body: Body::HealthcheckAnswer,
+        }]
+    );
+    assert_eq!(answers[0].encode().len(), healthcheck.len());
+
+    // Cut short, it is not a record: no answer.
+    stranger
+        .send_to(&healthcheck[..healthcheck.len() - 1], natneg)
+        .await
+        .unwrap();
+    assert!(natneg_received(&stranger).await.is_empty());
+    running.stop().await;
+}
+
 /// Two fake consoles (a game socket and a NatNeg socket each) negotiate a pair through the server: their sockets,
 /// and the address each was told its peer is at (`CONNECT`). With `symmetric`, the first console's natneg2 `INIT`
 /// comes from another port (a NAT mapping each destination apart).
@@ -4437,6 +4714,6 @@ async fn check_fails_a_closed_login_port() {
         failed[0].contains(&format!("forward TCP {port}")),
         "{report}"
     );
-    assert_eq!(check_passes(&report), 4, "{report}");
+    assert_eq!(check_passes(&report), 5, "{report}");
     running.stop().await;
 }

@@ -4,19 +4,24 @@
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::pin::Pin;
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures_util::future::join_all;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket, lookup_host};
-use tokio::time::timeout;
-use wire::natneg::AVAILABLE;
+use tokio::time::{Instant, timeout, timeout_at};
+use tokio_openssl::SslStream;
+use tokio_util::codec::Framed;
+use wire::natneg::{AVAILABLE, Body, Record};
+use wire::{Frame, FrameCodec, healthcheck};
 
 /// Per check. A UDP probe sends twice within it (two waits of 2 s: a datagram may be lost).
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The ports a check goes to: the game's own, but for the tests, which run the server on random ones. NatNeg's
-/// (UDP 27901) isn't probed.
+/// The ports a check goes to: the game's own, but for the tests, which run the server on random ones.
 #[derive(Clone, Copy)]
 pub struct Ports {
     pub nas: u16,
@@ -24,6 +29,7 @@ pub struct Ports {
     pub lmp: u16,
     pub fmp: u16,
     pub qr: u16,
+    pub natneg: u16,
 }
 
 impl Ports {
@@ -34,6 +40,7 @@ impl Ports {
         lmp: 8201,
         fmp: 8202,
         qr: 27900,
+        natneg: 27901,
     };
 }
 
@@ -77,11 +84,6 @@ impl fmt::Display for Report {
                 Some(fix) => writeln!(f, "FAIL  {}: {fix}", line.what)?,
             }
         }
-        writeln!(
-            f,
-            "      UDP 27901: not checked (NAT negotiation answers only logged-in consoles): forward it with {}",
-            Ports::GAME.qr
-        )?;
         write!(
             f,
             "      relay ports 40000-40099 (UDP): not checked, forward them"
@@ -172,10 +174,11 @@ pub async fn probe(domain: &str, addresses: &[Option<Ipv4Addr>], ports: &Ports) 
     let at = |i: usize, port: u16| addresses[i].map(|ip| SocketAddrV4::new(ip, port));
     let probes = [
         (0, ports.nas, Kind::Http, "Nintendo login"),
-        (1, ports.opn, Kind::Tcp, "OPN"),
-        (0, ports.lmp, Kind::Tcp, "LMP"),
-        (0, ports.fmp, Kind::Tcp, "FMP"),
+        (1, ports.opn, Kind::Pat { tls: true }, "OPN"),
+        (0, ports.lmp, Kind::Pat { tls: false }, "LMP"),
+        (0, ports.fmp, Kind::Pat { tls: false }, "FMP"),
         (2, ports.qr, Kind::Qr, "availability check"),
+        (3, ports.natneg, Kind::Natneg, "NAT negotiation"),
     ];
     join_all(probes.into_iter().filter_map(|(i, port, kind, role)| {
         let target = at(i, port)?;
@@ -183,7 +186,8 @@ pub async fn probe(domain: &str, addresses: &[Option<Ipv4Addr>], ports: &Ports) 
         let domain = domain.to_owned();
         Some(async move {
             match kind.probe(target, &domain).await {
-                Ok(()) => Line::ok(what),
+                Ok(None) => Line::ok(what),
+                Ok(Some(note)) => Line::ok(format!("{what}: {note}")),
                 Err(e) => Line::fail(what, format!("{} ({e})", kind.fix(port))),
             }
         })
@@ -194,41 +198,120 @@ pub async fn probe(domain: &str, addresses: &[Option<Ipv4Addr>], ports: &Ports) 
 #[derive(Clone, Copy)]
 enum Kind {
     Http,
-    Tcp,
+    /// OPN (over TLS), LMP and FMP: the healthcheck.
+    Pat {
+        tls: bool,
+    },
     Qr,
+    /// The healthcheck, in NAT negotiation's records.
+    Natneg,
 }
+
+/// How a probe passed: with nothing to add, or with a note on the line.
+type Passed = Option<&'static str>;
 
 impl Kind {
     fn protocol(self) -> &'static str {
         match self {
-            Kind::Http | Kind::Tcp => "TCP",
-            Kind::Qr => "UDP",
+            Kind::Http | Kind::Pat { .. } => "TCP",
+            Kind::Qr | Kind::Natneg => "UDP",
         }
     }
 
     fn fix(self, port: u16) -> String {
         match self {
             Kind::Http => format!("forward TCP {port} to the server (or to your reverse proxy)"),
-            Kind::Tcp => format!("forward TCP {port} to the server"),
-            Kind::Qr => format!("forward UDP {port} to the server"),
+            Kind::Pat { .. } => format!("forward TCP {port} to the server"),
+            Kind::Qr | Kind::Natneg => format!("forward UDP {port} to the server"),
         }
     }
 
-    async fn probe(self, target: SocketAddrV4, domain: &str) -> Result<(), String> {
+    async fn probe(self, target: SocketAddrV4, domain: &str) -> Result<Passed, String> {
         let done = match self {
-            Kind::Http => timeout(TIMEOUT, http(target, domain)).await,
-            Kind::Tcp => timeout(TIMEOUT, tcp(target)).await,
-            Kind::Qr => timeout(TIMEOUT, qr(target)).await,
+            Kind::Http => {
+                timeout(TIMEOUT, async { http(target, domain).await.map(|()| None) }).await
+            }
+            Kind::Pat { tls } => timeout(TIMEOUT, pat(target, domain, tls)).await,
+            Kind::Qr => timeout(TIMEOUT, async { qr(target).await.map(|()| None) }).await,
+            Kind::Natneg => timeout(TIMEOUT, async { natneg(target).await.map(|()| None) }).await,
         };
         done.unwrap_or_else(|_| Err("timed out".to_owned()))
     }
 }
 
-async fn tcp(target: SocketAddrV4) -> Result<(), String> {
-    TcpStream::connect(target)
+/// OPN, LMP or FMP: connects (and shakes hands, on OPN), sends the healthcheck as the first frame, and reads what
+/// comes back.
+async fn pat(target: SocketAddrV4, domain: &str, tls: bool) -> Result<Passed, String> {
+    let tcp = TcpStream::connect(target)
         .await
-        .map(drop)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if !tls {
+        return healthcheck_frame(tcp).await;
+    }
+    let ssl = wire::tls::wii_client()
+        .and_then(|client| client.configure())
+        .and_then(|config| config.into_ssl(domain))
+        .map_err(|e| e.to_string())?;
+    let mut stream = SslStream::new(ssl, tcp).map_err(|e| e.to_string())?;
+    Pin::new(&mut stream)
+        .connect()
+        .await
+        .map_err(|e| format!("TLS handshake failed: {e}"))?;
+    healthcheck_frame(stream).await
+}
+
+/// The server answers a healthcheck with the same `seq`. A server older than the check sends its own opening instead
+/// (a request of the game): it is reached, which is what the check is for, but it can't tell us more.
+async fn healthcheck_frame(stream: impl AsyncRead + AsyncWrite + Unpin) -> Result<Passed, String> {
+    const SEQ: u16 = 1;
+    let mut framed = Framed::new(stream, FrameCodec);
+    let request = Frame {
+        seq: SEQ,
+        id: healthcheck::REQUEST,
+        payload: Bytes::new(),
+    };
+    framed.send(request).await.map_err(|e| e.to_string())?;
+    match framed.next().await {
+        Some(Ok(f)) if f.id == healthcheck::ANSWER && f.seq == SEQ => Ok(None),
+        Some(Ok(f)) if f.id.entry().is_some() => Ok(Some("older server: no healthcheck")),
+        Some(Ok(_)) => Err("an answer that isn't the server's".to_owned()),
+        Some(Err(e)) => Err(e.to_string()),
+        None => Err("closed without an answer".to_owned()),
+    }
+}
+
+/// NAT negotiation's healthcheck, sent again after a while like the availability check's, and answered only from the
+/// address it went to, with its own cookie: anything else is not our answer.
+async fn natneg(target: SocketAddrV4) -> Result<(), String> {
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut cookie = [0; 4];
+    openssl::rand::rand_bytes(&mut cookie).map_err(|e| e.to_string())?;
+    let cookie = u32::from_be_bytes(cookie);
+    let request = Record {
+        cookie,
+        body: Body::Healthcheck,
+    }
+    .encode();
+    let mut buf = [0; 1500];
+    for _ in 0..2 {
+        socket
+            .send_to(&request, SocketAddr::V4(target))
+            .await
+            .map_err(|e| e.to_string())?;
+        let until = Instant::now() + Duration::from_secs(2);
+        while let Ok(received) = timeout_at(until, socket.recv_from(&mut buf)).await {
+            let (n, from) = received.map_err(|e| e.to_string())?;
+            if from == SocketAddr::V4(target)
+                && matches!(Record::decode(&buf[..n]),
+                    Ok(r) if r.cookie == cookie && r.body == Body::HealthcheckAnswer)
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err("no answer: not forwarded, or a server older than this check".to_owned())
 }
 
 /// The Nintendo login must answer a `login` form (the game's own second call, which changes nothing) with 200 and a

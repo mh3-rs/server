@@ -34,3 +34,10 @@ data model: the wiki of `mh3-rs/docs`.
   `Running::tasks()`, a frame, the world) and keep the log for what can't be seen otherwise.
 - `mh3sp check <domain>` is for a machine outside the server's network: from inside, a split-horizon DNS or the
   router's loopback gives answers a console would never see (the homelab resolves `pband.ch` to `192.168.1.50`).
+- `mh3sp check` gets a real answer from each game port (the healthcheck: `wire::healthcheck` for the PAT roles, NatNeg
+  records `0x70`/`0x71` for UDP 27901; the glossary's Healthcheck and Check, the wiki's Protocol notes), so a bare
+  connect that closes stays a `WARN` and only our own check leaves none. The PAT healthcheck is read in the 250 ms
+  pause before the server's first frame (`net.rs`): a change to that pause or to what is read in it keeps the test that
+  a frame sent in the pause leaves it at 250 ms.
+- Code the server and `testkit` both need (the Wii's TLS client, ids, records) goes in `wire`: `testkit` has `server` as a
+  dev-dependency only, and `server::tls` is private.
