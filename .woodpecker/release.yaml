@@ -1,9 +1,11 @@
 # The release, on the version tag that scripts/release.sh creates and pushes with prod
-# (`git push origin prod dev 1.2.3`), once this tag's checks passed. Everything public starts here and nowhere else, in
-# this order, each step after the one before: the image (Gitea's registry and Docker Hub), the mirror on GitHub,
-# Docker Hub's page, then the Gitea release. A failed step stops the ones after it, so only what fully works is public.
-# The Gitea release is last because it is the one step that can't be run twice (a second POST for the same tag is
-# refused): a restart after a failed mirror or page must still reach them, and the others can all be repeated.
+# (`git push origin prod dev 1.2.3`), once this tag's checks passed: the release's commit and its tag go to the public
+# mirror on GitHub (github.com/mh3-rs/server), and GitHub builds the image from the tag and publishes it to Docker Hub
+# (.github/workflows/release.yml: native amd64 and arm64 runners, the same build under QEMU here took 21 minutes). Gitea
+# is the one truth, so the push is forced. Nothing here builds an image, and there is no Gitea release: nothing reads it.
+# The checks run here and only here: a tag pushed to GitHub by any other path would publish untested code. A failed
+# image build is run again on GitHub (`gh run rerun <id> --failed`); starting this pipeline again pushes an unchanged tag,
+# which starts nothing there.
 when:
   - event: tag
     ref: refs/tags/[0-9]*
@@ -17,43 +19,11 @@ clone:
       partial: false
       depth: 0
 steps:
-  # The image tags: latest, 1, 1.2, 1.2.3. `latest` is the last release, never the last push: what operators pull
-  # (mh3rs/server, deploy/compose.yaml) moves on a release only.
-  - name: tags
-    image: alpine:3.22
-    commands:
-      - v=$${CI_COMMIT_TAG}
-      - printf '%s\n' latest "$${v%%.*}" "$${v%.*}" "$v" > .tags
-      - cat .tags
-  # The only privileged plugin the server trusts (WOODPECKER_PLUGINS_PRIVILEGED): keep this exact version.
-  - name: image
-    image: woodpeckerci/plugin-docker-buildx:5.0.0
-    depends_on: [tags]
-    settings:
-      repo:
-        - git.pband.ch/${CI_REPO}
-        - mh3rs/server
-      # arm64 under emulation: several times the build time, for the ARM hosts that pull a public image.
-      platforms: linux/amd64,linux/arm64
-      dockerfile: Dockerfile
-      tags_file: .tags
-      logins:
-        - registry: https://git.pband.ch
-          username:
-            from_secret: gitea_user
-          password:
-            from_secret: gitea_token
-        - registry: https://index.docker.io/v1/
-          username:
-            from_secret: docker_hub_user
-          password:
-            from_secret: docker_hub_token
-  # The release's commit, to its public mirror on GitHub (github.com/mh3-rs/server), as its `main`: Gitea is the one
-  # truth, so the push is forced. github_deploy_key is this repository's own deploy key, with write access to that
-  # GitHub repository only.
+  # github_deploy_key is this repository's own deploy key, with write access to that GitHub repository only. One push
+  # for both refs: `main` is the release's commit, the tag is what starts the image's build there (tried 2026-11-27: a
+  # push with a deploy key starts a workflow, for a new commit with its branch and its tag in one push too).
   - name: mirror
     image: alpine/git:v2.54.0
-    depends_on: [image]
     environment:
       KEY:
         from_secret: github_deploy_key
@@ -61,43 +31,4 @@ steps:
       - mkdir -p ~/.ssh && printf '%s\n' "$$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
       # GitHub's host key, from https://api.github.com/meta (ssh_keys).
       - echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > ~/.ssh/known_hosts
-      - git push --force git@github.com:mh3-rs/server.git HEAD:refs/heads/main
-  # Docker Hub's page for mh3rs/server: the operator's guide, deploy/README.md (the image's first push, above,
-  # creates the repository). Docker Hub's API, as peter-evans/dockerhub-description calls it; the token needs the
-  # Read, Write, Delete scope to edit a page.
-  - name: docker-hub-page
-    image: alpine:3.22
-    depends_on: [mirror]
-    environment:
-      HUB_USER:
-        from_secret: docker_hub_user
-      HUB_TOKEN:
-        from_secret: docker_hub_token
-    commands:
-      - apk add --no-cache curl jq >/dev/null
-      # `$$` is a `$` for the shell: Woodpecker substitutes the others.
-      # The sign-in through a pipe, never a file in the workspace; pipefail, so a refused sign-in stops here.
-      - set -o pipefail
-      - >-
-        access=$$(jq -n --arg u "$$HUB_USER" --arg s "$$HUB_TOKEN" '{identifier:$$u,secret:$$s}'
-        | curl -fsS -H "Content-Type: application/json" -d @- https://hub.docker.com/v2/auth/token
-        | jq -er .access_token)
-      - jq -Rs '{description:"Monster Hunter Tri online server (Wii), in Rust", full_description:.}' deploy/README.md > page.json
-      - >-
-        curl -fsS -o /dev/null -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $$access"
-        -d @page.json https://hub.docker.com/v2/repositories/mh3rs/server/
-  # The Gitea release, with this version's section of CHANGELOG.md.
-  - name: gitea-release
-    image: alpine:3.22
-    depends_on: [docker-hub-page]
-    environment:
-      GITEA_TOKEN:
-        from_secret: gitea_token
-    commands:
-      - apk add -q curl jq
-      - v=$${CI_COMMIT_TAG}
-      - notes=$(awk -v h="## [$v]" 'index($0, h) == 1 {on = 1; next} /^## \[/ {on = 0} on' CHANGELOG.md)
-      - >
-        jq -n --arg t "$v" --arg b "$notes" '{tag_name: $t, name: $t, body: $b}' |
-        curl -fsS -X POST -H "Authorization: token $GITEA_TOKEN" -H 'Content-Type: application/json'
-        --data-binary @- "https://git.pband.ch/api/v1/repos/$${CI_REPO}/releases" > /dev/null
+      - git push --force git@github.com:mh3-rs/server.git HEAD:refs/heads/main HEAD:refs/tags/$${CI_COMMIT_TAG}

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-11-27
+
+### Build and CI
+
+- **release**: GitHub builds and publishes the release image, Woodpecker checks and mirrors the tag
+
 ## [0.2.0] - 2026-11-27
 
 ### Features
