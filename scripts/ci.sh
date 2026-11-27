@@ -14,8 +14,8 @@ if [ "${1:-}" = "--docker" ]; then
 fi
 
 if [ "${1:-}" = "--woodpecker" ]; then
-  # The local runner mounts the working tree instead of cloning it. Only the checks: rc.yaml and release.yaml build and
-  # publish images, and `exec` ignores `depends_on` between workflows.
+  # The local runner mounts the working tree instead of cloning it. Only the checks: release.yaml mirrors the release to
+  # GitHub, and `exec` ignores `depends_on` between workflows.
   exec woodpecker-cli exec --backend-engine docker --local --repo-path "$PWD" .woodpecker/ci.yaml
 fi
 

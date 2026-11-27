@@ -1,0 +1,127 @@
+# The release's image, built on GitHub: native amd64 and arm64 runners (the same build under QEMU on Woodpecker took 21
+# minutes, and more than 1h46 on a loaded host). Gitea stays the source of truth: Woodpecker runs the checks on the
+# version tag, and only then mirrors `main` and the tag here (.woodpecker/release.yaml), so this workflow runs no checks.
+# A tag pushed here by any other path would publish untested code: only that mirror and the user push to this repository.
+#
+# On a version tag: build each architecture and push it to Docker Hub by digest only (no per-arch tag shows there), join
+# them under latest, X, X.Y and X.Y.Z (`latest` is the last release, never the last push), then update Docker Hub's page.
+# On a `dry-run/**` branch, the same builds with no login and no push: the way to try a change to this file, since a
+# manual run (`workflow_dispatch`) only exists for a workflow on the default branch, and `main` only ever receives a
+# release. A failed run is run again here: `gh run rerun <id> --failed`.
+#
+# The Docker Hub token lives in the `release` environment, which only version tags may use (its deployment rule), so a
+# branch can't read it by editing this file. A version tag can: whoever may push one here (the deploy key, the owner)
+# can publish the image the deployment pulls. Every action is pinned to a commit (the repository requires it too).
+name: release
+
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+    branches: ['dry-run/**']
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: mh3rs/server
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # The secrets only on a tag: an empty name is no environment, so the dry run has no token.
+    environment: ${{ startsWith(github.ref, 'refs/tags/') && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build, push by digest
+        id: push
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Build only (dry run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: false
+      - name: Keep the digest
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+  manifest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      # By their exact names, never a glob: a digest of any other artifact would join the image.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '{digest-amd64,digest-arm64}'
+          merge-multiple: true
+          path: /tmp/digests
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Tag the image
+        working-directory: /tmp/digests
+        run: |
+          # Both architectures, or nothing: a manifest of one would serve the other's hosts a wrong image.
+          digests=(*)
+          [ "${#digests[@]}" = 2 ] || { echo "expected the two digests, got: ${digests[*]}" >&2; exit 1; }
+          v=$GITHUB_REF_NAME
+          args=()
+          for t in latest "${v%%.*}" "${v%.*}" "$v"; do args+=(-t "$IMAGE:$t"); done
+          for d in "${digests[@]}"; do args+=("$IMAGE@sha256:$d"); done
+          docker buildx imagetools create "${args[@]}"
+          docker buildx imagetools inspect "$IMAGE:$v"
+
+  # Docker Hub's page for mh3rs/server: the operator's guide, deploy/README.md. Docker Hub's API, as
+  # peter-evans/dockerhub-description calls it; the token needs the Read, Write, Delete scope to edit a page.
+  page:
+    needs: manifest
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Update the page
+        env:
+          HUB_USER: ${{ vars.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          # The sign-in through a pipe, never a file in the workspace; pipefail, so a refused sign-in stops here.
+          access=$(jq -n --arg u "$HUB_USER" --arg s "$HUB_TOKEN" '{identifier:$u,secret:$s}' \
+            | curl -fsS -H "Content-Type: application/json" -d @- https://hub.docker.com/v2/auth/token \
+            | jq -er .access_token)
+          jq -Rs '{description:"Monster Hunter Tri online server (Wii), in Rust", full_description:.}' deploy/README.md > "$RUNNER_TEMP/page.json"
+          curl -fsS -o /dev/null -X PATCH -H "Content-Type: application/json" -H "Authorization: Bearer $access" \
+            -d @"$RUNNER_TEMP/page.json" https://hub.docker.com/v2/repositories/mh3rs/server/

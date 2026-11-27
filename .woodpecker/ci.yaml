@@ -1,6 +1,6 @@
 # The checks, on every push to any branch and on every version tag, when something built or tested changed (Gitea
-# sends no pull requests here); manual runs always. A commit on several refs is tested once per ref: rc.yaml and
-# release.yaml depend on this workflow, and depends_on only links workflows of the same run. Each step is a part of
+# sends no pull requests here); manual runs always. A commit on several refs is tested once per ref: release.yaml
+# depends on this workflow, and depends_on only links workflows of the same run. Each step is a part of
 # scripts/ci.sh, so a red step says what failed.
 when:
   - event: push
